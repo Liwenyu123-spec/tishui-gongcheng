@@ -1,2 +1,12 @@
-<script setup lang="ts">import { ref } from 'vue'; const input=ref(''); const messages=ref([{role:'ai',text:'您好，我是调度辅助 Agent。当前使用 Mock 数据，只提供只读分析和建议草稿。请描述您要查询的运行问题。'}]); const ask=(q=input.value)=>{if(!q)return;messages.value.push({role:'user',text:q});messages.value.push({role:'ai',text:'基于当前模拟数据，二泵站过去 2 小时压力波动最大。建议先核查 2 号泵入口压力、泵组电流以及渠道前段水位。该结论需要接入真实测点后复核。'});input.value=''} </script>
+<script setup lang="ts">
+import { ref } from 'vue'
+const input = ref('')
+const messages = ref([{ role: 'ai', text: '您好，我是调度辅助 Agent。当前使用 Mock 数据，只提供只读分析和建议草稿。请描述您要查询的运行问题。' }])
+const ask = (q = input.value) => {
+  if (!q) return
+  messages.value.push({ role: 'user', text: q })
+  messages.value.push({ role: 'ai', text: '基于当前模拟数据，二泵站过去 2 小时压力波动最大。建议先核查 2 号泵入口压力、泵组电流以及渠道前段水位。该结论需要接入真实测点后复核。' })
+  input.value = ''
+}
+</script>
 <template><div class="page-title"><div><h2>Agent 智能助手</h2><p>事实 → 分析 → 规程引用 → 建议 → 待确认项</p></div><span class="tag tag-green">只读分析模式</span></div><div class="agent-layout"><div class="panel"><div style="padding:14px 18px;border-bottom:1px solid #1c3a4c"><el-tag size="small" type="success">协调 Agent</el-tag><span class="muted" style="font-size:11px;margin-left:10px">8 个专业 Agent 可协作</span></div><div v-for="m in messages" :key="m.text+m.role" :class="['message',m.role==='user'?'user':'ai']"><b>{{m.role==='user'?'你':'Agent'}}</b><div>{{m.text}}</div><div v-if="m.role==='ai'" class="evidence">证据：telemetry_mock · 二泵站 · 过去 2 小时<br>规程：二泵站运行规程 v1.2 · 第三章（现行）</div></div><div style="padding:12px 18px;display:flex;gap:8px"><el-input v-model="input" placeholder="例如：过去 2 小时哪个泵站压力波动最大？" @keyup.enter="ask()"/><el-button type="primary" @click="ask()">发送</el-button></div></div><div class="panel"><div class="panel-head"><h3>示例问题</h3></div><div class="table-wrap"><el-button v-for="q in ['现在四泵站出水流量是多少？','过去 2 小时哪个泵站压力波动最大？','二泵站流量下降后先核查什么？']" :key="q" style="width:100%;margin-bottom:9px;text-align:left" @click="ask(q)">{{q}}</el-button><div class="warning" style="margin-top:8px">控制边界：涉及启动/停止泵、切阀或压力设定的请求将被拒绝，不生成控制命令。</div></div></div></div></template>
