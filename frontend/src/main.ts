@@ -6,6 +6,7 @@ import './styles.css'
 import App from './App.vue'
 
 const routes = [
+  { path: '/login', component: () => import('./views/LoginView.vue') },
   { path: '/', redirect: '/dashboard' },
   { path: '/dashboard', component: () => import('./views/DashboardView.vue') },
   { path: '/topology', component: () => import('./views/TopologyView.vue') },
