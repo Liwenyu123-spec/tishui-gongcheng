@@ -1,12 +1,13 @@
 # 提水工程供水调度平台
 
-基于 Agentic RAG 与多智能体协作的提水工程供水调度平台。当前仓库处于前端原型阶段，使用 Vue 3、Vite、TypeScript、Element Plus 和 ECharts，暂时使用 Mock 数据，不连接真实数据库和现场控制系统。
+基于 Agentic RAG 与多智能体协作的提水工程供水调度平台。当前仓库处于模拟阶段，使用 Vue 3、Vite、TypeScript、Element Plus、ECharts 和 FastAPI，暂时使用 Mock 数据，不连接真实数据库和现场控制系统。
 
 ## 当前版本
 
 - 前端版本：`0.2.3`
 - 当前模式：测试环境、Mock 数据、只读分析
 - 前端目录：[frontend](./frontend)
+- 后端目录：[backend](./backend)
 
 ## 已实现页面
 
@@ -54,6 +55,15 @@ http://localhost:5173/login
 ```powershell
 npm run build
 ```
+
+启动后端（PowerShell）：
+
+```powershell
+cd ..\backend
+..\.venv\Scripts\python.exe -m app
+```
+
+基础和认证接口文档：`http://127.0.0.1:8000/docs`
 
 ## 当前边界
 
