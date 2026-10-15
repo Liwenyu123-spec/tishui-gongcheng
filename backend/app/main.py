@@ -232,7 +232,7 @@ def topology() -> TopologyResponse:
 
 @app.get("/api/v1/stations", response_model=list[Station], tags=["站点"])
 def stations() -> list[Station]:
-    return [Station(**{key: station[key] for key in Station.model_fields}) for station in _STATIONS]
+    return [Station(**station) for station in _STATIONS]
 
 
 @app.get("/api/v1/stations/{station_id}", response_model=StationDetail, tags=["站点"])
