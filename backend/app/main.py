@@ -216,6 +216,49 @@ class WorkOrderDraft(BaseModel):
     source: str = "mock"
 
 
+class UserCreateRequest(BaseModel):
+    username: str
+    password: str
+    display_name: str
+    role: str = "operator"
+    permissions: list[str] = []
+
+
+class UserPatchRequest(BaseModel):
+    display_name: str | None = None
+    role: str | None = None
+    permissions: list[str] | None = None
+
+
+class KnowledgeImportRequest(BaseModel):
+    filename: str
+    title: str
+    version: str = "1.0"
+    content: str
+
+
+class KnowledgeDocument(BaseModel):
+    id: str
+    filename: str
+    title: str
+    version: str
+    status: str = "valid"
+    content_length: int
+    imported_at: datetime
+    source: str = "mock"
+
+
+class AuditEvent(BaseModel):
+    id: str
+    action: str
+    resource: str
+    resource_id: str | None = None
+    operator: str = "mock-admin"
+    occurred_at: datetime
+    detail: str = ""
+    source: str = "mock"
+
+
 _USERS = {
     "admin": {
         "password": "admin123",
@@ -354,6 +397,8 @@ _SUPPLY_AREAS = [
 ]
 _REVIEWS: dict[str, Review] = {}
 _REPORTS: dict[str, Report] = {}
+_KNOWLEDGE: dict[str, KnowledgeDocument] = {}
+_AUDIT_EVENTS: list[AuditEvent] = []
 
 
 def _public_user(username: str) -> UserResponse:
@@ -626,3 +671,61 @@ def create_work_order_draft(payload: WorkOrderDraftRequest) -> WorkOrderDraft:
     if payload.station_id and not any(station["id"] == payload.station_id for station in _STATIONS):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="站点不存在")
     return WorkOrderDraft(id=f"work-order-{uuid4().hex[:10]}", **payload.model_dump(), created_at=datetime.now(timezone.utc))
+
+
+@app.get("/api/v1/audit-events", response_model=list[AuditEvent], tags=["管理"])
+def audit_events() -> list[AuditEvent]:
+    return list(reversed(_AUDIT_EVENTS))
+
+
+@app.get("/api/v1/users", response_model=list[UserResponse], tags=["管理"])
+def users() -> list[UserResponse]:
+    return [_public_user(username) for username in _USERS]
+
+
+@app.post("/api/v1/users", response_model=UserResponse, tags=["管理"])
+def create_user(payload: UserCreateRequest) -> UserResponse:
+    if payload.username in _USERS:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在")
+    user_id = f"user-{uuid4().hex[:10]}"
+    _USERS[payload.username] = {
+        "password": payload.password,
+        "id": user_id,
+        "username": payload.username,
+        "display_name": payload.display_name,
+        "role": payload.role,
+        "permissions": payload.permissions,
+    }
+    _record_audit("create", "user", user_id, f"创建用户 {payload.username}")
+    return _public_user(payload.username)
+
+
+@app.patch("/api/v1/users/{user_id}", response_model=UserResponse, tags=["管理"])
+def update_user(user_id: str, payload: UserPatchRequest) -> UserResponse:
+    username = next((name for name, user in _USERS.items() if user["id"] == user_id), None)
+    if username is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    updates = payload.model_dump(exclude_none=True)
+    _USERS[username].update(updates)
+    _record_audit("update", "user", user_id, f"修改用户 {username}")
+    return _public_user(username)
+
+
+@app.get("/api/v1/knowledge", response_model=list[KnowledgeDocument], tags=["知识库"])
+def knowledge() -> list[KnowledgeDocument]:
+    return list(_KNOWLEDGE.values())
+
+
+@app.post("/api/v1/knowledge/import", response_model=KnowledgeDocument, tags=["知识库"])
+def import_knowledge(payload: KnowledgeImportRequest) -> KnowledgeDocument:
+    document = KnowledgeDocument(
+        id=f"knowledge-{uuid4().hex[:10]}",
+        filename=payload.filename,
+        title=payload.title,
+        version=payload.version,
+        content_length=len(payload.content),
+        imported_at=datetime.now(timezone.utc),
+    )
+    _KNOWLEDGE[document.id] = document
+    _record_audit("import", "knowledge", document.id, f"导入文档 {document.filename}")
+    return document
