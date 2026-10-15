@@ -1,7 +1,9 @@
+import csv
+import io
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -114,6 +116,39 @@ class Alarm(BaseModel):
 class AlarmDetail(Alarm):
     description: str
     suggested_action: str
+
+
+class SupplyArea(BaseModel):
+    area: str
+    station_id: str
+    supply: float
+    demand: float
+    balance: float
+    unit: str = "m³/d"
+    pressure: float
+    risk: str
+    source: str = "mock"
+
+
+class SupplyBalanceResponse(BaseModel):
+    from_time: str
+    to_time: str
+    areas: list[SupplyArea]
+    total_supply: float
+    total_demand: float
+    total_balance: float
+    bottleneck_summary: str
+    source: str = "mock"
+
+
+class CsvImportResponse(BaseModel):
+    success: bool
+    filename: str | None
+    total_rows: int
+    accepted_rows: int
+    rejected_rows: int
+    errors: list[str]
+    source: str = "mock"
 
 
 _USERS = {
@@ -247,6 +282,12 @@ _ALARMS = [
     },
 ]
 
+_SUPPLY_AREAS = [
+    {"area": "平定城区", "station_id": "pump-04", "supply": 9200.0, "demand": 9800.0, "pressure": 0.38, "risk": "medium"},
+    {"area": "东部片区", "station_id": "pump-03", "supply": 5600.0, "demand": 5200.0, "pressure": 0.43, "risk": "low"},
+    {"area": "西部片区", "station_id": "pump-02", "supply": 4100.0, "demand": 4700.0, "pressure": 0.31, "risk": "high"},
+]
+
 
 def _public_user(username: str) -> UserResponse:
     user = _USERS[username]
@@ -376,3 +417,69 @@ def alarm_detail(alarm_id: str) -> AlarmDetail:
     if alarm is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="告警不存在")
     return AlarmDetail(**alarm)
+
+
+@app.get("/api/v1/supply/balance", response_model=SupplyBalanceResponse, tags=["供需"])
+def supply_balance(
+    from_time: str | None = Query(default=None, alias="from", max_length=64),
+    to_time: str | None = Query(default=None, alias="to", max_length=64),
+) -> SupplyBalanceResponse:
+    rows = [SupplyArea(**area, balance=area["supply"] - area["demand"]) for area in _SUPPLY_AREAS]
+    total_supply = sum(area.supply for area in rows)
+    total_demand = sum(area.demand for area in rows)
+    total_balance = total_supply - total_demand
+    bottleneck = min(rows, key=lambda area: area.balance)
+    return SupplyBalanceResponse(
+        from_time=from_time or "2026-10-15T00:00:00Z",
+        to_time=to_time or "2026-10-15T23:59:59Z",
+        areas=rows,
+        total_supply=total_supply,
+        total_demand=total_demand,
+        total_balance=total_balance,
+        bottleneck_summary=f"{bottleneck.area} 当前供需缺口 {abs(bottleneck.balance):.0f} m³/d。",
+    )
+
+
+@app.post("/api/v1/imports/telemetry-csv", response_model=CsvImportResponse, tags=["数据导入"])
+async def import_telemetry_csv(request: Request) -> CsvImportResponse:
+    filename = request.headers.get("x-filename")
+    raw = await request.body()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return CsvImportResponse(success=False, filename=filename, total_rows=0, accepted_rows=0, rejected_rows=0, errors=["CSV 必须使用 UTF-8 编码"])
+
+    reader = csv.DictReader(io.StringIO(text))
+    required = {"station_id", "observed_at", "metric", "value", "unit"}
+    headers = set(reader.fieldnames or [])
+    missing = sorted(required - headers)
+    if missing:
+        return CsvImportResponse(success=False, filename=filename, total_rows=0, accepted_rows=0, rejected_rows=0, errors=[f"缺少字段: {', '.join(missing)}"])
+
+    errors: list[str] = []
+    accepted = 0
+    total = 0
+    station_ids = {station["id"] for station in _STATIONS}
+    for line_number, row in enumerate(reader, start=2):
+        total += 1
+        if row.get("station_id") not in station_ids:
+            errors.append(f"第 {line_number} 行站点不存在: {row.get('station_id')}")
+            continue
+        try:
+            float(row.get("value", ""))
+            datetime.fromisoformat(row.get("observed_at", "").replace("Z", "+00:00"))
+        except ValueError:
+            errors.append(f"第 {line_number} 行时间或数值格式错误")
+            continue
+        if not row.get("metric") or not row.get("unit"):
+            errors.append(f"第 {line_number} 行测点或单位为空")
+            continue
+        accepted += 1
+    return CsvImportResponse(
+        success=not errors,
+        filename=filename,
+        total_rows=total,
+        accepted_rows=accepted,
+        rejected_rows=total - accepted,
+        errors=errors,
+    )
