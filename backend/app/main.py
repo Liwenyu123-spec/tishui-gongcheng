@@ -51,6 +51,41 @@ class LogoutResponse(BaseModel):
     message: str = "已退出登录"
 
 
+class Station(BaseModel):
+    id: str
+    name: str
+    sequence: int
+    station_type: str
+    status: str
+    source: str = "mock"
+
+
+class StationDetail(Station):
+    location: str
+    description: str
+    metrics: list[str]
+
+
+class TopologyNode(BaseModel):
+    station_id: str
+    name: str
+    sequence: int
+
+
+class TopologyEdge(BaseModel):
+    source: str
+    target: str
+    direction: str = "downstream"
+
+
+class TopologyResponse(BaseModel):
+    version: str
+    confirmed_at: datetime
+    source: str = "mock"
+    nodes: list[TopologyNode]
+    edges: list[TopologyEdge]
+
+
 _USERS = {
     "admin": {
         "password": "admin123",
@@ -70,6 +105,69 @@ _USERS = {
     },
 }
 _TOKENS = {"mock-token-admin": "admin", "mock-token-operator": "operator"}
+
+_STATIONS = [
+    {
+        "id": "jq-01",
+        "name": "集泉一站",
+        "sequence": 1,
+        "station_type": "取水泵站",
+        "status": "running",
+        "location": "集泉取水口",
+        "description": "工程上游取水及一级提水站点。",
+        "metrics": ["flow", "pressure", "level", "energy"],
+    },
+    {
+        "id": "pump-01",
+        "name": "一泵站",
+        "sequence": 2,
+        "station_type": "加压泵站",
+        "status": "running",
+        "location": "输水干线 1+200",
+        "description": "承担一级输水加压。",
+        "metrics": ["flow", "pressure", "energy"],
+    },
+    {
+        "id": "pump-02",
+        "name": "二泵站",
+        "sequence": 3,
+        "station_type": "加压泵站",
+        "status": "warning",
+        "location": "输水干线 4+800",
+        "description": "承担中段输水加压。",
+        "metrics": ["flow", "pressure", "level", "energy"],
+    },
+    {
+        "id": "pump-03",
+        "name": "三泵站",
+        "sequence": 4,
+        "station_type": "加压泵站",
+        "status": "running",
+        "location": "输水干线 8+600",
+        "description": "承担中下游输水加压。",
+        "metrics": ["flow", "pressure", "energy"],
+    },
+    {
+        "id": "pump-04",
+        "name": "四泵站",
+        "sequence": 5,
+        "station_type": "末端泵站",
+        "status": "running",
+        "location": "平定城区入口",
+        "description": "承担末端供水调节。",
+        "metrics": ["flow", "pressure", "level", "energy"],
+    },
+    {
+        "id": "pingding-inlet",
+        "name": "平定侧入口",
+        "sequence": 6,
+        "station_type": "供水入口",
+        "status": "running",
+        "location": "平定城区",
+        "description": "工程输水进入片区的入口节点。",
+        "metrics": ["flow", "pressure"],
+    },
+]
 
 
 def _public_user(username: str) -> UserResponse:
@@ -115,3 +213,31 @@ def me(username: Annotated[str, Depends(_get_current_username)]) -> UserResponse
 @app.post("/api/v1/auth/logout", response_model=LogoutResponse, tags=["认证"])
 def logout(_: Annotated[str, Depends(_get_current_username)]) -> LogoutResponse:
     return LogoutResponse()
+
+
+@app.get("/api/v1/topology", response_model=TopologyResponse, tags=["拓扑"])
+def topology() -> TopologyResponse:
+    nodes = [TopologyNode(station_id=s["id"], name=s["name"], sequence=s["sequence"]) for s in _STATIONS]
+    edges = [
+        TopologyEdge(source=_STATIONS[index]["id"], target=_STATIONS[index + 1]["id"])
+        for index in range(len(_STATIONS) - 1)
+    ]
+    return TopologyResponse(
+        version="mock-topology-v1",
+        confirmed_at=datetime(2026, 10, 15, tzinfo=timezone.utc),
+        nodes=nodes,
+        edges=edges,
+    )
+
+
+@app.get("/api/v1/stations", response_model=list[Station], tags=["站点"])
+def stations() -> list[Station]:
+    return [Station(**{key: station[key] for key in Station.model_fields}) for station in _STATIONS]
+
+
+@app.get("/api/v1/stations/{station_id}", response_model=StationDetail, tags=["站点"])
+def station_detail(station_id: str) -> StationDetail:
+    station = next((item for item in _STATIONS if item["id"] == station_id), None)
+    if station is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="站点不存在")
+    return StationDetail(**station)
