@@ -1,7 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -84,6 +84,36 @@ class TopologyResponse(BaseModel):
     source: str = "mock"
     nodes: list[TopologyNode]
     edges: list[TopologyEdge]
+
+
+class TelemetryPoint(BaseModel):
+    observed_at: datetime
+    metric: str
+    value: float
+    unit: str
+    source: str = "mock"
+    quality: str = "good"
+    is_stale: bool = False
+
+
+class Alarm(BaseModel):
+    id: str
+    station_id: str
+    station_name: str
+    level: str
+    metric: str
+    value: float
+    unit: str
+    threshold: str
+    status: str
+    occurred_at: datetime
+    relation: str | None = None
+    source: str = "mock"
+
+
+class AlarmDetail(Alarm):
+    description: str
+    suggested_action: str
 
 
 _USERS = {
@@ -169,6 +199,54 @@ _STATIONS = [
     },
 ]
 
+_ALARMS = [
+    {
+        "id": "alarm-20261015-001",
+        "station_id": "pump-02",
+        "station_name": "二泵站",
+        "level": "high",
+        "metric": "flow",
+        "value": 812.0,
+        "unit": "m³/h",
+        "threshold": ">= 1000",
+        "status": "unconfirmed",
+        "occurred_at": datetime(2026, 10, 15, 10, 42, tzinfo=timezone.utc),
+        "relation": "关联下游片区压力下降",
+        "description": "出水流量低于当前运行阈值。",
+        "suggested_action": "核查泵组运行状态和下游压力数据。",
+    },
+    {
+        "id": "alarm-20261015-002",
+        "station_id": "pump-04",
+        "station_name": "四泵站",
+        "level": "medium",
+        "metric": "current",
+        "value": 68.0,
+        "unit": "A",
+        "threshold": "<= 60",
+        "status": "unconfirmed",
+        "occurred_at": datetime(2026, 10, 15, 10, 18, tzinfo=timezone.utc),
+        "relation": None,
+        "description": "2 号泵电流高于设定阈值。",
+        "suggested_action": "核查电机负荷和设备运行记录。",
+    },
+    {
+        "id": "alarm-20261015-003",
+        "station_id": "pump-03",
+        "station_name": "三泵站",
+        "level": "low",
+        "metric": "level",
+        "value": 3.2,
+        "unit": "m",
+        "threshold": ">= 3.5",
+        "status": "confirmed",
+        "occurred_at": datetime(2026, 10, 15, 9, 56, tzinfo=timezone.utc),
+        "relation": None,
+        "description": "站内水位低于运行参考值。",
+        "suggested_action": "持续观察水位趋势和来水情况。",
+    },
+]
+
 
 def _public_user(username: str) -> UserResponse:
     user = _USERS[username]
@@ -241,3 +319,60 @@ def station_detail(station_id: str) -> StationDetail:
     if station is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="站点不存在")
     return StationDetail(**station)
+
+
+@app.get("/api/v1/stations/{station_id}/telemetry", response_model=list[TelemetryPoint], tags=["监控"])
+def telemetry(
+    station_id: str,
+    metric: str | None = Query(default=None, max_length=32),
+    from_time: str | None = Query(default=None, alias="from", max_length=64),
+    to_time: str | None = Query(default=None, alias="to", max_length=64),
+) -> list[TelemetryPoint]:
+    if not any(station["id"] == station_id for station in _STATIONS):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="站点不存在")
+
+    base_time = datetime(2026, 10, 15, 10, 0, tzinfo=timezone.utc)
+    values = {
+        "flow": (1120.0, "m³/h"),
+        "pressure": (0.72, "MPa"),
+        "level": (3.7, "m"),
+        "energy": (184.0, "kWh"),
+    }
+    metrics = [metric] if metric else list(values)
+    points: list[TelemetryPoint] = []
+    for offset in range(6):
+        for metric_name in metrics:
+            value_unit = values.get(metric_name)
+            if value_unit is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"不支持的测点: {metric_name}")
+            value, unit = value_unit
+            points.append(
+                TelemetryPoint(
+                    observed_at=base_time - timedelta(minutes=offset * 10),
+                    metric=metric_name,
+                    value=round(value + offset * 2, 3),
+                    unit=unit,
+                )
+            )
+    return points
+
+
+@app.get("/api/v1/alarms", response_model=list[Alarm], tags=["告警"])
+def alarms(
+    status_filter: str | None = Query(default=None, alias="status", max_length=32),
+    station_id: str | None = Query(default=None, max_length=64),
+) -> list[Alarm]:
+    rows = _ALARMS
+    if status_filter:
+        rows = [alarm for alarm in rows if alarm["status"] == status_filter]
+    if station_id:
+        rows = [alarm for alarm in rows if alarm["station_id"] == station_id]
+    return [Alarm(**{key: value for key, value in alarm.items() if key not in {"description", "suggested_action"}}) for alarm in rows]
+
+
+@app.get("/api/v1/alarms/{alarm_id}", response_model=AlarmDetail, tags=["告警"])
+def alarm_detail(alarm_id: str) -> AlarmDetail:
+    alarm = next((item for item in _ALARMS if item["id"] == alarm_id), None)
+    if alarm is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="告警不存在")
+    return AlarmDetail(**alarm)
