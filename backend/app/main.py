@@ -1,5 +1,6 @@
 import csv
 import io
+from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -151,6 +152,70 @@ class CsvImportResponse(BaseModel):
     source: str = "mock"
 
 
+class SchemeCompareRequest(BaseModel):
+    schemes: list[dict]
+
+
+class SchemeCompareResponse(BaseModel):
+    comparison_id: str
+    results: list[dict]
+    recommendation: str
+    source: str = "mock"
+
+
+class ReviewCreateRequest(BaseModel):
+    subject: str
+    recommendation: str
+    comment: str = ""
+
+
+class Review(BaseModel):
+    id: str
+    subject: str
+    recommendation: str
+    comment: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    source: str = "mock"
+
+
+class ReportGenerateRequest(BaseModel):
+    report_type: str = "daily"
+    report_date: str | None = None
+
+
+class Report(BaseModel):
+    id: str
+    report_type: str
+    report_date: str
+    status: str
+    title: str
+    summary: str
+    created_at: datetime
+    source: str = "mock"
+
+
+class WorkOrderDraftRequest(BaseModel):
+    title: str
+    station_id: str | None = None
+    issue: str
+    suggested_action: str
+    priority: str = "medium"
+
+
+class WorkOrderDraft(BaseModel):
+    id: str
+    title: str
+    station_id: str | None
+    issue: str
+    suggested_action: str
+    priority: str
+    status: str = "draft"
+    created_at: datetime
+    source: str = "mock"
+
+
 _USERS = {
     "admin": {
         "password": "admin123",
@@ -287,6 +352,8 @@ _SUPPLY_AREAS = [
     {"area": "东部片区", "station_id": "pump-03", "supply": 5600.0, "demand": 5200.0, "pressure": 0.43, "risk": "low"},
     {"area": "西部片区", "station_id": "pump-02", "supply": 4100.0, "demand": 4700.0, "pressure": 0.31, "risk": "high"},
 ]
+_REVIEWS: dict[str, Review] = {}
+_REPORTS: dict[str, Report] = {}
 
 
 def _public_user(username: str) -> UserResponse:
@@ -483,3 +550,79 @@ async def import_telemetry_csv(request: Request) -> CsvImportResponse:
         rejected_rows=total - accepted,
         errors=errors,
     )
+
+
+@app.post("/api/v1/schemes/compare", response_model=SchemeCompareResponse, tags=["方案"])
+def compare_schemes(payload: SchemeCompareRequest) -> SchemeCompareResponse:
+    if not payload.schemes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="至少提供一个方案")
+    results = []
+    for index, scheme in enumerate(payload.schemes, start=1):
+        results.append(
+            {
+                "scheme_id": scheme.get("scheme_id", f"scheme-{index}"),
+                "name": scheme.get("name", f"方案 {index}"),
+                "supply": float(scheme.get("supply", 0)),
+                "delay_minutes": float(scheme.get("delay_minutes", 0)),
+                "energy": float(scheme.get("energy", 0)),
+                "risk": scheme.get("risk", "medium"),
+            }
+        )
+    best = min(results, key=lambda item: (item["energy"], item["delay_minutes"]))
+    return SchemeCompareResponse(
+        comparison_id=f"compare-{uuid4().hex[:10]}",
+        results=results,
+        recommendation=f"建议优先复核{best['name']}，其模拟能耗指标最低。",
+    )
+
+
+@app.post("/api/v1/reviews", response_model=Review, tags=["审核"])
+def create_review(payload: ReviewCreateRequest) -> Review:
+    now = datetime.now(timezone.utc)
+    review = Review(id=f"review-{uuid4().hex[:10]}", **payload.model_dump(), status="pending", created_at=now, updated_at=now)
+    _REVIEWS[review.id] = review
+    return review
+
+
+@app.get("/api/v1/reviews", response_model=list[Review], tags=["审核"])
+def list_reviews() -> list[Review]:
+    return list(_REVIEWS.values())
+
+
+@app.get("/api/v1/reviews/{review_id}", response_model=Review, tags=["审核"])
+def get_review(review_id: str) -> Review:
+    review = _REVIEWS.get(review_id)
+    if review is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="审核记录不存在")
+    return review
+
+
+@app.post("/api/v1/reports/generate", response_model=Report, tags=["报告"])
+def generate_report(payload: ReportGenerateRequest) -> Report:
+    now = datetime.now(timezone.utc)
+    report = Report(
+        id=f"report-{uuid4().hex[:10]}",
+        report_type=payload.report_type,
+        report_date=payload.report_date or now.date().isoformat(),
+        status="draft",
+        title=f"{payload.report_type}运行报告",
+        summary="报告已根据当前模拟监控和供需数据生成草稿，需人工复核。",
+        created_at=now,
+    )
+    _REPORTS[report.id] = report
+    return report
+
+
+@app.get("/api/v1/reports/{report_id}", response_model=Report, tags=["报告"])
+def get_report(report_id: str) -> Report:
+    report = _REPORTS.get(report_id)
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="报告不存在")
+    return report
+
+
+@app.post("/api/v1/work-orders/draft", response_model=WorkOrderDraft, tags=["工单"])
+def create_work_order_draft(payload: WorkOrderDraftRequest) -> WorkOrderDraft:
+    if payload.station_id and not any(station["id"] == payload.station_id for station in _STATIONS):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="站点不存在")
+    return WorkOrderDraft(id=f"work-order-{uuid4().hex[:10]}", **payload.model_dump(), created_at=datetime.now(timezone.utc))
