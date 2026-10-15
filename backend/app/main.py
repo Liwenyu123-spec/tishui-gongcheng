@@ -406,6 +406,19 @@ def _public_user(username: str) -> UserResponse:
     return UserResponse(**{key: value for key, value in user.items() if key != "password"})
 
 
+def _record_audit(action: str, resource: str, resource_id: str | None, detail: str) -> None:
+    _AUDIT_EVENTS.append(
+        AuditEvent(
+            id=f"audit-{uuid4().hex[:10]}",
+            action=action,
+            resource=resource,
+            resource_id=resource_id,
+            occurred_at=datetime.now(timezone.utc),
+            detail=detail,
+        )
+    )
+
+
 def _get_current_username(authorization: Annotated[str | None, Header()] = None) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
