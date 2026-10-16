@@ -1,24 +1,47 @@
+"""模拟阶段的 FastAPI 后端入口。
+
+本文件按“数据模型 → Mock 数据 → 辅助函数 → API 路由”的顺序组织，
+方便先理解请求/响应结构，再理解每个接口如何处理数据。
+"""
+
+# csv 用于解析上传的遥测 CSV 文本。
 import csv
+# io 用于把请求中的字符串包装成 csv.DictReader 可以读取的文件对象。
 import io
+# uuid4 用于生成 Mock 记录的唯一 ID。
 from uuid import uuid4
+# datetime 处理时间；timedelta 生成遥测时间序列；timezone 统一使用 UTC。
 from datetime import datetime, timedelta, timezone
+# Annotated 让 FastAPI 同时理解类型和 Depends/Header 的参数来源。
 from typing import Annotated
 
+# FastAPI 核心对象、依赖注入、请求头、异常、查询参数、原始请求和状态码。
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+# CORS 允许本地 Vue 前端从 5173 端口访问 8000 端口的后端。
 from fastapi.middleware.cors import CORSMiddleware
+# Pydantic 用于校验请求体和约束响应结构。
 from pydantic import BaseModel, Field
 
+# 创建 FastAPI 应用对象；Swagger 文档会读取这里的元数据。
 app = FastAPI(
+    # Swagger 页面显示的项目名称。
     title="提水工程供水调度平台 API",
+    # 当前模拟阶段的后端版本。
     version="0.3.0-mock",
+    # Swagger 页面显示的项目说明。
     description="模拟阶段后端接口。当前仅提供基础和登录认证能力。",
 )
 
+# 注册跨域中间件，使 Vue 开发服务器可以请求本地后端。
 app.add_middleware(
     CORSMiddleware,
+    # 只允许当前前端开发地址访问。
     allow_origins=["http://localhost:5173"],
+    # 允许浏览器携带认证信息。
     allow_credentials=True,
+    # Mock 阶段允许常见 HTTP 方法。
     allow_methods=["*"],
+    # Mock 阶段允许所有请求头，便于发送 Authorization。
     allow_headers=["*"],
 )
 
