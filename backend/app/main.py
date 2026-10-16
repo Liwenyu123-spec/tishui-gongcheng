@@ -46,6 +46,8 @@ app.add_middleware(
 )
 
 
+# ------------------------- 基础与认证模型 -------------------------
+# 健康检查接口的返回结构。
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "water-dispatch-backend"
@@ -53,11 +55,13 @@ class HealthResponse(BaseModel):
     timestamp: datetime
 
 
+# 登录接口接收的 JSON 请求体。
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=128)
 
 
+# 对外返回的用户信息；故意不包含密码。
 class UserResponse(BaseModel):
     id: str
     username: str
@@ -66,17 +70,20 @@ class UserResponse(BaseModel):
     permissions: list[str]
 
 
+# 登录成功后返回 Token 和当前用户。
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
 
 
+# 退出登录接口的简单确认响应。
 class LogoutResponse(BaseModel):
     success: bool = True
     message: str = "已退出登录"
 
 
+# 站点列表中的基础字段。
 class Station(BaseModel):
     id: str
     name: str
@@ -86,24 +93,28 @@ class Station(BaseModel):
     source: str = "mock"
 
 
+# 站点详情继承基础站点字段，并增加位置和测点信息。
 class StationDetail(Station):
     location: str
     description: str
     metrics: list[str]
 
 
+# 拓扑图中的节点，使用 station_id 关联站点。
 class TopologyNode(BaseModel):
     station_id: str
     name: str
     sequence: int
 
 
+# 拓扑图中的有向连接边。
 class TopologyEdge(BaseModel):
     source: str
     target: str
     direction: str = "downstream"
 
 
+# 拓扑接口的整体响应。
 class TopologyResponse(BaseModel):
     version: str
     confirmed_at: datetime
@@ -112,6 +123,7 @@ class TopologyResponse(BaseModel):
     edges: list[TopologyEdge]
 
 
+# 单条遥测记录，包含值、单位、来源和质量状态。
 class TelemetryPoint(BaseModel):
     observed_at: datetime
     metric: str
@@ -122,6 +134,7 @@ class TelemetryPoint(BaseModel):
     is_stale: bool = False
 
 
+# 告警列表需要展示的字段。
 class Alarm(BaseModel):
     id: str
     station_id: str
@@ -137,11 +150,13 @@ class Alarm(BaseModel):
     source: str = "mock"
 
 
+# 告警详情在列表字段基础上增加说明和建议动作。
 class AlarmDetail(Alarm):
     description: str
     suggested_action: str
 
 
+# 单个片区的供需计算结果。
 class SupplyArea(BaseModel):
     area: str
     station_id: str
@@ -154,6 +169,7 @@ class SupplyArea(BaseModel):
     source: str = "mock"
 
 
+# 供需平衡接口的整体响应。
 class SupplyBalanceResponse(BaseModel):
     from_time: str
     to_time: str
@@ -165,6 +181,7 @@ class SupplyBalanceResponse(BaseModel):
     source: str = "mock"
 
 
+# CSV 导入只返回校验统计，不写入数据库。
 class CsvImportResponse(BaseModel):
     success: bool
     filename: str | None
@@ -175,10 +192,12 @@ class CsvImportResponse(BaseModel):
     source: str = "mock"
 
 
+# 方案比较请求；方案字段在模拟阶段允许灵活扩展。
 class SchemeCompareRequest(BaseModel):
     schemes: list[dict]
 
 
+# 方案比较结果和规则推荐。
 class SchemeCompareResponse(BaseModel):
     comparison_id: str
     results: list[dict]
@@ -186,12 +205,14 @@ class SchemeCompareResponse(BaseModel):
     source: str = "mock"
 
 
+# 创建审核记录时提交的字段。
 class ReviewCreateRequest(BaseModel):
     subject: str
     recommendation: str
     comment: str = ""
 
 
+# 审核记录的存储和响应结构。
 class Review(BaseModel):
     id: str
     subject: str
@@ -203,11 +224,13 @@ class Review(BaseModel):
     source: str = "mock"
 
 
+# 报告生成请求，默认生成日报。
 class ReportGenerateRequest(BaseModel):
     report_type: str = "daily"
     report_date: str | None = None
 
 
+# 报告草稿的响应结构。
 class Report(BaseModel):
     id: str
     report_type: str
@@ -219,6 +242,7 @@ class Report(BaseModel):
     source: str = "mock"
 
 
+# 工单草稿请求；只描述建议，不触发设备操作。
 class WorkOrderDraftRequest(BaseModel):
     title: str
     station_id: str | None = None
@@ -227,6 +251,7 @@ class WorkOrderDraftRequest(BaseModel):
     priority: str = "medium"
 
 
+# 工单草稿响应结构。
 class WorkOrderDraft(BaseModel):
     id: str
     title: str
@@ -239,6 +264,7 @@ class WorkOrderDraft(BaseModel):
     source: str = "mock"
 
 
+# 新建用户请求。
 class UserCreateRequest(BaseModel):
     username: str
     password: str
@@ -247,12 +273,14 @@ class UserCreateRequest(BaseModel):
     permissions: list[str] = []
 
 
+# 修改用户时允许提交的可选字段。
 class UserPatchRequest(BaseModel):
     display_name: str | None = None
     role: str | None = None
     permissions: list[str] | None = None
 
 
+# 导入知识文档时提交的元数据和正文。
 class KnowledgeImportRequest(BaseModel):
     filename: str
     title: str
@@ -260,6 +288,7 @@ class KnowledgeImportRequest(BaseModel):
     content: str
 
 
+# 知识文档列表中的元数据；正文当前不对外返回。
 class KnowledgeDocument(BaseModel):
     id: str
     filename: str
@@ -271,6 +300,7 @@ class KnowledgeDocument(BaseModel):
     source: str = "mock"
 
 
+# 用户和文档变更产生的审计事件结构。
 class AuditEvent(BaseModel):
     id: str
     action: str
