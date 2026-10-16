@@ -312,6 +312,9 @@ class AuditEvent(BaseModel):
     source: str = "mock"
 
 
+# ------------------------- Mock 数据 -------------------------
+# 内存用户表：key 是登录用户名，value 模拟数据库中的用户记录。
+# 真实数据库接入后，这部分应替换为 User Service/Repository。
 _USERS = {
     "admin": {
         "password": "admin123",
@@ -330,8 +333,10 @@ _USERS = {
         "permissions": ["read", "ask", "submit_scheme"],
     },
 }
+# 固定 Token 到用户名的映射，仅用于模拟阶段调试认证流程。
 _TOKENS = {"mock-token-admin": "admin", "mock-token-operator": "operator"}
 
+# 工程站点 Mock 数据；sequence 决定输水链路顺序。
 _STATIONS = [
     {
         "id": "jq-01",
@@ -395,6 +400,7 @@ _STATIONS = [
     },
 ]
 
+# 告警 Mock 数据；详情字段 description/suggested_action 不在列表接口中返回。
 _ALARMS = [
     {
         "id": "alarm-20261015-001",
@@ -443,22 +449,26 @@ _ALARMS = [
     },
 ]
 
+# 片区供需 Mock 数据；balance 由接口根据 supply-demand 计算。
 _SUPPLY_AREAS = [
     {"area": "平定城区", "station_id": "pump-04", "supply": 9200.0, "demand": 9800.0, "pressure": 0.38, "risk": "medium"},
     {"area": "东部片区", "station_id": "pump-03", "supply": 5600.0, "demand": 5200.0, "pressure": 0.43, "risk": "low"},
     {"area": "西部片区", "station_id": "pump-02", "supply": 4100.0, "demand": 4700.0, "pressure": 0.31, "risk": "high"},
 ]
+# 以下字典/列表模拟数据库表，服务重启后会清空新增数据。
 _REVIEWS: dict[str, Review] = {}
 _REPORTS: dict[str, Report] = {}
 _KNOWLEDGE: dict[str, KnowledgeDocument] = {}
 _AUDIT_EVENTS: list[AuditEvent] = []
 
 
+# 将内部用户记录转换为不含 password 的公开响应。
 def _public_user(username: str) -> UserResponse:
     user = _USERS[username]
     return UserResponse(**{key: value for key, value in user.items() if key != "password"})
 
 
+# 写入一条内存审计事件，供审计查询接口读取。
 def _record_audit(action: str, resource: str, resource_id: str | None, detail: str) -> None:
     _AUDIT_EVENTS.append(
         AuditEvent(
@@ -472,6 +482,8 @@ def _record_audit(action: str, resource: str, resource_id: str | None, detail: s
     )
 
 
+# 从 Authorization: Bearer <token> 请求头解析当前用户。
+# 这是 FastAPI 的依赖函数，绑定到需要登录的接口上。
 def _get_current_username(authorization: Annotated[str | None, Header()] = None) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
