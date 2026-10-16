@@ -501,32 +501,44 @@ def _get_current_username(authorization: Annotated[str | None, Header()] = None)
     return username
 
 
+# GET /health：确认服务进程是否可用，不依赖数据库或登录。
 @app.get("/api/v1/health", response_model=HealthResponse, tags=["基础"])
 def health() -> HealthResponse:
+    # 每次请求生成当前 UTC 时间，帮助判断服务是否仍在响应。
     return HealthResponse(timestamp=datetime.now(timezone.utc))
 
 
+# POST /auth/login：校验 Mock 用户名和密码并签发固定 Token。
 @app.post("/api/v1/auth/login", response_model=LoginResponse, tags=["认证"])
 def login(payload: LoginRequest) -> LoginResponse:
+    # 根据请求中的用户名查找内存用户。
     user = _USERS.get(payload.username)
+    # 用户不存在或密码不匹配时返回 401，而不是暴露具体原因。
     if not user or user["password"] != payload.password:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
+    # 返回固定的模拟 Token 和不含密码的用户信息。
     return LoginResponse(access_token=f"mock-token-{payload.username}", user=_public_user(payload.username))
 
 
+# GET /auth/me：通过依赖函数校验 Token 后返回当前用户。
 @app.get("/api/v1/auth/me", response_model=UserResponse, tags=["认证"])
 def me(username: Annotated[str, Depends(_get_current_username)]) -> UserResponse:
+    # username 已由 _get_current_username 验证。
     return _public_user(username)
 
 
+# POST /auth/logout：验证 Token 后返回退出确认；Mock 阶段不需要服务端销毁 Token。
 @app.post("/api/v1/auth/logout", response_model=LogoutResponse, tags=["认证"])
 def logout(_: Annotated[str, Depends(_get_current_username)]) -> LogoutResponse:
     return LogoutResponse()
 
 
+# GET /topology：把站点列表转换为拓扑节点和相邻连接边。
 @app.get("/api/v1/topology", response_model=TopologyResponse, tags=["拓扑"])
 def topology() -> TopologyResponse:
+    # 每个站点对应一个拓扑节点。
     nodes = [TopologyNode(station_id=s["id"], name=s["name"], sequence=s["sequence"]) for s in _STATIONS]
+    # 按站点顺序把相邻节点连接起来，形成单向输水链路。
     edges = [
         TopologyEdge(source=_STATIONS[index]["id"], target=_STATIONS[index + 1]["id"])
         for index in range(len(_STATIONS) - 1)
@@ -539,19 +551,25 @@ def topology() -> TopologyResponse:
     )
 
 
+# GET /stations：返回全部站点的基础字段。
 @app.get("/api/v1/stations", response_model=list[Station], tags=["站点"])
 def stations() -> list[Station]:
+    # Pydantic 会校验每条 Mock 字典并过滤出 Station 模型定义的字段。
     return [Station(**station) for station in _STATIONS]
 
 
+# GET /stations/{station_id}：查询单个站点的详细资料。
 @app.get("/api/v1/stations/{station_id}", response_model=StationDetail, tags=["站点"])
 def station_detail(station_id: str) -> StationDetail:
+    # 在 Mock 站点表中按 ID 查找目标站点。
     station = next((item for item in _STATIONS if item["id"] == station_id), None)
+    # 找不到时明确返回 404。
     if station is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="站点不存在")
     return StationDetail(**station)
 
 
+# GET /stations/{station_id}/telemetry：生成指定站点的模拟时序数据。
 @app.get("/api/v1/stations/{station_id}/telemetry", response_model=list[TelemetryPoint], tags=["监控"])
 def telemetry(
     station_id: str,
@@ -559,23 +577,31 @@ def telemetry(
     from_time: str | None = Query(default=None, alias="from", max_length=64),
     to_time: str | None = Query(default=None, alias="to", max_length=64),
 ) -> list[TelemetryPoint]:
+    # 先确认站点存在，避免为未知站点返回看似有效的遥测。
     if not any(station["id"] == station_id for station in _STATIONS):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="站点不存在")
 
+    # 模拟数据的最新时间点。
     base_time = datetime(2026, 10, 15, 10, 0, tzinfo=timezone.utc)
+    # 每个测点的基准值和单位。
     values = {
         "flow": (1120.0, "m³/h"),
         "pressure": (0.72, "MPa"),
         "level": (3.7, "m"),
         "energy": (184.0, "kWh"),
     }
+    # 指定 metric 时只返回一个测点，否则返回全部测点。
     metrics = [metric] if metric else list(values)
+    # 用列表收集最终响应。
     points: list[TelemetryPoint] = []
+    # 生成 6 个时间点，每个时间点间隔 10 分钟。
     for offset in range(6):
         for metric_name in metrics:
+            # 读取当前测点的基准值和单位。
             value_unit = values.get(metric_name)
             if value_unit is None:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"不支持的测点: {metric_name}")
+            # 拆开元组，并为不同时间点增加简单的模拟变化。
             value, unit = value_unit
             points.append(
                 TelemetryPoint(
@@ -588,12 +614,15 @@ def telemetry(
     return points
 
 
+# GET /alarms：返回告警列表，可按 status 和 station_id 筛选。
 @app.get("/api/v1/alarms", response_model=list[Alarm], tags=["告警"])
 def alarms(
     status_filter: str | None = Query(default=None, alias="status", max_length=32),
     station_id: str | None = Query(default=None, max_length=64),
 ) -> list[Alarm]:
+    # 先使用完整 Mock 告警列表作为查询源。
     rows = _ALARMS
+    # 有状态参数时只保留匹配记录。
     if status_filter:
         rows = [alarm for alarm in rows if alarm["status"] == status_filter]
     if station_id:
@@ -601,6 +630,7 @@ def alarms(
     return [Alarm(**{key: value for key, value in alarm.items() if key not in {"description", "suggested_action"}}) for alarm in rows]
 
 
+# GET /alarms/{alarm_id}：返回单条告警及处理建议。
 @app.get("/api/v1/alarms/{alarm_id}", response_model=AlarmDetail, tags=["告警"])
 def alarm_detail(alarm_id: str) -> AlarmDetail:
     alarm = next((item for item in _ALARMS if item["id"] == alarm_id), None)
@@ -609,15 +639,19 @@ def alarm_detail(alarm_id: str) -> AlarmDetail:
     return AlarmDetail(**alarm)
 
 
+# GET /supply/balance：计算各片区供需差额和总体瓶颈。
 @app.get("/api/v1/supply/balance", response_model=SupplyBalanceResponse, tags=["供需"])
 def supply_balance(
     from_time: str | None = Query(default=None, alias="from", max_length=64),
     to_time: str | None = Query(default=None, alias="to", max_length=64),
 ) -> SupplyBalanceResponse:
+    # 把每个片区的供水量减去需求量，得到供需余额。
     rows = [SupplyArea(**area, balance=area["supply"] - area["demand"]) for area in _SUPPLY_AREAS]
+    # 汇总所有片区，得到全局供需结果。
     total_supply = sum(area.supply for area in rows)
     total_demand = sum(area.demand for area in rows)
     total_balance = total_supply - total_demand
+    # 余额最小的片区作为当前模拟瓶颈。
     bottleneck = min(rows, key=lambda area: area.balance)
     return SupplyBalanceResponse(
         from_time=from_time or "2026-10-15T00:00:00Z",
@@ -630,16 +664,21 @@ def supply_balance(
     )
 
 
+# POST /imports/telemetry-csv：读取 CSV 原文并执行格式校验，不落库。
 @app.post("/api/v1/imports/telemetry-csv", response_model=CsvImportResponse, tags=["数据导入"])
 async def import_telemetry_csv(request: Request) -> CsvImportResponse:
+    # 文件名通过自定义请求头传入，当前不使用 multipart 以减少依赖。
     filename = request.headers.get("x-filename")
+    # 读取请求体中的 CSV 原始字节。
     raw = await request.body()
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         return CsvImportResponse(success=False, filename=filename, total_rows=0, accepted_rows=0, rejected_rows=0, errors=["CSV 必须使用 UTF-8 编码"])
 
+    # DictReader 会把每行转换成“列名 → 值”的字典。
     reader = csv.DictReader(io.StringIO(text))
+    # 定义首期导入必须存在的字段。
     required = {"station_id", "observed_at", "metric", "value", "unit"}
     headers = set(reader.fieldnames or [])
     missing = sorted(required - headers)
@@ -650,6 +689,7 @@ async def import_telemetry_csv(request: Request) -> CsvImportResponse:
     accepted = 0
     total = 0
     station_ids = {station["id"] for station in _STATIONS}
+    # 从第 2 行开始计数，因为第 1 行是表头。
     for line_number, row in enumerate(reader, start=2):
         total += 1
         if row.get("station_id") not in station_ids:
@@ -675,10 +715,12 @@ async def import_telemetry_csv(request: Request) -> CsvImportResponse:
     )
 
 
+# POST /schemes/compare：按模拟能耗和时延指标比较多个方案。
 @app.post("/api/v1/schemes/compare", response_model=SchemeCompareResponse, tags=["方案"])
 def compare_schemes(payload: SchemeCompareRequest) -> SchemeCompareResponse:
     if not payload.schemes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="至少提供一个方案")
+    # 规范化每个方案的默认字段，生成统一的比较结果。
     results = []
     for index, scheme in enumerate(payload.schemes, start=1):
         results.append(
@@ -691,6 +733,7 @@ def compare_schemes(payload: SchemeCompareRequest) -> SchemeCompareResponse:
                 "risk": scheme.get("risk", "medium"),
             }
         )
+    # 先按能耗排序，再按时延排序，选出模拟推荐方案。
     best = min(results, key=lambda item: (item["energy"], item["delay_minutes"]))
     return SchemeCompareResponse(
         comparison_id=f"compare-{uuid4().hex[:10]}",
@@ -699,6 +742,7 @@ def compare_schemes(payload: SchemeCompareRequest) -> SchemeCompareResponse:
     )
 
 
+# POST /reviews：创建一条待人工处理的审核记录。
 @app.post("/api/v1/reviews", response_model=Review, tags=["审核"])
 def create_review(payload: ReviewCreateRequest) -> Review:
     now = datetime.now(timezone.utc)
@@ -707,11 +751,13 @@ def create_review(payload: ReviewCreateRequest) -> Review:
     return review
 
 
+# GET /reviews：查询当前进程内的审核记录。
 @app.get("/api/v1/reviews", response_model=list[Review], tags=["审核"])
 def list_reviews() -> list[Review]:
     return list(_REVIEWS.values())
 
 
+# GET /reviews/{review_id}：按 ID 查询审核详情。
 @app.get("/api/v1/reviews/{review_id}", response_model=Review, tags=["审核"])
 def get_review(review_id: str) -> Review:
     review = _REVIEWS.get(review_id)
@@ -720,6 +766,7 @@ def get_review(review_id: str) -> Review:
     return review
 
 
+# POST /reports/generate：生成一份需要人工复核的报告草稿。
 @app.post("/api/v1/reports/generate", response_model=Report, tags=["报告"])
 def generate_report(payload: ReportGenerateRequest) -> Report:
     now = datetime.now(timezone.utc)
@@ -736,6 +783,7 @@ def generate_report(payload: ReportGenerateRequest) -> Report:
     return report
 
 
+# GET /reports/{report_id}：按 ID 查询报告草稿。
 @app.get("/api/v1/reports/{report_id}", response_model=Report, tags=["报告"])
 def get_report(report_id: str) -> Report:
     report = _REPORTS.get(report_id)
@@ -744,6 +792,7 @@ def get_report(report_id: str) -> Report:
     return report
 
 
+# POST /work-orders/draft：根据建议生成工单草稿，不执行现场控制。
 @app.post("/api/v1/work-orders/draft", response_model=WorkOrderDraft, tags=["工单"])
 def create_work_order_draft(payload: WorkOrderDraftRequest) -> WorkOrderDraft:
     if payload.station_id and not any(station["id"] == payload.station_id for station in _STATIONS):
@@ -751,16 +800,19 @@ def create_work_order_draft(payload: WorkOrderDraftRequest) -> WorkOrderDraft:
     return WorkOrderDraft(id=f"work-order-{uuid4().hex[:10]}", **payload.model_dump(), created_at=datetime.now(timezone.utc))
 
 
+# GET /audit-events：倒序返回最近的审计事件。
 @app.get("/api/v1/audit-events", response_model=list[AuditEvent], tags=["管理"])
 def audit_events() -> list[AuditEvent]:
     return list(reversed(_AUDIT_EVENTS))
 
 
+# GET /users：返回所有用户的公开信息，不返回密码。
 @app.get("/api/v1/users", response_model=list[UserResponse], tags=["管理"])
 def users() -> list[UserResponse]:
     return [_public_user(username) for username in _USERS]
 
 
+# POST /users：创建一个内存 Mock 用户并记录审计事件。
 @app.post("/api/v1/users", response_model=UserResponse, tags=["管理"])
 def create_user(payload: UserCreateRequest) -> UserResponse:
     if payload.username in _USERS:
@@ -778,6 +830,7 @@ def create_user(payload: UserCreateRequest) -> UserResponse:
     return _public_user(payload.username)
 
 
+# PATCH /users/{user_id}：只更新请求中实际提供的字段。
 @app.patch("/api/v1/users/{user_id}", response_model=UserResponse, tags=["管理"])
 def update_user(user_id: str, payload: UserPatchRequest) -> UserResponse:
     username = next((name for name, user in _USERS.items() if user["id"] == user_id), None)
@@ -789,11 +842,13 @@ def update_user(user_id: str, payload: UserPatchRequest) -> UserResponse:
     return _public_user(username)
 
 
+# GET /knowledge：返回已导入知识文档的元数据。
 @app.get("/api/v1/knowledge", response_model=list[KnowledgeDocument], tags=["知识库"])
 def knowledge() -> list[KnowledgeDocument]:
     return list(_KNOWLEDGE.values())
 
 
+# POST /knowledge/import：保存知识文档元数据并记录正文长度。
 @app.post("/api/v1/knowledge/import", response_model=KnowledgeDocument, tags=["知识库"])
 def import_knowledge(payload: KnowledgeImportRequest) -> KnowledgeDocument:
     document = KnowledgeDocument(
