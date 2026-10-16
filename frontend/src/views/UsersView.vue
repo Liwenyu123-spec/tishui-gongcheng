@@ -18,6 +18,27 @@ interface UserRow extends ApiUser {
   source: string
 }
 
+interface ApiAuditEvent {
+  id: string
+  action: string
+  resource: string
+  resource_id: string | null
+  operator: string
+  occurred_at: string
+  detail: string
+  source: string
+}
+
+interface AuditRow {
+  id: string
+  action: string
+  resource: string
+  operator: string
+  time: string
+  detail: string
+  source: string
+}
+
 const roleNames: Record<string, string> = { admin: '管理员', operator: '值班调度员', engineer: '工程/设备', reviewer: '审批负责人' }
 const permissionNames: Record<string, string> = {
   read: '只读查看',
@@ -40,6 +61,11 @@ const formVisible = ref(false)
 const editing = ref(false)
 const saving = ref(false)
 const form = reactive({ id: '', username: '', password: '', display_name: '', role: 'operator', permissions: ['read'] })
+const auditVisible = ref(false)
+const auditLoading = ref(false)
+const auditRows = ref<AuditRow[]>([])
+const auditActionNames: Record<string, string> = { create: '创建', update: '修改', import: '导入' }
+const auditResourceNames: Record<string, string> = { user: '用户', knowledge: '知识文档' }
 
 const pendingCount = computed(() => rows.value.length)
 
@@ -121,8 +147,26 @@ const saveUser = async () => {
   }
 }
 
-const viewAudit = () => {
-  ElMessage.info('审计记录将在下一阶段接入')
+const viewAudit = async () => {
+  auditVisible.value = true
+  auditLoading.value = true
+  try {
+    const result = await api<ApiAuditEvent[]>('/api/v1/audit-events')
+    auditRows.value = result.map(event => ({
+      id: event.id,
+      action: auditActionNames[event.action] || event.action,
+      resource: auditResourceNames[event.resource] || event.resource,
+      operator: event.operator,
+      time: event.occurred_at.slice(0, 16).replace('T', ' '),
+      detail: event.detail,
+      source: event.source === 'mock' ? '后端 Mock' : event.source,
+    }))
+    if (!auditRows.value.length) ElMessage.info('当前暂无审计记录')
+  } catch {
+    ElMessage.warning('审计接口暂不可用')
+  } finally {
+    auditLoading.value = false
+  }
 }
 
 onMounted(loadUsers)
@@ -168,5 +212,16 @@ onMounted(loadUsers)
       <el-button @click="formVisible = false">取消</el-button>
       <el-button type="primary" :loading="saving" @click="saveUser">保存</el-button>
     </template>
+  </el-dialog>
+
+  <el-dialog v-model="auditVisible" title="最近审计记录" width="760px">
+    <el-table v-loading="auditLoading" :data="auditRows">
+      <el-table-column prop="action" label="操作" width="80" />
+      <el-table-column prop="resource" label="资源" width="100" />
+      <el-table-column prop="operator" label="操作人" width="130" />
+      <el-table-column prop="time" label="时间" width="150" />
+      <el-table-column prop="detail" label="详情" min-width="220" />
+      <el-table-column prop="source" label="来源" width="100" />
+    </el-table>
   </el-dialog>
 </template>
