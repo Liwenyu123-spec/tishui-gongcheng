@@ -14,6 +14,15 @@ interface ApiKnowledgeDocument {
   source: string
 }
 
+interface CsvImportResponse {
+  success: boolean
+  filename: string | null
+  total_rows: number
+  accepted_rows: number
+  rejected_rows: number
+  errors: string[]
+}
+
 interface KnowledgeRow {
   id: string
   title: string
@@ -39,6 +48,10 @@ const sourceLabel = ref('本地示例')
 const importVisible = ref(false)
 const importing = ref(false)
 const importForm = reactive({ filename: '', title: '', version: '1.0', content: '' })
+const csvVisible = ref(false)
+const csvLoading = ref(false)
+const csvResult = ref<CsvImportResponse | null>(null)
+const csvForm = reactive({ filename: 'telemetry.csv', content: 'station_id,observed_at,metric,value,unit\npump-02,2026-10-16T10:00:00Z,flow,1080,m³/h' })
 
 const filteredRows = computed(() => rows.value.filter(row => {
   const matchesQuery = !query.value || `${row.title} ${row.filename}`.toLowerCase().includes(query.value.toLowerCase())
@@ -110,6 +123,27 @@ const preview = (row: KnowledgeRow) => {
   ElMessage.info(`${row.title} · ${row.version} · 当前仅展示文档元数据`)
 }
 
+const validateCsv = async () => {
+  if (!csvForm.content.trim()) {
+    ElMessage.warning('请输入 CSV 内容')
+    return
+  }
+  csvLoading.value = true
+  try {
+    csvResult.value = await api<CsvImportResponse>('/api/v1/imports/telemetry-csv', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/csv', 'X-Filename': csvForm.filename },
+      body: csvForm.content,
+    })
+    if (csvResult.value.success) ElMessage.success('CSV 校验通过')
+    else ElMessage.warning('CSV 校验发现问题，请查看错误明细')
+  } catch {
+    ElMessage.error('CSV 校验接口暂不可用')
+  } finally {
+    csvLoading.value = false
+  }
+}
+
 onMounted(loadKnowledge)
 </script>
 
@@ -119,7 +153,7 @@ onMounted(loadKnowledge)
       <h2>知识库与设备资料</h2>
       <p>检索现行规程、设备台账、应急预案和维修记录 · {{ sourceLabel }}</p>
     </div>
-    <el-button type="primary" plain @click="openImport">导入资料</el-button>
+    <div><el-button type="primary" plain @click="openImport">导入资料</el-button><el-button plain @click="csvVisible = true">校验遥测 CSV</el-button></div>
   </div>
 
   <div class="panel">
@@ -160,5 +194,14 @@ onMounted(loadKnowledge)
       <el-button @click="importVisible = false">取消</el-button>
       <el-button type="primary" :loading="importing" @click="importDocument">确认导入</el-button>
     </template>
+  </el-dialog>
+
+  <el-dialog v-model="csvVisible" title="校验遥测 CSV" width="620px">
+    <el-form label-width="90px">
+      <el-form-item label="文件名"><el-input v-model="csvForm.filename" /></el-form-item>
+      <el-form-item label="CSV 内容"><el-input v-model="csvForm.content" type="textarea" :rows="8" /></el-form-item>
+    </el-form>
+    <div v-if="csvResult" class="muted" style="margin-top:10px">总行数 {{ csvResult.total_rows }} · 通过 {{ csvResult.accepted_rows }} · 拒绝 {{ csvResult.rejected_rows }}<div v-for="error in csvResult.errors" :key="error">{{ error }}</div></div>
+    <template #footer><el-button @click="csvVisible = false">关闭</el-button><el-button type="primary" :loading="csvLoading" @click="validateCsv">开始校验</el-button></template>
   </el-dialog>
 </template>

@@ -37,6 +37,9 @@ const statusNames: Record<string, string> = {
 const rows = ref<ReviewRow[]>(localReviews.map(row => ({ ...row })))
 const loading = ref(false)
 const sourceLabel = ref('本地示例')
+const detailVisible = ref(false)
+const detailLoading = ref(false)
+const selectedDetail = ref<ApiReview | null>(null)
 const pendingCount = computed(() => rows.value.filter(row => row.status === '待审核' || row.status === '待补充').length)
 
 const formatReview = (review: ApiReview): ReviewRow => ({
@@ -77,6 +80,23 @@ const viewBasis = (row: ReviewRow) => {
   ElMessage.info(row.recommendation || '暂无审核依据')
 }
 
+const viewDetail = async (row: ReviewRow) => {
+  detailVisible.value = true
+  if (row.id.startsWith('local-')) {
+    selectedDetail.value = { id: row.id, subject: row.title, recommendation: row.recommendation, comment: row.comment, status: row.status, created_at: row.time, updated_at: row.time, source: 'local' }
+    return
+  }
+  detailLoading.value = true
+  try {
+    selectedDetail.value = await api<ApiReview>(`/api/v1/reviews/${row.id}`)
+  } catch {
+    selectedDetail.value = null
+    ElMessage.warning('审核详情接口暂不可用')
+  } finally {
+    detailLoading.value = false
+  }
+}
+
 onMounted(loadReviews)
 </script>
 
@@ -97,8 +117,9 @@ onMounted(loadReviews)
         <el-table-column prop="time" label="提交时间" width="100" />
         <el-table-column prop="source" label="数据来源" width="120" />
         <el-table-column prop="status" label="状态" width="100" />
-        <el-table-column label="操作" width="190">
+        <el-table-column label="操作" width="250">
           <template #default="s">
+            <el-button link type="primary" @click="viewDetail(s.row)">详情</el-button>
             <el-button link type="primary" @click="viewBasis(s.row)">查看依据</el-button>
             <el-button link type="success" @click="updateLocalStatus(s.row, '已通过')">通过</el-button>
             <el-button link type="danger" @click="updateLocalStatus(s.row, '已驳回')">驳回</el-button>
@@ -107,4 +128,15 @@ onMounted(loadReviews)
       </el-table>
     </div>
   </div>
+
+  <el-dialog v-model="detailVisible" title="审核详情" width="560px">
+    <div v-loading="detailLoading" v-if="selectedDetail">
+      <p><strong>{{ selectedDetail.subject }}</strong></p>
+      <p>状态：{{ statusNames[selectedDetail.status] || selectedDetail.status }}</p>
+      <p>建议结论：{{ selectedDetail.recommendation }}</p>
+      <p>补充说明：{{ selectedDetail.comment || '暂无' }}</p>
+      <p class="muted">记录编号：{{ selectedDetail.id }}</p>
+    </div>
+    <el-empty v-else description="正在加载审核详情" />
+  </el-dialog>
 </template>

@@ -25,6 +25,7 @@ const report = ref<ApiReport>({
   source: '本地示例',
 })
 const loading = ref(false)
+const detailLoading = ref(false)
 const sourceLabel = ref('本地示例')
 const statusNames: Record<string, string> = { draft: '草稿', reviewed: '已复核' }
 
@@ -36,6 +37,7 @@ const generateReport = async () => {
       body: JSON.stringify({ report_type: '日报' }),
     })
     report.value = result
+    await refreshReportDetail(result.id)
     sourceLabel.value = result.source === 'mock' ? '后端 Mock 数据' : result.source
     ElMessage.success('报告草稿已生成')
   } catch {
@@ -43,6 +45,32 @@ const generateReport = async () => {
     ElMessage.warning('报告接口暂不可用，当前保留本地示例')
   } finally {
     loading.value = false
+  }
+}
+
+const refreshReportDetail = async (reportId = report.value.id) => {
+  if (reportId === 'local-report') {
+    ElMessage.info('请先点击“生成报告草稿”后再刷新后端详情')
+    return
+  }
+  detailLoading.value = true
+  try {
+    report.value = await api<ApiReport>(`/api/v1/reports/${reportId}`)
+    ElMessage.success('报告详情已刷新')
+  } catch {
+    ElMessage.warning('报告详情接口暂不可用，保留生成结果')
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+const copyMarkdown = async () => {
+  const markdown = `# ${report.value.title}\n\n- 日期：${report.value.report_date}\n- 状态：${statusNames[report.value.status] || report.value.status}\n\n## 摘要\n\n${report.value.summary}`
+  try {
+    await navigator.clipboard.writeText(markdown)
+    ElMessage.success('报告 Markdown 已复制')
+  } catch {
+    ElMessage.warning('浏览器未允许访问剪贴板，请手动复制报告内容')
   }
 }
 
@@ -73,8 +101,8 @@ const reportTime = (value: string) => value.slice(11, 16)
         <p>二泵站流量偏低，关联西部片区压力下降，待值班人员核查。</p>
         <p class="muted">生成信息</p>
         <p>{{ reportTime(report.created_at) }} · {{ sourceLabel }}</p>
-        <el-button plain>复制 Markdown</el-button>
-        <el-button plain>打印预览</el-button>
+        <el-button plain @click="copyMarkdown">复制 Markdown</el-button>
+        <el-button plain :loading="detailLoading" @click="refreshReportDetail()">刷新报告详情</el-button>
       </div>
     </div>
 
