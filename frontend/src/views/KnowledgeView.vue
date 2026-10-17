@@ -40,6 +40,7 @@ const localDocuments: KnowledgeRow[] = [
   { id: 'local-3', title: '四泵站 2 号泵维修手册', filename: 'pump-04-maintenance.pdf', version: 'v2.1', status: '废止', date: '2025-12-18', contentLength: 3520, source: '本地示例' },
 ]
 const statusNames: Record<string, string> = { valid: '现行', pending: '待审', revoked: '废止' }
+const statusCodes: Record<string, string> = { 现行: 'valid', 待审: 'pending', 废止: 'revoked' }
 const rows = ref<KnowledgeRow[]>(localDocuments.map(document => ({ ...document })))
 const query = ref('')
 const statusFilter = ref('')
@@ -52,6 +53,14 @@ const csvVisible = ref(false)
 const csvLoading = ref(false)
 const csvResult = ref<CsvImportResponse | null>(null)
 const csvForm = reactive({ filename: 'telemetry.csv', content: 'station_id,observed_at,metric,value,unit\npump-02,2026-10-16T10:00:00Z,flow,1080,m³/h' })
+const statusUpdatingId = ref('')
+const isAdmin = computed(() => {
+  try {
+    return JSON.parse(localStorage.getItem('current_user') || '{}').role === 'admin'
+  } catch {
+    return false
+  }
+})
 
 const filteredRows = computed(() => rows.value.filter(row => {
   const matchesQuery = !query.value || `${row.title} ${row.filename}`.toLowerCase().includes(query.value.toLowerCase())
@@ -123,6 +132,26 @@ const preview = (row: KnowledgeRow) => {
   ElMessage.info(`${row.title} · ${row.version} · 当前仅展示文档元数据`)
 }
 
+const updateStatus = async (row: KnowledgeRow, displayStatus: string) => {
+  if (!isAdmin.value || row.id.startsWith('local-')) {
+    ElMessage.info('当前示例资料不能修改状态，请先导入后端文档')
+    return
+  }
+  statusUpdatingId.value = row.id
+  try {
+    const result = await api<ApiKnowledgeDocument>(`/api/v1/knowledge/${encodeURIComponent(row.id)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: statusCodes[displayStatus] }),
+    })
+    row.status = statusNames[result.status] || result.status
+    ElMessage.success(`资料状态已更新为${row.status}`)
+  } catch {
+    ElMessage.error('资料状态更新失败，请稍后重试')
+  } finally {
+    statusUpdatingId.value = ''
+  }
+}
+
 const validateCsv = async () => {
   if (!csvForm.content.trim()) {
     ElMessage.warning('请输入 CSV 内容')
@@ -176,8 +205,15 @@ onMounted(loadKnowledge)
         <el-table-column prop="status" label="状态" width="90">
           <template #default="s"><span :class="['tag',s.row.status==='现行'?'tag-green':s.row.status==='待审'?'tag-amber':'tag-red']">{{s.row.status}}</span></template>
         </el-table-column>
-        <el-table-column label="操作" width="110">
-          <template #default="s"><el-button link type="primary" @click="preview(s.row)">预览引用</el-button></template>
+        <el-table-column label="操作" width="220">
+          <template #default="s">
+            <el-button link type="primary" @click="preview(s.row)">预览引用</el-button>
+            <template v-if="isAdmin && !s.row.id.startsWith('local-')">
+              <el-button link type="success" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '现行')">现行</el-button>
+              <el-button link type="warning" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '待审')">待审</el-button>
+              <el-button link type="danger" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '废止')">废止</el-button>
+            </template>
+          </template>
         </el-table-column>
       </el-table>
     </div>

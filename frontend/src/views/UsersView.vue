@@ -9,6 +9,7 @@ interface ApiUser {
   display_name: string
   role: string
   permissions: string[]
+  station_ids?: string[]
 }
 
 interface UserRow extends ApiUser {
@@ -64,12 +65,14 @@ const form = reactive({ id: '', username: '', password: '', display_name: '', ro
 const auditVisible = ref(false)
 const auditLoading = ref(false)
 const auditRows = ref<AuditRow[]>([])
+const accessDenied = ref(false)
 const auditActionNames: Record<string, string> = { create: '创建', update: '修改', import: '导入', acknowledge: '确认', approved: '通过', rejected: '驳回', supplement: '退回补充' }
 const auditResourceNames: Record<string, string> = { user: '用户', knowledge: '知识文档', alarm: '告警', review: '审核记录' }
 
 const pendingCount = computed(() => rows.value.length)
 
-const scopeFor = (permissions: string[]) => {
+const scopeFor = (permissions: string[], stationIds: string[] = []) => {
+  if (stationIds.length && !stationIds.includes('*')) return stationIds.join('、')
   if (permissions.includes('audit')) return '全局管理'
   if (permissions.includes('review')) return '全片区'
   if (permissions.includes('knowledge')) return '一至四泵站'
@@ -78,7 +81,7 @@ const scopeFor = (permissions: string[]) => {
 
 const formatUser = (user: ApiUser, source = '后端 Mock 数据'): UserRow => ({
   ...user,
-  scope: scopeFor(user.permissions),
+  scope: scopeFor(user.permissions, user.station_ids),
   status: '启用',
   last: '—',
   source,
@@ -95,9 +98,18 @@ const loadUsers = async () => {
       sourceLabel.value = '接口暂无用户 · 本地示例'
       ElMessage.info('用户接口当前没有数据，页面暂显示本地示例')
     }
-  } catch {
-    sourceLabel.value = '本地示例'
-    ElMessage.warning('用户接口暂不可用，当前显示本地示例')
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('无权')) {
+      // 权限接口被拒绝时不能回退到本地示例，否则会造成用户误以为自己有管理权限。
+      accessDenied.value = true
+      rows.value = []
+      sourceLabel.value = '当前账号无权访问'
+      ElMessage.error('当前账号无权访问用户管理')
+    } else {
+      sourceLabel.value = '用户接口不可用'
+      rows.value = []
+      ElMessage.warning('用户接口暂不可用，未显示本地示例')
+    }
   } finally {
     loading.value = false
   }
@@ -178,10 +190,12 @@ onMounted(loadUsers)
       <h2>用户与权限</h2>
       <p>最小权限原则 · 站点/片区范围可配置 · 操作写入审计日志 · {{ sourceLabel }}</p>
     </div>
-    <el-button type="primary" :loading="loading" @click="openCreate">新增用户</el-button>
+    <el-button v-if="!accessDenied" type="primary" :loading="loading" @click="openCreate">新增用户</el-button>
   </div>
 
-  <div class="panel">
+  <div v-if="accessDenied" class="warning">当前账号没有用户管理权限。请使用管理员账号登录，或联系系统管理员配置权限。</div>
+
+  <div v-else class="panel">
     <div class="panel-head"><h3>用户列表</h3><span>共 {{ pendingCount }} 个用户</span></div>
     <div class="table-wrap">
       <el-table :data="rows">

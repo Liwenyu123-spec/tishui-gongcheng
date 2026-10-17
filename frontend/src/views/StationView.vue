@@ -31,6 +31,33 @@ interface TelemetryPoint {
   is_stale: boolean
 }
 
+interface IncidentResponse {
+  id: string
+  station_id: string
+  category: string
+  level: string
+  status: string
+  report_count: number
+  deduplicated: boolean
+}
+
+interface HeartbeatResponse {
+  station_id: string
+  received_at: string
+  last_seen_at: string
+  status: string
+  is_stale: boolean
+}
+
+interface StationContact {
+  station_id: string
+  contact_type: 'primary' | 'backup'
+  recipient: string
+  channel: string
+  priority: number
+  enabled: boolean
+}
+
 const fallbackStationIds: Record<string, string> = {
   集泉一站: 'jq-01',
   一泵站: 'pump-01',
@@ -49,6 +76,23 @@ const loading = ref(false)
 const detailLoading = ref(false)
 const chartInstance = ref<ECharts>()
 const sourceLabel = ref('后端 Mock 数据')
+const heartbeatStatus = ref('未检测')
+const heartbeatAt = ref('')
+const heartbeatLoading = ref(false)
+let heartbeatRequestInFlight = false
+let heartbeatTimer: ReturnType<typeof setInterval> | undefined
+const stationContacts = ref<StationContact[]>([])
+const contactLoading = ref(false)
+const primaryContactSummary = computed(() => stationContacts.value.filter(item => item.contact_type === 'primary' && item.enabled).map(item => item.recipient).join('、') || '未配置')
+const backupContactSummary = computed(() => stationContacts.value.filter(item => item.contact_type === 'backup' && item.enabled).map(item => item.recipient).join('、') || '未配置')
+const reportVisible = ref(false)
+const reportSubmitting = ref(false)
+const reportForm = ref({
+  category: '运行异常',
+  level: 'medium',
+  description: '',
+  deduplicationKey: '',
+})
 const stationIds = computed<Record<string, string>>(() => Object.fromEntries(stationRecords.value.map(item => [item.name, item.id])))
 const selectedStationId = computed(() => stationIds.value[station.value] || fallbackStationIds[station.value])
 const flow = computed(() => points.value.find(point => point.metric === 'flow')?.value ?? 1086)
@@ -118,19 +162,103 @@ const loadTelemetry = async () => {
 const loadSelectedStation = () => {
   loadStationDetail()
   loadTelemetry()
+  sendHeartbeat(false)
+  loadStationContacts()
+}
+
+const loadStationContacts = async () => {
+  contactLoading.value = true
+  try {
+    stationContacts.value = await api<StationContact[]>(`/api/v1/stations/${encodeURIComponent(selectedStationId.value)}/contacts`)
+  } catch {
+    stationContacts.value = []
+    ElMessage.warning('站点联系人接口暂不可用')
+  } finally {
+    contactLoading.value = false
+  }
+}
+
+const sendHeartbeat = async (manual = false) => {
+  if (heartbeatRequestInFlight) return
+  heartbeatRequestInFlight = true
+  if (manual) heartbeatLoading.value = true
+  try {
+    const result = await api<HeartbeatResponse>(`/api/v1/stations/${encodeURIComponent(selectedStationId.value)}/heartbeat`, { method: 'POST' })
+    heartbeatStatus.value = result.is_stale ? '已过期' : result.status === 'online' ? '在线' : result.status
+    heartbeatAt.value = result.last_seen_at.slice(0, 16).replace('T', ' ')
+    if (manual) ElMessage.success('站点心跳已发送')
+  } catch {
+    heartbeatStatus.value = '不可用'
+    if (manual) ElMessage.warning('站点心跳接口暂不可用')
+  } finally {
+    heartbeatRequestInFlight = false
+    if (manual) heartbeatLoading.value = false
+  }
+}
+
+const openIncidentReport = () => {
+  reportForm.value = {
+    category: '运行异常',
+    level: 'medium',
+    description: '',
+    deduplicationKey: '',
+  }
+  reportVisible.value = true
+}
+
+const submitIncidentReport = async () => {
+  if (!reportForm.value.description.trim()) {
+    ElMessage.warning('请先填写问题描述')
+    return
+  }
+  reportSubmitting.value = true
+  try {
+    const currentUser = JSON.parse(localStorage.getItem('current_user') || '{}') as { username?: string }
+    const result = await api<IncidentResponse>(`/api/v1/stations/${encodeURIComponent(selectedStationId.value)}/incidents`, {
+      method: 'POST',
+      body: JSON.stringify({
+        category: reportForm.value.category,
+        level: reportForm.value.level,
+        description: reportForm.value.description.trim(),
+        reported_by: currentUser.username || 'station-operator',
+        deduplication_key: reportForm.value.deduplicationKey.trim() || undefined,
+      }),
+    })
+    reportVisible.value = false
+    ElMessage.success(`事件已上报：${result.id}`)
+  } catch {
+    ElMessage.error('事件上报失败，请联系调度人员或稍后重试')
+  } finally {
+    reportSubmitting.value = false
+  }
 }
 
 onMounted(async () => {
   chartInstance.value = echarts.init(chart.value!)
   await loadStations()
   loadSelectedStation()
+  heartbeatTimer = setInterval(() => sendHeartbeat(false), 30000)
 })
 watch(station, loadSelectedStation)
-onBeforeUnmount(() => chartInstance.value?.dispose())
+onBeforeUnmount(() => {
+  chartInstance.value?.dispose()
+  if (heartbeatTimer) clearInterval(heartbeatTimer)
+})
 </script>
 
 <template>
-  <div class="page-title"><div><h2>站点趋势</h2><p>查看泵站压力、流量、水位与能耗趋势，缺数区间显式标注 · {{ sourceLabel }}</p></div><el-select v-model="station" style="width:150px"><el-option v-for="s in stationOptions" :key="s" :label="s" :value="s"/></el-select></div>
-  <div class="grid grid-4"><div class="panel metric"><span class="metric-label">当前流量</span><div class="metric-value">{{flow.toLocaleString()}} <small>m³/h</small></div><span class="status-line status-ok"><i/>{{ loading ? '正在加载' : `数据正常 · ${sourceLabel}` }}</span></div><div class="panel metric"><span class="metric-label">出水压力</span><div class="metric-value">{{pressure.toFixed(2)}} <small>MPa</small></div><span class="metric-foot">后端遥测值</span></div><div class="panel metric"><span class="metric-label">水池水位</span><div class="metric-value">{{level.toFixed(2)}} <small>m</small></div><span class="metric-foot">后端遥测值</span></div><div class="panel metric"><span class="metric-label">站点状态</span><div class="metric-value">{{ detailLoading ? '加载中' : stationDetail?.status || '—' }}</div><span class="metric-foot">{{ stationDetail?.location || '站点详情接口' }}</span></div></div>
+  <div class="page-title"><div><h2>站点趋势</h2><p>查看泵站压力、流量、水位与能耗趋势，缺数区间显式标注 · {{ sourceLabel }}</p></div><div style="display:flex;gap:10px;align-items:center"><el-tag style="width:92px;justify-content:center" :type="heartbeatStatus === '在线' ? 'success' : heartbeatStatus === '不可用' ? 'danger' : 'info'" effect="dark">通讯：{{ heartbeatStatus }}</el-tag><span style="width:145px;color:#7893a4;font-size:11px;white-space:nowrap">最近心跳：{{ heartbeatAt || '尚未收到' }}</span><el-button type="warning" plain @click="openIncidentReport">联系调度</el-button><el-button style="width:92px" size="small" :loading="heartbeatLoading" @click="sendHeartbeat(true)">发送心跳</el-button><el-select v-model="station" style="width:150px"><el-option v-for="s in stationOptions" :key="s" :label="s" :value="s"/></el-select></div></div>
+  <div class="grid grid-4"><div class="panel metric"><span class="metric-label">当前流量</span><div class="metric-value">{{flow.toLocaleString()}} <small>m³/h</small></div><span class="status-line status-ok"><i/>{{ loading ? '正在加载' : `数据正常 · ${sourceLabel}` }}</span></div><div class="panel metric"><span class="metric-label">出水压力</span><div class="metric-value">{{pressure.toFixed(2)}} <small>MPa</small></div><span class="metric-foot">后端遥测值</span></div><div class="panel metric"><span class="metric-label">水池水位</span><div class="metric-value">{{level.toFixed(2)}} <small>m</small></div><span class="metric-foot">后端遥测值</span></div><div class="panel metric"><span class="metric-label">站点状态</span><div class="metric-value">{{ detailLoading ? '加载中' : stationDetail?.status || '—' }}</div><span class="metric-foot">最近心跳：{{ heartbeatAt || '尚未收到' }}</span></div></div>
   <div class="panel" style="margin-top:18px"><div class="panel-head"><h3>24 小时运行趋势</h3><span>流量 / 压力 · {{sourceLabel}}</span></div><div ref="chart" class="chart"></div></div>
+  <el-dialog v-model="reportVisible" title="联系调度 · 一键上报问题" width="520px">
+    <p class="muted" style="margin-top:0">当前站点：{{ station }}（{{ selectedStationId }}）。事件会进入平台内通知队列。</p>
+    <p class="muted" style="margin:0 0 12px">调度联系人：{{ contactLoading ? '加载中…' : primaryContactSummary }} · 备用联系人：{{ contactLoading ? '加载中…' : backupContactSummary }} · 渠道：平台内通知</p>
+    <el-form label-width="90px">
+      <el-form-item label="事件类型"><el-input v-model="reportForm.category" placeholder="例如：流量异常、设备异响" /></el-form-item>
+      <el-form-item label="严重等级"><el-select v-model="reportForm.level" style="width:100%"><el-option label="一般" value="low" /><el-option label="重要" value="medium" /><el-option label="严重" value="high" /><el-option label="紧急" value="critical" /></el-select></el-form-item>
+      <el-form-item label="问题描述"><el-input v-model="reportForm.description" type="textarea" :rows="4" placeholder="请描述现场现象、发生时间和已采取的措施" /></el-form-item>
+      <el-form-item label="事件指纹"><el-input v-model="reportForm.deduplicationKey" placeholder="可选；相同故障重复上报时用于合并通知" /></el-form-item>
+    </el-form>
+    <template #footer><el-button @click="reportVisible = false">取消</el-button><el-button type="warning" :loading="reportSubmitting" @click="submitIncidentReport">提交上报</el-button></template>
+  </el-dialog>
 </template>

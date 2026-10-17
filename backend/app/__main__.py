@@ -1,3 +1,5 @@
+"""支持通过 ``python -m app`` 启动本地 FastAPI 服务。"""
+
 # Uvicorn 是运行 FastAPI ASGI 应用的开发服务器。
 import uvicorn
 
