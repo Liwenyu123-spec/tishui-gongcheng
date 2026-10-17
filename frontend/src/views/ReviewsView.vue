@@ -40,6 +40,7 @@ const sourceLabel = ref('本地示例')
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const selectedDetail = ref<ApiReview | null>(null)
+const updatingReviewId = ref('')
 const pendingCount = computed(() => rows.value.filter(row => row.status === '待审核' || row.status === '待补充').length)
 
 const formatReview = (review: ApiReview): ReviewRow => ({
@@ -71,9 +72,24 @@ const loadReviews = async () => {
   }
 }
 
-const updateLocalStatus = (row: ReviewRow, status: string) => {
-  row.status = status
-  ElMessage.info('当前仅更新页面显示，审核状态接口将在后续阶段接入')
+const updateReviewStatus = async (row: ReviewRow, status: 'approved' | 'rejected') => {
+  if (row.id.startsWith('local-')) {
+    ElMessage.warning('本地示例审核记录无法写入后端，请选择后端记录')
+    return
+  }
+  updatingReviewId.value = row.id
+  try {
+    const result = await api<ApiReview>(`/api/v1/reviews/${row.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    })
+    Object.assign(row, formatReview(result))
+    ElMessage.success(status === 'approved' ? '审核已通过' : '审核已驳回')
+  } catch {
+    ElMessage.error('审核状态更新失败，请刷新后重试')
+  } finally {
+    updatingReviewId.value = ''
+  }
 }
 
 const viewBasis = (row: ReviewRow) => {
@@ -121,8 +137,8 @@ onMounted(loadReviews)
           <template #default="s">
             <el-button link type="primary" @click="viewDetail(s.row)">详情</el-button>
             <el-button link type="primary" @click="viewBasis(s.row)">查看依据</el-button>
-            <el-button link type="success" @click="updateLocalStatus(s.row, '已通过')">通过</el-button>
-            <el-button link type="danger" @click="updateLocalStatus(s.row, '已驳回')">驳回</el-button>
+            <el-button link type="success" :disabled="s.row.status!=='待审核'" :loading="updatingReviewId===s.row.id" @click="updateReviewStatus(s.row, 'approved')">通过</el-button>
+            <el-button link type="danger" :disabled="s.row.status!=='待审核'" :loading="updatingReviewId===s.row.id" @click="updateReviewStatus(s.row, 'rejected')">驳回</el-button>
           </template>
         </el-table-column>
       </el-table>

@@ -13,7 +13,7 @@ from uuid import uuid4
 # datetime 处理时间；timedelta 生成遥测时间序列；timezone 统一使用 UTC。
 from datetime import datetime, timedelta, timezone
 # Annotated 让 FastAPI 同时理解类型和 Depends/Header 的参数来源。
-from typing import Annotated
+from typing import Annotated, Literal
 
 # FastAPI 核心对象、依赖注入、请求头、异常、查询参数、原始请求和状态码。
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
