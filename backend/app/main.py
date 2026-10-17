@@ -156,6 +156,9 @@ class AlarmDetail(Alarm):
     suggested_action: str
 
 
+# 告警确认响应复用告警列表字段，供前端刷新状态。
+
+
 # 单个片区的供需计算结果。
 class SupplyArea(BaseModel):
     area: str
@@ -210,6 +213,12 @@ class ReviewCreateRequest(BaseModel):
     subject: str
     recommendation: str
     comment: str = ""
+
+
+# 审核状态修改请求只允许通过、驳回或退回补充。
+class ReviewUpdateRequest(BaseModel):
+    status: Literal["approved", "rejected", "supplement"]
+    comment: str | None = None
 
 
 # 审核记录的存储和响应结构。
@@ -639,6 +648,17 @@ def alarm_detail(alarm_id: str) -> AlarmDetail:
     return AlarmDetail(**alarm)
 
 
+# POST /alarms/{alarm_id}/ack：确认指定告警并记录审计事件。
+@app.post("/api/v1/alarms/{alarm_id}/ack", response_model=Alarm, tags=["告警"])
+def acknowledge_alarm(alarm_id: str) -> Alarm:
+    alarm = next((item for item in _ALARMS if item["id"] == alarm_id), None)
+    if alarm is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="告警不存在")
+    alarm["status"] = "confirmed"
+    _record_audit("acknowledge", "alarm", alarm_id, f"确认告警：{alarm['station_name']} {alarm['metric']}")
+    return Alarm(**{key: value for key, value in alarm.items() if key not in {"description", "suggested_action"}})
+
+
 # GET /supply/balance：计算各片区供需差额和总体瓶颈。
 @app.get("/api/v1/supply/balance", response_model=SupplyBalanceResponse, tags=["供需"])
 def supply_balance(
@@ -763,6 +783,22 @@ def get_review(review_id: str) -> Review:
     review = _REVIEWS.get(review_id)
     if review is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="审核记录不存在")
+    return review
+
+
+# PATCH /reviews/{review_id}：更新审核结论并写入审计事件。
+@app.patch("/api/v1/reviews/{review_id}", response_model=Review, tags=["审核"])
+def update_review(review_id: str, payload: ReviewUpdateRequest) -> Review:
+    review = _REVIEWS.get(review_id)
+    if review is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="审核记录不存在")
+    if review.status != "pending":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该审核记录已处理")
+    review.status = payload.status
+    if payload.comment is not None:
+        review.comment = payload.comment
+    review.updated_at = datetime.now(timezone.utc)
+    _record_audit(payload.status, "review", review_id, f"审核记录 {review.subject} 状态更新为 {payload.status}")
     return review
 
 
