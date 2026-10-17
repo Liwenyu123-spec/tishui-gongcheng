@@ -22,6 +22,11 @@ from fastapi.middleware.cors import CORSMiddleware
 # Pydantic 用于校验请求体和约束响应结构。
 from pydantic import BaseModel, Field
 
+from .data.users import _USERS
+from .routers.auth import router as auth_router
+from .routers.health import router as health_router
+from .schemas.auth import UserResponse
+
 # 创建 FastAPI 应用对象；Swagger 文档会读取这里的元数据。
 app = FastAPI(
     # Swagger 页面显示的项目名称。
@@ -45,42 +50,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# ------------------------- 基础与认证模型 -------------------------
-# 健康检查接口的返回结构。
-class HealthResponse(BaseModel):
-    status: str = "ok"
-    service: str = "water-dispatch-backend"
-    environment: str = "mock"
-    timestamp: datetime
-
-
-# 登录接口接收的 JSON 请求体。
-class LoginRequest(BaseModel):
-    username: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=1, max_length=128)
-
-
-# 对外返回的用户信息；故意不包含密码。
-class UserResponse(BaseModel):
-    id: str
-    username: str
-    display_name: str
-    role: str
-    permissions: list[str]
-
-
-# 登录成功后返回 Token 和当前用户。
-class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    user: UserResponse
-
-
-# 退出登录接口的简单确认响应。
-class LogoutResponse(BaseModel):
-    success: bool = True
-    message: str = "已退出登录"
+# 基础和认证路由已按领域拆到独立模块。
+app.include_router(health_router)
+app.include_router(auth_router)
 
 
 # 站点列表中的基础字段。
