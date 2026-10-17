@@ -25,7 +25,9 @@ from pydantic import BaseModel
 from .data.users import _USERS
 from .routers.auth import router as auth_router
 from .routers.health import router as health_router
+from .routers.monitoring import router as monitoring_router
 from .schemas.auth import UserResponse
+from .schemas.monitoring import Alarm
 
 # 创建 FastAPI 应用对象；Swagger 文档会读取这里的元数据。
 app = FastAPI(
@@ -53,82 +55,7 @@ app.add_middleware(
 # 基础和认证路由已按领域拆到独立模块。
 app.include_router(health_router)
 app.include_router(auth_router)
-
-
-# 站点列表中的基础字段。
-class Station(BaseModel):
-    id: str
-    name: str
-    sequence: int
-    station_type: str
-    status: str
-    source: str = "mock"
-
-
-# 站点详情继承基础站点字段，并增加位置和测点信息。
-class StationDetail(Station):
-    location: str
-    description: str
-    metrics: list[str]
-
-
-# 拓扑图中的节点，使用 station_id 关联站点。
-class TopologyNode(BaseModel):
-    station_id: str
-    name: str
-    sequence: int
-
-
-# 拓扑图中的有向连接边。
-class TopologyEdge(BaseModel):
-    source: str
-    target: str
-    direction: str = "downstream"
-
-
-# 拓扑接口的整体响应。
-class TopologyResponse(BaseModel):
-    version: str
-    confirmed_at: datetime
-    source: str = "mock"
-    nodes: list[TopologyNode]
-    edges: list[TopologyEdge]
-
-
-# 单条遥测记录，包含值、单位、来源和质量状态。
-class TelemetryPoint(BaseModel):
-    observed_at: datetime
-    metric: str
-    value: float
-    unit: str
-    source: str = "mock"
-    quality: str = "good"
-    is_stale: bool = False
-
-
-# 告警列表需要展示的字段。
-class Alarm(BaseModel):
-    id: str
-    station_id: str
-    station_name: str
-    level: str
-    metric: str
-    value: float
-    unit: str
-    threshold: str
-    status: str
-    occurred_at: datetime
-    relation: str | None = None
-    source: str = "mock"
-
-
-# 告警详情在列表字段基础上增加说明和建议动作。
-class AlarmDetail(Alarm):
-    description: str
-    suggested_action: str
-
-
-# 告警确认响应复用告警列表字段，供前端刷新状态。
+app.include_router(monitoring_router)
 
 
 # 单个片区的供需计算结果。
