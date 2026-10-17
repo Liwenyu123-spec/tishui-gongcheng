@@ -294,29 +294,6 @@ class AuditEvent(BaseModel):
 
 
 # ------------------------- Mock 数据 -------------------------
-# 内存用户表：key 是登录用户名，value 模拟数据库中的用户记录。
-# 真实数据库接入后，这部分应替换为 User Service/Repository。
-_USERS = {
-    "admin": {
-        "password": "admin123",
-        "id": "user-admin",
-        "username": "admin",
-        "display_name": "系统管理员",
-        "role": "admin",
-        "permissions": ["read", "ask", "submit_scheme", "review", "knowledge", "audit"],
-    },
-    "operator": {
-        "password": "operator123",
-        "id": "user-operator",
-        "username": "operator",
-        "display_name": "运行值班员",
-        "role": "operator",
-        "permissions": ["read", "ask", "submit_scheme"],
-    },
-}
-# 固定 Token 到用户名的映射，仅用于模拟阶段调试认证流程。
-_TOKENS = {"mock-token-admin": "admin", "mock-token-operator": "operator"}
-
 # 工程站点 Mock 数据；sequence 决定输水链路顺序。
 _STATIONS = [
     {
@@ -461,57 +438,6 @@ def _record_audit(action: str, resource: str, resource_id: str | None, detail: s
             detail=detail,
         )
     )
-
-
-# 从 Authorization: Bearer <token> 请求头解析当前用户。
-# 这是 FastAPI 的依赖函数，绑定到需要登录的接口上。
-def _get_current_username(authorization: Annotated[str | None, Header()] = None) -> str:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="缺少 Bearer Token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    username = _TOKENS.get(authorization[7:].strip())
-    if not username:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token 无效或已过期",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return username
-
-
-# GET /health：确认服务进程是否可用，不依赖数据库或登录。
-@app.get("/api/v1/health", response_model=HealthResponse, tags=["基础"])
-def health() -> HealthResponse:
-    # 每次请求生成当前 UTC 时间，帮助判断服务是否仍在响应。
-    return HealthResponse(timestamp=datetime.now(timezone.utc))
-
-
-# POST /auth/login：校验 Mock 用户名和密码并签发固定 Token。
-@app.post("/api/v1/auth/login", response_model=LoginResponse, tags=["认证"])
-def login(payload: LoginRequest) -> LoginResponse:
-    # 根据请求中的用户名查找内存用户。
-    user = _USERS.get(payload.username)
-    # 用户不存在或密码不匹配时返回 401，而不是暴露具体原因。
-    if not user or user["password"] != payload.password:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
-    # 返回固定的模拟 Token 和不含密码的用户信息。
-    return LoginResponse(access_token=f"mock-token-{payload.username}", user=_public_user(payload.username))
-
-
-# GET /auth/me：通过依赖函数校验 Token 后返回当前用户。
-@app.get("/api/v1/auth/me", response_model=UserResponse, tags=["认证"])
-def me(username: Annotated[str, Depends(_get_current_username)]) -> UserResponse:
-    # username 已由 _get_current_username 验证。
-    return _public_user(username)
-
-
-# POST /auth/logout：验证 Token 后返回退出确认；Mock 阶段不需要服务端销毁 Token。
-@app.post("/api/v1/auth/logout", response_model=LogoutResponse, tags=["认证"])
-def logout(_: Annotated[str, Depends(_get_current_username)]) -> LogoutResponse:
-    return LogoutResponse()
 
 
 # GET /topology：把站点列表转换为拓扑节点和相邻连接边。
