@@ -12,15 +12,15 @@ import io
 from uuid import uuid4
 # datetime 处理时间；timedelta 生成遥测时间序列；timezone 统一使用 UTC。
 from datetime import datetime, timedelta, timezone
-# Annotated 让 FastAPI 同时理解类型和 Depends/Header 的参数来源。
-from typing import Annotated, Literal
+# Literal 约束审核状态的允许值。
+from typing import Literal
 
-# FastAPI 核心对象、依赖注入、请求头、异常、查询参数、原始请求和状态码。
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+# FastAPI 核心对象、异常、查询参数、原始请求和状态码。
+from fastapi import FastAPI, HTTPException, Query, Request, status
 # CORS 允许本地 Vue 前端从 5173 端口访问 8000 端口的后端。
 from fastapi.middleware.cors import CORSMiddleware
 # Pydantic 用于校验请求体和约束响应结构。
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .data.users import _USERS
 from .routers.auth import router as auth_router
