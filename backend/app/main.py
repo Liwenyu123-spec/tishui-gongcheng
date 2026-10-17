@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Pydantic 用于校验请求体和约束响应结构。
 from pydantic import BaseModel
 
-from .data.users import _USERS
+from .data.users import _USERS`nfrom .data.monitoring import _ALARMS, _STATIONS
 from .routers.auth import router as auth_router
 from .routers.health import router as health_router
 from .routers.monitoring import router as monitoring_router
@@ -221,119 +221,6 @@ class AuditEvent(BaseModel):
 
 
 # ------------------------- Mock 数据 -------------------------
-# 工程站点 Mock 数据；sequence 决定输水链路顺序。
-_STATIONS = [
-    {
-        "id": "jq-01",
-        "name": "集泉一站",
-        "sequence": 1,
-        "station_type": "取水泵站",
-        "status": "running",
-        "location": "集泉取水口",
-        "description": "工程上游取水及一级提水站点。",
-        "metrics": ["flow", "pressure", "level", "energy"],
-    },
-    {
-        "id": "pump-01",
-        "name": "一泵站",
-        "sequence": 2,
-        "station_type": "加压泵站",
-        "status": "running",
-        "location": "输水干线 1+200",
-        "description": "承担一级输水加压。",
-        "metrics": ["flow", "pressure", "energy"],
-    },
-    {
-        "id": "pump-02",
-        "name": "二泵站",
-        "sequence": 3,
-        "station_type": "加压泵站",
-        "status": "warning",
-        "location": "输水干线 4+800",
-        "description": "承担中段输水加压。",
-        "metrics": ["flow", "pressure", "level", "energy"],
-    },
-    {
-        "id": "pump-03",
-        "name": "三泵站",
-        "sequence": 4,
-        "station_type": "加压泵站",
-        "status": "running",
-        "location": "输水干线 8+600",
-        "description": "承担中下游输水加压。",
-        "metrics": ["flow", "pressure", "energy"],
-    },
-    {
-        "id": "pump-04",
-        "name": "四泵站",
-        "sequence": 5,
-        "station_type": "末端泵站",
-        "status": "running",
-        "location": "平定城区入口",
-        "description": "承担末端供水调节。",
-        "metrics": ["flow", "pressure", "level", "energy"],
-    },
-    {
-        "id": "pingding-inlet",
-        "name": "平定侧入口",
-        "sequence": 6,
-        "station_type": "供水入口",
-        "status": "running",
-        "location": "平定城区",
-        "description": "工程输水进入片区的入口节点。",
-        "metrics": ["flow", "pressure"],
-    },
-]
-
-# 告警 Mock 数据；详情字段 description/suggested_action 不在列表接口中返回。
-_ALARMS = [
-    {
-        "id": "alarm-20261015-001",
-        "station_id": "pump-02",
-        "station_name": "二泵站",
-        "level": "high",
-        "metric": "flow",
-        "value": 812.0,
-        "unit": "m³/h",
-        "threshold": ">= 1000",
-        "status": "unconfirmed",
-        "occurred_at": datetime(2026, 10, 15, 10, 42, tzinfo=timezone.utc),
-        "relation": "关联下游片区压力下降",
-        "description": "出水流量低于当前运行阈值。",
-        "suggested_action": "核查泵组运行状态和下游压力数据。",
-    },
-    {
-        "id": "alarm-20261015-002",
-        "station_id": "pump-04",
-        "station_name": "四泵站",
-        "level": "medium",
-        "metric": "current",
-        "value": 68.0,
-        "unit": "A",
-        "threshold": "<= 60",
-        "status": "unconfirmed",
-        "occurred_at": datetime(2026, 10, 15, 10, 18, tzinfo=timezone.utc),
-        "relation": None,
-        "description": "2 号泵电流高于设定阈值。",
-        "suggested_action": "核查电机负荷和设备运行记录。",
-    },
-    {
-        "id": "alarm-20261015-003",
-        "station_id": "pump-03",
-        "station_name": "三泵站",
-        "level": "low",
-        "metric": "level",
-        "value": 3.2,
-        "unit": "m",
-        "threshold": ">= 3.5",
-        "status": "confirmed",
-        "occurred_at": datetime(2026, 10, 15, 9, 56, tzinfo=timezone.utc),
-        "relation": None,
-        "description": "站内水位低于运行参考值。",
-        "suggested_action": "持续观察水位趋势和来水情况。",
-    },
-]
-
 # 片区供需 Mock 数据；balance 由接口根据 supply-demand 计算。
 _SUPPLY_AREAS = [
     {"area": "平定城区", "station_id": "pump-04", "supply": 9200.0, "demand": 9800.0, "pressure": 0.38, "risk": "medium"},
@@ -367,122 +254,16 @@ def _record_audit(action: str, resource: str, resource_id: str | None, detail: s
     )
 
 
-# GET /topology：把站点列表转换为拓扑节点和相邻连接边。
-@app.get("/api/v1/topology", response_model=TopologyResponse, tags=["拓扑"])
-def topology() -> TopologyResponse:
-    # 每个站点对应一个拓扑节点。
-    nodes = [TopologyNode(station_id=s["id"], name=s["name"], sequence=s["sequence"]) for s in _STATIONS]
-    # 按站点顺序把相邻节点连接起来，形成单向输水链路。
-    edges = [
-        TopologyEdge(source=_STATIONS[index]["id"], target=_STATIONS[index + 1]["id"])
-        for index in range(len(_STATIONS) - 1)
-    ]
-    return TopologyResponse(
-        version="mock-topology-v1",
-        confirmed_at=datetime(2026, 10, 15, tzinfo=timezone.utc),
-        nodes=nodes,
-        edges=edges,
-    )
-
-
-# GET /stations：返回全部站点的基础字段。
-@app.get("/api/v1/stations", response_model=list[Station], tags=["站点"])
-def stations() -> list[Station]:
-    # Pydantic 会校验每条 Mock 字典并过滤出 Station 模型定义的字段。
-    return [Station(**station) for station in _STATIONS]
-
-
-# GET /stations/{station_id}：查询单个站点的详细资料。
-@app.get("/api/v1/stations/{station_id}", response_model=StationDetail, tags=["站点"])
-def station_detail(station_id: str) -> StationDetail:
-    # 在 Mock 站点表中按 ID 查找目标站点。
-    station = next((item for item in _STATIONS if item["id"] == station_id), None)
-    # 找不到时明确返回 404。
-    if station is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="站点不存在")
-    return StationDetail(**station)
-
-
-# GET /stations/{station_id}/telemetry：生成指定站点的模拟时序数据。
-@app.get("/api/v1/stations/{station_id}/telemetry", response_model=list[TelemetryPoint], tags=["监控"])
-def telemetry(
-    station_id: str,
-    metric: str | None = Query(default=None, max_length=32),
-    from_time: str | None = Query(default=None, alias="from", max_length=64),
-    to_time: str | None = Query(default=None, alias="to", max_length=64),
-) -> list[TelemetryPoint]:
-    # 先确认站点存在，避免为未知站点返回看似有效的遥测。
-    if not any(station["id"] == station_id for station in _STATIONS):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="站点不存在")
-
-    # 模拟数据的最新时间点。
-    base_time = datetime(2026, 10, 15, 10, 0, tzinfo=timezone.utc)
-    # 每个测点的基准值和单位。
-    values = {
-        "flow": (1120.0, "m³/h"),
-        "pressure": (0.72, "MPa"),
-        "level": (3.7, "m"),
-        "energy": (184.0, "kWh"),
-    }
-    # 指定 metric 时只返回一个测点，否则返回全部测点。
-    metrics = [metric] if metric else list(values)
-    # 用列表收集最终响应。
-    points: list[TelemetryPoint] = []
-    # 生成 6 个时间点，每个时间点间隔 10 分钟。
-    for offset in range(6):
-        for metric_name in metrics:
-            # 读取当前测点的基准值和单位。
-            value_unit = values.get(metric_name)
-            if value_unit is None:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"不支持的测点: {metric_name}")
-            # 拆开元组，并为不同时间点增加简单的模拟变化。
-            value, unit = value_unit
-            points.append(
-                TelemetryPoint(
-                    observed_at=base_time - timedelta(minutes=offset * 10),
-                    metric=metric_name,
-                    value=round(value + offset * 2, 3),
-                    unit=unit,
-                )
-            )
-    return points
-
-
-# GET /alarms：返回告警列表，可按 status 和 station_id 筛选。
-@app.get("/api/v1/alarms", response_model=list[Alarm], tags=["告警"])
-def alarms(
-    status_filter: str | None = Query(default=None, alias="status", max_length=32),
-    station_id: str | None = Query(default=None, max_length=64),
-) -> list[Alarm]:
-    # 先使用完整 Mock 告警列表作为查询源。
-    rows = _ALARMS
-    # 有状态参数时只保留匹配记录。
-    if status_filter:
-        rows = [alarm for alarm in rows if alarm["status"] == status_filter]
-    if station_id:
-        rows = [alarm for alarm in rows if alarm["station_id"] == station_id]
-    return [Alarm(**{key: value for key, value in alarm.items() if key not in {"description", "suggested_action"}}) for alarm in rows]
-
-
-# GET /alarms/{alarm_id}：返回单条告警及处理建议。
-@app.get("/api/v1/alarms/{alarm_id}", response_model=AlarmDetail, tags=["告警"])
-def alarm_detail(alarm_id: str) -> AlarmDetail:
-    alarm = next((item for item in _ALARMS if item["id"] == alarm_id), None)
-    if alarm is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="告警不存在")
-    return AlarmDetail(**alarm)
-
-
 # POST /alarms/{alarm_id}/ack：确认指定告警并记录审计事件。
 @app.post("/api/v1/alarms/{alarm_id}/ack", response_model=Alarm, tags=["告警"])
 def acknowledge_alarm(alarm_id: str) -> Alarm:
+    """确认告警；监控查询路由已迁移到 routers.monitoring。"""
     alarm = next((item for item in _ALARMS if item["id"] == alarm_id), None)
     if alarm is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="告警不存在")
     alarm["status"] = "confirmed"
     _record_audit("acknowledge", "alarm", alarm_id, f"确认告警：{alarm['station_name']} {alarm['metric']}")
     return Alarm(**{key: value for key, value in alarm.items() if key not in {"description", "suggested_action"}})
-
 
 # GET /supply/balance：计算各片区供需差额和总体瓶颈。
 @app.get("/api/v1/supply/balance", response_model=SupplyBalanceResponse, tags=["供需"])
