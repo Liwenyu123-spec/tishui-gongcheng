@@ -1,27 +1,23 @@
 """模拟阶段的 FastAPI 后端入口。
 
-应用初始化和暂未拆分的数据导入路由保留在这里；认证、健康检查、监控、供需、
-方案、审核、报告、工单、用户和知识库模块已按领域拆到独立包。
+应用初始化和路由注册保留在这里；各业务接口按领域拆到独立路由包。
 """
 
-# csv 用于解析上传的遥测 CSV 文本。
-import csv
-# io 用于把请求中的字符串包装成 csv.DictReader 可以读取的文件对象。
-import io
-# datetime 用于校验导入 CSV 中的时间字段。
-from datetime import datetime
-# FastAPI 核心对象、异常、原始请求和状态码。
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+# Path 用于定位项目根目录下的前端构建产物。
+from pathlib import Path
+
+# FastAPI 应用对象负责创建服务和注册中间件。
+from fastapi import FastAPI, HTTPException, status
 # CORS 允许本地 Vue 前端从 5173 端口访问 8000 端口的后端。
 from fastapi.middleware.cors import CORSMiddleware
-# Pydantic 用于校验请求体和约束响应结构。
-from pydantic import BaseModel
+# FileResponse 返回前端入口文件，StaticFiles 提供构建后的静态资源。
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
-from .data.monitoring import _ALARMS, _STATIONS
-from .dependencies import require_roles, user_has_station_access
-from .data.audit import _AUDIT_EVENTS
 from .routers.auth import router as auth_router
+from .routers.audit import router as audit_router
 from .routers.health import router as health_router
+from .routers.imports import router as imports_router
 from .routers.incidents import router as incidents_router
 from .routers.monitoring import router as monitoring_router
 from .routers.reports import router as reports_router
@@ -31,9 +27,6 @@ from .routers.supply import router as supply_router
 from .routers.work_orders import router as work_orders_router
 from .routers.users import router as users_router
 from .routers.knowledge import router as knowledge_router
-from .schemas.audit import AuditEvent
-from .schemas.monitoring import Alarm
-from .services.audit import record_audit as _record_audit
 
 # 创建 FastAPI 应用对象；Swagger 文档会读取这里的元数据。
 app = FastAPI(
@@ -71,108 +64,33 @@ app.include_router(reports_router)
 app.include_router(work_orders_router)
 app.include_router(users_router)
 app.include_router(knowledge_router)
+app.include_router(imports_router)
+app.include_router(audit_router)
 
 
-# CSV 导入只返回校验统计，不写入数据库。
-class CsvImportResponse(BaseModel):
-    """遥测 CSV 校验接口返回的统计结果。"""
+# 前端构建目录位于项目根目录的 frontend/dist；开发时可以先执行 npm run build。
+FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 
-    # 整个文件是否没有发现任何校验错误。
-    success: bool
-    # 请求头中的原始文件名；未提供时为空。
-    filename: str | None
-    # CSV 中读取到的数据行总数，不包含表头。
-    total_rows: int
-    # 通过站点、时间、数值和测点字段校验的行数。
-    accepted_rows: int
-    # 未通过校验的行数。
-    rejected_rows: int
-    # 每条校验失败原因，包含对应的 CSV 行号。
-    errors: list[str]
-    # 数据来源标记，当前只做内存 Mock 校验。
-    source: str = "mock"
+# dist 存在时，FastAPI 同时提供前端页面，实现单地址访问；未构建前端时不影响 API 和 Swagger。
+if FRONTEND_INDEX.is_file():
+    # Vite 构建后的 JS、CSS 和图片统一从 /assets 路径提供。
+    assets_dir = FRONTEND_DIST / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="frontend-assets")
 
+    @app.get("/", include_in_schema=False)
+    def frontend_index() -> FileResponse:
+        """返回前端应用入口页面。"""
 
-# ------------------------- Mock 数据 -------------------------
-# 以下字典/列表模拟数据库表，服务重启后会清空新增数据。
-# POST /alarms/{alarm_id}/ack：确认指定告警并记录审计事件。
-@app.post("/api/v1/alarms/{alarm_id}/ack", response_model=Alarm, tags=["告警"])
-def acknowledge_alarm(alarm_id: str, user: dict = Depends(require_roles("admin", "operator"))) -> Alarm:
-    """确认告警；监控查询路由已迁移到 routers.monitoring。"""
-    # 根据告警编号查找记录；不存在时返回 404。
-    alarm = next((item for item in _ALARMS if item["id"] == alarm_id), None)
-    if alarm is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="告警不存在")
-    # 告警确认还需要校验当前账号是否有权处理所属站点。
-    if not user_has_station_access(user, alarm["station_id"]):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权确认该站点告警")
-    # Mock 阶段直接更新内存状态，并记录审计事件。
-    alarm["status"] = "confirmed"
-    _record_audit("acknowledge", "alarm", alarm_id, f"确认告警：{alarm['station_name']} {alarm['metric']}")
-    return Alarm(**{key: value for key, value in alarm.items() if key not in {"description", "suggested_action"}})
+        return FileResponse(FRONTEND_INDEX)
 
-# POST /imports/telemetry-csv：读取 CSV 原文并执行格式校验，不落库。
-@app.post("/api/v1/imports/telemetry-csv", response_model=CsvImportResponse, tags=["数据导入"])
-async def import_telemetry_csv(request: Request, _: dict = Depends(require_roles("admin", "operator"))) -> CsvImportResponse:
-    """读取遥测 CSV 并返回格式校验统计，不写入遥测存储。"""
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def frontend_spa_fallback(full_path: str) -> FileResponse:
+        """将 Vue 前端路由回退到 index.html，保证刷新子页面不会 404。"""
 
-    # 文件名通过自定义请求头传入，当前不使用 multipart 以减少依赖。
-    # 请求正文仍按原始 CSV 字节读取，便于保留 UTF-8 BOM 检测能力。
-    filename = request.headers.get("x-filename")
-    # 读取请求体中的 CSV 原始字节。
-    raw = await request.body()
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return CsvImportResponse(success=False, filename=filename, total_rows=0, accepted_rows=0, rejected_rows=0, errors=["CSV 必须使用 UTF-8 编码"])
-
-    # DictReader 将每行转为“字段名 -> 单元格值”，便于逐行校验。
-    reader = csv.DictReader(io.StringIO(text))
-    # 定义首期导入必须存在的字段。
-    required = {"station_id", "observed_at", "metric", "value", "unit"}
-    headers = set(reader.fieldnames or [])
-    # 先检查表头完整性，缺字段时无需继续处理数据行。
-    missing = sorted(required - headers)
-    if missing:
-        return CsvImportResponse(success=False, filename=filename, total_rows=0, accepted_rows=0, rejected_rows=0, errors=[f"缺少字段: {', '.join(missing)}"])
-
-    errors: list[str] = []
-    accepted = 0
-    total = 0
-    station_ids = {station["id"] for station in _STATIONS}
-    # 从第二行开始计数，因为第一行已经是 CSV 表头。
-    for line_number, row in enumerate(reader, start=2):
-        total += 1
-        if row.get("station_id") not in station_ids:
-            errors.append(f"第 {line_number} 行站点不存在: {row.get('station_id')}")
-            continue
-        # 数值和时间字段必须能转换成功，否则记录该行错误并继续校验后续行。
-        try:
-            float(row.get("value", ""))
-            datetime.fromisoformat(row.get("observed_at", "").replace("Z", "+00:00"))
-        except ValueError:
-            errors.append(f"第 {line_number} 行时间或数值格式错误")
-            continue
-        # 测点名称和单位为空时，数据无法进入后续分析。
-        if not row.get("metric") or not row.get("unit"):
-            errors.append(f"第 {line_number} 行测点或单位为空")
-            continue
-        accepted += 1
-    # 只有全部数据行通过校验时 success 才为 True；本接口不保存通过的数据。
-    return CsvImportResponse(
-        success=not errors,
-        filename=filename,
-        total_rows=total,
-        accepted_rows=accepted,
-        rejected_rows=total - accepted,
-        errors=errors,
-    )
-
-
-# GET /audit-events：倒序返回最近的审计事件。
-@app.get("/api/v1/audit-events", response_model=list[AuditEvent], tags=["管理"])
-def audit_events(_: dict = Depends(require_roles("admin"))) -> list[AuditEvent]:
-    """返回管理员可见的审计事件，并将最新事件放在前面。"""
-
-    # 审计接口仅管理员可访问，并按时间倒序返回最近记录。
-    return list(reversed(_AUDIT_EVENTS))
+        # 未注册的 API 路径仍返回 404，避免把接口错误伪装成前端页面。
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="接口不存在")
+        # 前端资源由 /assets 挂载处理，其余页面路径交给 Vue Router。
+        return FileResponse(FRONTEND_INDEX)

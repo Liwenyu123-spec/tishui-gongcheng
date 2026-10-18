@@ -191,7 +191,7 @@ def list_incidents(
 
 
 @router.get("/notifications", response_model=list[Notification])
-def list_notifications(status_filter: str | None = Query(default=None, alias="status", max_length=32), user: dict = Depends(require_roles("admin", "operator"))) -> list[Notification]:
+def list_notifications(status_filter: str | None = Query(default=None, alias="status", max_length=32), user: dict = Depends(require_roles("admin", "operator", "reviewer"))) -> list[Notification]:
     """查询当前 Mock 调度用户的平台内通知。"""
 
     # 通知必须通过关联事件判断站点范围，不能仅凭通知编号放行。

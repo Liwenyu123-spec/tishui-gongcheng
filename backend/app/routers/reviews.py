@@ -13,6 +13,14 @@ from ..services.audit import record_audit
 # 审核路由负责记录人工复核结果，不执行现场控制。
 router = APIRouter(prefix="/api/v1", tags=["审核"])
 
+# 待补充材料返回后可以再次进入审核；已通过或已驳回记录保持终态。
+_REVIEW_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "pending": {"approved", "rejected", "supplement"},
+    "supplement": {"approved", "rejected", "supplement"},
+    "approved": {"approved"},
+    "rejected": {"rejected"},
+}
+
 
 @router.post("/reviews", response_model=Review)
 def create_review(
@@ -67,10 +75,11 @@ def update_review(
     review = _REVIEWS.get(review_id)
     if review is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="审核记录不存在")
-    # 只有待审核记录可以被处理，已处理记录禁止重复修改。
-    if review.status != "pending":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该审核记录已处理")
-    # 按请求更新审核结论，并保留可选的人工备注。
+    # 按状态流转表校验当前记录，允许补充材料后再次审核，已通过或已驳回记录保持终态。
+    allowed_statuses = _REVIEW_STATUS_TRANSITIONS.get(review.status, {review.status})
+    if payload.status not in allowed_statuses:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该审核记录已结束，不能再次修改")
+    # 相同状态的重复请求保持幂等，但仍可更新补充意见。
     review.status = payload.status
     if payload.comment is not None:
         # 未提交 comment 时保留原有意见，避免 PATCH 清空已有内容。

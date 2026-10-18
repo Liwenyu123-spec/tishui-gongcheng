@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..data.monitoring import _ALARMS, _STATIONS
 from ..dependencies import require_roles, require_station_access, user_has_station_access
+from ..services.audit import record_audit as _record_audit
 from ..schemas.monitoring import Alarm, AlarmDetail, Station, StationDetail, TelemetryPoint, TopologyEdge, TopologyNode, TopologyResponse
 
 # 监控路由统一提供拓扑、站点、遥测和告警查询。
@@ -109,3 +110,21 @@ def alarm_detail(alarm_id: str, user: dict = Depends(require_roles("admin", "ope
     if not user_has_station_access(user, alarm["station_id"]):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权访问该站点告警")
     return AlarmDetail(**alarm)
+
+
+@router.post("/alarms/{alarm_id}/ack", response_model=Alarm, tags=["告警"])
+def acknowledge_alarm(alarm_id: str, user: dict = Depends(require_roles("admin", "operator"))) -> Alarm:
+    """确认告警并记录审计事件。"""
+
+    # 根据告警编号查找记录；不存在时返回 404。
+    alarm = next((item for item in _ALARMS if item["id"] == alarm_id), None)
+    if alarm is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="告警不存在")
+    # 告警确认还需要校验当前账号是否有权处理所属站点。
+    if not user_has_station_access(user, alarm["station_id"]):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权确认该站点告警")
+    # Mock 阶段直接更新内存状态，并记录审计事件。
+    alarm["status"] = "confirmed"
+    _record_audit("acknowledge", "alarm", alarm_id, f"确认告警：{alarm['station_name']} {alarm['metric']}")
+    # 列表响应隐藏详情字段，避免确认接口返回超出 Alarm 模型的内部字段。
+    return Alarm(**{key: value for key, value in alarm.items() if key not in {"description", "suggested_action"}})

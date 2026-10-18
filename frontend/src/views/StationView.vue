@@ -247,7 +247,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page-title"><div><h2>站点趋势</h2><p>查看泵站压力、流量、水位与能耗趋势，缺数区间显式标注 · {{ sourceLabel }}</p></div><div style="display:flex;gap:10px;align-items:center"><el-tag style="width:92px;justify-content:center" :type="heartbeatStatus === '在线' ? 'success' : heartbeatStatus === '不可用' ? 'danger' : 'info'" effect="dark">通讯：{{ heartbeatStatus }}</el-tag><span style="width:145px;color:#7893a4;font-size:11px;white-space:nowrap">最近心跳：{{ heartbeatAt || '尚未收到' }}</span><el-button type="warning" plain @click="openIncidentReport">联系调度</el-button><el-button style="width:92px" size="small" :loading="heartbeatLoading" @click="sendHeartbeat(true)">发送心跳</el-button><el-select v-model="station" style="width:150px"><el-option v-for="s in stationOptions" :key="s" :label="s" :value="s"/></el-select></div></div>
+  <div class="page-title"><div><h2>站点趋势</h2><p>查看泵站压力、流量、水位与能耗趋势，缺数区间显式标注 · {{ sourceLabel }}</p></div><div class="station-actions"><el-tag class="station-status" :type="heartbeatStatus === '在线' ? 'success' : heartbeatStatus === '不可用' ? 'danger' : 'info'" effect="dark">通讯：{{ heartbeatStatus }}</el-tag><span class="station-heartbeat-time">最近心跳：{{ heartbeatAt || '尚未收到' }}</span><el-button class="station-contact-button" type="warning" plain @click="openIncidentReport">联系调度</el-button><el-button class="station-heartbeat-button" size="small" :loading="heartbeatLoading" @click="sendHeartbeat(true)">发送心跳</el-button><el-select v-model="station" class="station-select"><el-option v-for="s in stationOptions" :key="s" :label="s" :value="s"/></el-select></div></div>
   <div class="grid grid-4"><div class="panel metric"><span class="metric-label">当前流量</span><div class="metric-value">{{flow.toLocaleString()}} <small>m³/h</small></div><span class="status-line status-ok"><i/>{{ loading ? '正在加载' : `数据正常 · ${sourceLabel}` }}</span></div><div class="panel metric"><span class="metric-label">出水压力</span><div class="metric-value">{{pressure.toFixed(2)}} <small>MPa</small></div><span class="metric-foot">后端遥测值</span></div><div class="panel metric"><span class="metric-label">水池水位</span><div class="metric-value">{{level.toFixed(2)}} <small>m</small></div><span class="metric-foot">后端遥测值</span></div><div class="panel metric"><span class="metric-label">站点状态</span><div class="metric-value">{{ detailLoading ? '加载中' : stationDetail?.status || '—' }}</div><span class="metric-foot">最近心跳：{{ heartbeatAt || '尚未收到' }}</span></div></div>
   <div class="panel" style="margin-top:18px"><div class="panel-head"><h3>24 小时运行趋势</h3><span>流量 / 压力 · {{sourceLabel}}</span></div><div ref="chart" class="chart"></div></div>
   <el-dialog v-model="reportVisible" title="联系调度 · 一键上报问题" width="520px">
@@ -259,6 +259,15 @@ onBeforeUnmount(() => {
       <el-form-item label="问题描述"><el-input v-model="reportForm.description" type="textarea" :rows="4" placeholder="请描述现场现象、发生时间和已采取的措施" /></el-form-item>
       <el-form-item label="事件指纹"><el-input v-model="reportForm.deduplicationKey" placeholder="可选；相同故障重复上报时用于合并通知" /></el-form-item>
     </el-form>
-    <template #footer><el-button @click="reportVisible = false">取消</el-button><el-button type="warning" :loading="reportSubmitting" @click="submitIncidentReport">提交上报</el-button></template>
+    <template #footer><el-button @click="reportVisible = false">取消</el-button><el-button class="button-stable button-stable--md" type="warning" :loading="reportSubmitting" @click="submitIncidentReport">提交上报</el-button></template>
   </el-dialog>
 </template>
+
+<style scoped>
+/* 固定站点操作区各控件的宽度，心跳按钮加载时不会把“联系调度”推来推去。 */
+.station-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; min-width: 0; }
+.station-status { width: 92px; justify-content: center; flex: 0 0 92px; }
+.station-heartbeat-time { width: 145px; color: #7893a4; font-size: 11px; white-space: nowrap; flex: 0 0 145px; }
+.station-contact-button, .station-heartbeat-button { width: 92px; flex: 0 0 92px; }
+.station-select { width: 150px; flex: 0 0 150px; }
+</style>

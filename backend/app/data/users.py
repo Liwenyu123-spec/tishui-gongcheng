@@ -33,6 +33,16 @@ _USERS = {
         "permissions": ["read"],
         "station_ids": ["pump-02"],
     },
+    # 审批负责人只处理方案审核和报告复核，不承担用户管理或站点事件处置。
+    "reviewer": {
+        "password": "reviewer123",
+        "id": "user-reviewer",
+        "username": "reviewer",
+        "display_name": "审批负责人",
+        "role": "reviewer",
+        "permissions": ["read", "review"],
+        "station_ids": ["*"],
+    },
 }
 
 # 固定 Token 到用户名的映射，仅用于模拟阶段调试认证流程。
@@ -41,4 +51,6 @@ _TOKENS = {
     "mock-token-admin": "admin",
     "mock-token-operator": "operator",
     "mock-token-station-operator": "station-operator",
+    # 审批负责人固定 Token 便于服务重启后继续进行本地联调。
+    "mock-token-reviewer": "reviewer",
 }

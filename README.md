@@ -56,6 +56,39 @@ http://localhost:5173/login
 npm run build
 ```
 
+一键启动前后端（Windows）：
+
+```powershell
+.\启动开发环境.bat
+```
+
+也可以在 PowerShell 中执行：
+
+```powershell
+.\启动开发环境.ps1
+```
+
+脚本会分别打开后端和前端终端窗口。后端地址为 `http://127.0.0.1:8000`，前端地址为 `http://127.0.0.1:5173/login`。前端页面可以在后端暂不可用时显示部分本地示例，但登录、通知、告警、报告和工单等联调功能需要后端保持运行。
+
+构建后单地址运行：
+
+```powershell
+cd frontend
+npm.cmd run build
+cd ..\backend
+..\.venv\Scripts\python.exe -m app
+```
+
+当 `frontend/dist` 存在时，FastAPI 会同时提供前端页面和 `/api/v1` 接口，打开 `http://127.0.0.1:8000` 即可使用，不需要启动 Vite。
+
+单地址一键启动：
+
+```text
+双击 启动单地址模式.bat
+```
+
+该脚本会先构建前端，再只启动 FastAPI；浏览器打开 `http://127.0.0.1:8000` 即可使用完整页面和接口。
+
 启动后端（PowerShell）：
 
 ```powershell

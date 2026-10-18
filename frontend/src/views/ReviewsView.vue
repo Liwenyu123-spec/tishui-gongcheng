@@ -41,7 +41,13 @@ const detailVisible = ref(false)
 const detailLoading = ref(false)
 const selectedDetail = ref<ApiReview | null>(null)
 const updatingReviewId = ref('')
+const commentVisible = ref(false)
+const commentSaving = ref(false)
+const commentText = ref('')
+const commentTarget = ref<ReviewRow | null>(null)
 const pendingCount = computed(() => rows.value.filter(row => row.status === '待审核' || row.status === '待补充').length)
+// 待审核和待补充记录都可以继续给出审核结论；已通过或已驳回记录保持只读。
+const canReviewRow = (row: ReviewRow) => row.status === '待审核' || row.status === '待补充'
 
 const formatReview = (review: ApiReview): ReviewRow => ({
   id: review.id,
@@ -72,7 +78,8 @@ const loadReviews = async () => {
   }
 }
 
-const updateReviewStatus = async (row: ReviewRow, status: 'approved' | 'rejected') => {
+// 审核结论由后端限制为通过、驳回或退回补充，页面只提交当前行的状态变化。
+const updateReviewStatus = async (row: ReviewRow, status: 'approved' | 'rejected' | 'supplement', comment = '') => {
   if (row.id.startsWith('local-')) {
     ElMessage.warning('本地示例审核记录无法写入后端，请选择后端记录')
     return
@@ -81,15 +88,35 @@ const updateReviewStatus = async (row: ReviewRow, status: 'approved' | 'rejected
   try {
     const result = await api<ApiReview>(`/api/v1/reviews/${row.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, ...(comment ? { comment } : {}) }),
     })
     Object.assign(row, formatReview(result))
-    ElMessage.success(status === 'approved' ? '审核已通过' : '审核已驳回')
+    ElMessage.success(status === 'approved' ? '审核已通过' : status === 'rejected' ? '审核已驳回' : '已退回补充材料')
   } catch {
     ElMessage.error('审核状态更新失败，请刷新后重试')
   } finally {
     updatingReviewId.value = ''
   }
+}
+
+// 打开退回补充对话框，先把当前审核主题带入，避免提交意见时选错记录。
+const openSupplement = (row: ReviewRow) => {
+  commentTarget.value = row
+  commentText.value = row.comment
+  commentVisible.value = true
+}
+
+// 提交退回补充结论和审核意见，意见为空时提醒审核人补充原因。
+const submitSupplement = async () => {
+  if (!commentTarget.value) return
+  if (!commentText.value.trim()) {
+    ElMessage.warning('请填写退回补充的原因')
+    return
+  }
+  commentSaving.value = true
+  await updateReviewStatus(commentTarget.value, 'supplement', commentText.value.trim())
+  commentSaving.value = false
+  commentVisible.value = false
 }
 
 const viewBasis = (row: ReviewRow) => {
@@ -133,12 +160,13 @@ onMounted(loadReviews)
         <el-table-column prop="time" label="提交时间" width="100" />
         <el-table-column prop="source" label="数据来源" width="120" />
         <el-table-column prop="status" label="状态" width="100" />
-        <el-table-column label="操作" width="250">
+        <el-table-column label="操作" width="330">
           <template #default="s">
             <el-button link type="primary" @click="viewDetail(s.row)">详情</el-button>
             <el-button link type="primary" @click="viewBasis(s.row)">查看依据</el-button>
-            <el-button link type="success" :disabled="s.row.status!=='待审核'" :loading="updatingReviewId===s.row.id" @click="updateReviewStatus(s.row, 'approved')">通过</el-button>
-            <el-button link type="danger" :disabled="s.row.status!=='待审核'" :loading="updatingReviewId===s.row.id" @click="updateReviewStatus(s.row, 'rejected')">驳回</el-button>
+            <el-button class="button-stable button-stable--xs" link type="success" :disabled="!canReviewRow(s.row)" :loading="updatingReviewId===s.row.id" @click="updateReviewStatus(s.row, 'approved')">通过</el-button>
+            <el-button class="button-stable button-stable--xs" link type="danger" :disabled="!canReviewRow(s.row)" :loading="updatingReviewId===s.row.id" @click="updateReviewStatus(s.row, 'rejected')">驳回</el-button>
+            <el-button class="button-stable button-stable--sm" link type="warning" :disabled="s.row.status!=='待审核'" :loading="updatingReviewId===s.row.id" @click="openSupplement(s.row)">退回补充</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -154,5 +182,14 @@ onMounted(loadReviews)
       <p class="muted">记录编号：{{ selectedDetail.id }}</p>
     </div>
     <el-empty v-else description="正在加载审核详情" />
+  </el-dialog>
+
+  <el-dialog v-model="commentVisible" title="退回补充材料" width="520px">
+    <p class="muted">审核主题：{{ commentTarget?.title || '—' }}</p>
+    <el-input v-model="commentText" type="textarea" :rows="5" placeholder="请说明需要补充的数据、依据或风险说明" />
+    <template #footer>
+      <el-button @click="commentVisible = false">取消</el-button>
+      <el-button class="button-stable button-stable--md" type="warning" :loading="commentSaving" @click="submitSupplement">确认退回</el-button>
+    </template>
   </el-dialog>
 </template>

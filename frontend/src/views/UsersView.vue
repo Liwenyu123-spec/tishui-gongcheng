@@ -190,7 +190,7 @@ onMounted(loadUsers)
       <h2>用户与权限</h2>
       <p>最小权限原则 · 站点/片区范围可配置 · 操作写入审计日志 · {{ sourceLabel }}</p>
     </div>
-    <el-button v-if="!accessDenied" type="primary" :loading="loading" @click="openCreate">新增用户</el-button>
+    <el-button v-if="!accessDenied" class="button-stable button-stable--md" type="primary" :loading="loading" @click="openCreate">新增用户</el-button>
   </div>
 
   <div v-if="accessDenied" class="warning">当前账号没有用户管理权限。请使用管理员账号登录，或联系系统管理员配置权限。</div>
@@ -224,7 +224,7 @@ onMounted(loadUsers)
     </el-form>
     <template #footer>
       <el-button @click="formVisible = false">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="saveUser">保存</el-button>
+      <el-button class="button-stable button-stable--sm" type="primary" :loading="saving" @click="saveUser">保存</el-button>
     </template>
   </el-dialog>
 

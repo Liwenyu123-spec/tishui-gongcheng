@@ -91,7 +91,7 @@ onMounted(loadComparison)
       <h2>智能调度方案比较</h2>
       <p>对比方案草稿，提交人工复核；不下发控制 · {{ sourceLabel }}</p>
     </div>
-    <el-button type="primary" :loading="submitting" :disabled="!selectedSchemeId" @click="submitForReview">提交人工复核</el-button>
+    <el-button class="button-stable button-stable--xl" type="primary" :loading="submitting" :disabled="!selectedSchemeId" @click="submitForReview">提交人工复核</el-button>
   </div>
 
   <div class="grid grid-3">

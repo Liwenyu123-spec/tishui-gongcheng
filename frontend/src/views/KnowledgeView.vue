@@ -193,7 +193,8 @@ onMounted(loadKnowledge)
         <el-option label="待审" value="待审" />
         <el-option label="废止" value="废止" />
       </el-select>
-      <el-button type="primary" :loading="loading">检索</el-button>
+      <!-- 检索按钮重新读取后端文档；关键词和状态筛选仍由 filteredRows 即时过滤。 -->
+      <el-button class="button-stable button-stable--sm" type="primary" :loading="loading" @click="loadKnowledge">检索</el-button>
     </div>
     <div class="table-wrap">
       <el-table :data="filteredRows">
@@ -228,7 +229,7 @@ onMounted(loadKnowledge)
     </el-form>
     <template #footer>
       <el-button @click="importVisible = false">取消</el-button>
-      <el-button type="primary" :loading="importing" @click="importDocument">确认导入</el-button>
+      <el-button class="button-stable button-stable--md" type="primary" :loading="importing" @click="importDocument">确认导入</el-button>
     </template>
   </el-dialog>
 
@@ -238,6 +239,6 @@ onMounted(loadKnowledge)
       <el-form-item label="CSV 内容"><el-input v-model="csvForm.content" type="textarea" :rows="8" /></el-form-item>
     </el-form>
     <div v-if="csvResult" class="muted" style="margin-top:10px">总行数 {{ csvResult.total_rows }} · 通过 {{ csvResult.accepted_rows }} · 拒绝 {{ csvResult.rejected_rows }}<div v-for="error in csvResult.errors" :key="error">{{ error }}</div></div>
-    <template #footer><el-button @click="csvVisible = false">关闭</el-button><el-button type="primary" :loading="csvLoading" @click="validateCsv">开始校验</el-button></template>
+    <template #footer><el-button @click="csvVisible = false">关闭</el-button><el-button class="button-stable button-stable--md" type="primary" :loading="csvLoading" @click="validateCsv">开始校验</el-button></template>
   </el-dialog>
 </template>
