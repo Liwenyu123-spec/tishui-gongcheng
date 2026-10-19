@@ -164,6 +164,24 @@ def run_smoke_checks() -> None:
         assert "event: start" in agent_response.text
         assert "event: result" in agent_response.text
         assert "event: done" in agent_response.text
+
+    # 诊断工具必须真正读到告警编号和本地规程引用，而不是空摘要。
+    diagnosis_tools = client.post(
+        "/api/v1/chat/stream",
+        headers=admin_headers,
+        json={"message": "二泵站流量下降后先检查什么？"},
+    )
+    assert diagnosis_tools.status_code == 200
+    assert "alarm-20261015-001" in diagnosis_tools.text
+    assert "mock-knowledge-flow-v1.2" in diagnosis_tools.text
+    assert "已读取" in diagnosis_tools.text or "已检索" in diagnosis_tools.text
+
+    # 控制边界工具只返回只读拒绝摘要，不出现写操作工具名。
+    control_tools = client.post("/api/v1/chat/stream", headers=admin_headers, json={"message": "启动二泵站"})
+    assert control_tools.status_code == 200
+    assert "mock-readonly-policy" in control_tools.text
+    assert "未生成泵组/阀门/PLC 写指令" in control_tools.text
+
     unauthorized_agent = client.post(
         "/api/v1/chat/stream",
         headers=station_headers,

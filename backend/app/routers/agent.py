@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from ..agent.executor import execute_plan
+from ..agent.executor import ToolContext, execute_plan
 from ..agent.orchestrator import coordinate
 from ..dependencies import require_roles
 from ..schemas.agent import AgentAnswer, AgentChatRequest
@@ -32,7 +32,8 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
 
     answer = build_answer(payload, user)
     plan = coordinate(answer)
-    executions = execute_plan(plan, answer)
+    # 工具层按账号和站点范围直接读取 Mock 数据，不再只从最终答案倒推引用。
+    executions = execute_plan(plan, ToolContext(user=user, request=payload, answer=answer))
     # 记录一次 Agent 查询的摘要，便于管理员在审计页面追踪请求编号和分析分支。
     # 当前只保存意图、来源和站点编号，不保存完整问题正文，避免审计日志膨胀。
     record_audit(
