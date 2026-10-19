@@ -155,6 +155,18 @@ def _knowledge_context(alarm: dict) -> AgentCitation:
     )
 
 
+def _diagnosis_checks(alarm: dict) -> list[str]:
+    """按告警指标给出确定性的现场核查顺序。"""
+
+    checks = {
+        "flow": ["核对入口压力和泵组运行电流", "核对下游压力与阀门状态", "确认测点质量和采样是否连续"],
+        "pressure": ["确认上下游压力测点有效", "核查阀门状态和泵组运行记录", "确认是否存在关联片区压力变化"],
+        "level": ["连续观察水位趋势", "核对来水量和进出水流量", "确认水位测点质量和现场液位"],
+        "current": ["核查电机负荷和运行记录", "核对保护状态及泵组编号", "由现场负责人确认是否需要停机检查"],
+    }
+    return checks.get(alarm["metric"], ["核对关联测点、运行记录和现场状态"])
+
+
 def _answer_for_status(message: str, user: dict, request_id: str, now: datetime, requested_station_id: str | None) -> AgentAnswer:
     station = _find_station(message, requested_station_id, user)
     if station is None:
@@ -260,6 +272,17 @@ def _answer_for_diagnosis(message: str, user: dict, request_id: str, now: dateti
         )
     context_facts, context_recommendations, context_citations = _event_context(alarm["station_id"], user)
     knowledge_citation = _knowledge_context(alarm)
+    checks = _diagnosis_checks(alarm)
+    station = next((item for item in _STATIONS if item["id"] == alarm["station_id"]), None)
+    telemetry = latest_telemetry(station, alarm["metric"]) if station else None
+    telemetry_citations = [
+        AgentCitation(
+            source_type="telemetry",
+            source_id=alarm["station_id"],
+            title=f"{alarm['station_name']} {metric_label(alarm['metric'])}测点",
+            detail=f"当前 Mock 值 {telemetry.value} {telemetry.unit}；观测时间：{telemetry.observed_at.isoformat()}",
+        )
+    ] if telemetry else []
     # 将诊断中的站点、问题和建议动作结构化返回，前端可据此生成工单草稿。
     work_order_suggestion = AgentWorkOrderSuggestion(
         station_id=alarm["station_id"],
@@ -271,14 +294,14 @@ def _answer_for_diagnosis(message: str, user: dict, request_id: str, now: dateti
     return AgentAnswer(
         request_id=request_id,
         intent="diagnosis",
-        answer=f"根据 {alarm['station_name']} 的 Mock 告警，建议先核查泵组运行状态和下游压力数据。",
-        facts=[alarm["description"], f"关联关系：{alarm['relation'] or '暂无关联片区'}"] + context_facts,
-        recommendations=[alarm["suggested_action"], "核查完成前不要生成现场控制指令。"] + context_recommendations,
+        answer=f"根据 {alarm['station_name']} 的 Mock 告警，建议先执行：{checks[0]}。当前只能形成核查建议，不能认定设备已经故障。",
+        facts=[alarm["description"], f"告警值：{alarm['value']} {alarm['unit']}；阈值：{alarm['threshold']}", f"关联关系：{alarm['relation'] or '暂无关联片区'}", f"核查顺序：{'；'.join(checks)}"] + context_facts,
+        recommendations=[*checks, "核查完成前不要生成现场控制指令。"] + context_recommendations,
         citations=[
             AgentCitation(source_type="alarm", source_id=alarm["id"], title="关联告警", detail=alarm["description"]),
             AgentCitation(source_type="policy", source_id="mock-readonly-policy", title="只读分析边界", detail="Agent 只能提供分析和建议，不能操作泵组或阀门"),
             knowledge_citation,
-        ] + context_citations,
+        ] + telemetry_citations + context_citations,
         work_order_suggestion=work_order_suggestion,
         confidence="low",
         pending_items=["现场确认泵组运行状态和下游压力", "接入真实测点和维修历史后复核诊断"],
