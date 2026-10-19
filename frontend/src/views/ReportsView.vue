@@ -417,6 +417,11 @@ onMounted(loadReports)
 .report-list-button { width: 82px; }
 .report-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .report-actions .el-button { margin-left: 0; }
+.report-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 8px 0 16px; }
+.report-metric { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line, #e5e7eb); border-radius: 8px; background: var(--panel-soft, #f8fafc); }
+.report-metric span { color: var(--text-muted, #64748b); }
+.report-metric strong { color: var(--text-primary, #1f2937); }
+.report-source-ids { word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--text-muted, #64748b); }
 .report-copy-button { width: 112px; }
 .report-download-button { width: 112px; }
 .report-detail-button { width: 128px; }
