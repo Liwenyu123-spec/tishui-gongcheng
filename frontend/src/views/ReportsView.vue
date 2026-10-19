@@ -3,6 +3,14 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
 
+interface ReportMetric {
+  key: string
+  label: string
+  value: number
+  unit: string
+  source_ids: string[]
+}
+
 interface ApiReport {
   id: string
   report_type: string
@@ -15,6 +23,8 @@ interface ApiReport {
   data_version?: string
   created_at: string
   source: string
+  metrics?: ReportMetric[]
+  source_ids?: string[]
 }
 
 // 后端暂时没有记录或接口不可用时，页面继续使用这条本地示例数据展示结构。
@@ -29,6 +39,14 @@ const localReport: ApiReport = {
   to_time: '2026-10-16T23:59:59Z',
   data_version: 'local-demo-v1',
   created_at: '2026-10-16T10:46:00Z',
+  metrics: [
+    { key: 'total_supply', label: '总供水量', value: 18900, unit: 'm³/d', source_ids: ['supply:pump-02', 'supply:pump-03', 'supply:pump-04'] },
+    { key: 'total_demand', label: '总需求量', value: 19700, unit: 'm³/d', source_ids: ['supply:pump-02', 'supply:pump-03', 'supply:pump-04'] },
+    { key: 'total_balance', label: '供需结余', value: -800, unit: 'm³/d', source_ids: ['supply:pump-02', 'supply:pump-03', 'supply:pump-04'] },
+    { key: 'alarm_count', label: '关联告警数', value: 3, unit: '条', source_ids: ['alarm-20261015-001', 'alarm-20261015-002', 'alarm-20261015-003'] },
+    { key: 'bottleneck_balance', label: '瓶颈片区：西部片区', value: -600, unit: 'm³/d', source_ids: ['supply:pump-02'] },
+  ],
+  source_ids: ['supply:pump-02', 'supply:pump-03', 'supply:pump-04', 'alarm-20261015-001', 'alarm-20261015-002', 'alarm-20261015-003'],
   source: '本地示例',
 }
 
