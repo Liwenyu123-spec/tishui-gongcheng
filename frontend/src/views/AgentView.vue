@@ -379,7 +379,7 @@ const formatLocalDateTime = (value: string) => {
     <div class="panel">
       <div style="padding:14px 18px;border-bottom:1px solid #1c3a4c">
         <el-tag size="small" type="success">协调 Agent</el-tag>
-        <span class="muted" style="font-size:11px;margin-left:10px">8 个专业 Agent 可协作</span>
+        <span class="muted" style="font-size:13px;margin-left:10px">8 个专业 Agent 可协作</span>
       </div>
       <div v-for="m in messages" :key="m.id" :class="['message',m.role==='user'?'user':'ai']">
         <b>{{m.role==='user'?'你':'Agent'}}</b>
@@ -393,7 +393,7 @@ const formatLocalDateTime = (value: string) => {
         <div v-if="m.role==='ai' && m.evidence" class="evidence" style="white-space:pre-line">{{m.evidence}}</div>
       </div>
       <div style="padding:12px 18px 0;display:flex;gap:8px;align-items:center">
-        <span class="muted" style="font-size:11px;white-space:nowrap">分析站点</span>
+        <span class="muted" style="font-size:13px;white-space:nowrap">分析站点</span>
         <el-select v-model="selectedStationId" clearable filterable placeholder="按问题内容识别" style="width:210px">
           <el-option v-for="station in stations" :key="station.id" :label="`${station.name} · ${station.status}`" :value="station.id" />
         </el-select>
@@ -462,8 +462,8 @@ const formatLocalDateTime = (value: string) => {
 .work-order-row:last-child { border-bottom:0; }
 .work-order-row p { margin:4px 0 0; }
 .work-order-actions { display:flex; align-items:center; gap:4px; flex-wrap:wrap; justify-content:flex-end; }
-.work-order-hint { margin:8px 0 0; font-size:11px; }
+.work-order-hint { margin:8px 0 0; font-size:13px; }
 .analysis-steps { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; align-items:center; }
-.analysis-steps__title { color:#5be0ca; font-size:11px; }
-.analysis-step { padding:3px 7px; border:1px solid #265464; border-radius:999px; color:#9bc5ca; background:#0b2431; font-size:10px; }
+.analysis-steps__title { color:#5be0ca; font-size:13px; }
+.analysis-step { padding:3px 7px; border:1px solid #265464; border-radius:999px; color:#9bc5ca; background:#0b2431; font-size:12px; }
 </style>

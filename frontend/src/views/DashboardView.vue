@@ -161,7 +161,7 @@ onMounted(loadDashboard)
     </div>
     <div class="panel">
       <div class="panel-head"><h3>待办事项</h3><span>需要人工确认</span></div>
-      <div class="table-wrap"><div class="warning">二泵站流量下降与西部片区压力下降可能关联</div><p class="muted" style="font-size:12px;margin:15px 0 0">建议先核查二泵站 2 号泵入口压力和渠道前段水位。</p></div>
+      <div class="table-wrap"><div class="warning">二泵站流量下降与西部片区压力下降可能关联</div><p class="muted" style="font-size:14px;margin:15px 0 0">建议先核查二泵站 2 号泵入口压力和渠道前段水位。</p></div>
     </div>
   </div>
 </template>

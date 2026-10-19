@@ -129,7 +129,7 @@ onMounted(loadComparison)
         <div>能耗<strong>{{ s.energy.toLocaleString() }} kWh</strong></div>
         <div>负荷<strong>{{ s.load_percent }}%</strong></div>
       </div>
-      <p class="muted" style="font-size:11px;margin:15px 0">供需差额：{{ s.supply_gap.toLocaleString() }} m³/d · 风险等级：{{ riskNames[s.risk] || s.risk }} · 评分：{{ s.score }}</p>
+    <p class="muted" style="font-size:13px;margin:15px 0">供需差额：{{ s.supply_gap.toLocaleString() }} m³/d · 风险等级：{{ riskNames[s.risk] || s.risk }} · 评分：{{ s.score }}</p>
       <p :class="['status-line', s.feasible ? 'status-ok' : 'status-danger']"><i />{{ s.feasible ? '满足当前 Mock 约束' : `存在约束问题：${s.constraint_violations.join('；')}` }}</p>
       <el-radio v-model="selectedSchemeId" :label="s.scheme_id">选择方案</el-radio>
     </div>
@@ -141,10 +141,10 @@ onMounted(loadComparison)
       <span>{{ loading ? '正在加载 · ' : '' }}{{ sourceLabel }}</span>
     </div>
     <p>{{ recommendation }}</p>
-    <p v-if="comparisonMeta" class="muted" style="font-size:12px">目标需求：{{ comparisonMeta.target_demand.toLocaleString() }} m³/d · 最大时延：{{ comparisonMeta.constraints.max_delay_minutes }} min · 最大负荷：{{ comparisonMeta.constraints.max_load_percent }}% · 最大风险：{{ riskNames[comparisonMeta.constraints.max_risk] || comparisonMeta.constraints.max_risk }}</p>
-    <ul v-if="comparisonMeta?.assumptions?.length" class="muted" style="font-size:12px"><li v-for="item in comparisonMeta.assumptions" :key="item">{{ item }}</li></ul>
+    <p v-if="comparisonMeta" class="muted" style="font-size:14px">目标需求：{{ comparisonMeta.target_demand.toLocaleString() }} m³/d · 最大时延：{{ comparisonMeta.constraints.max_delay_minutes }} min · 最大负荷：{{ comparisonMeta.constraints.max_load_percent }}% · 最大风险：{{ riskNames[comparisonMeta.constraints.max_risk] || comparisonMeta.constraints.max_risk }}</p>
+    <ul v-if="comparisonMeta?.assumptions?.length" class="muted" style="font-size:14px"><li v-for="item in comparisonMeta.assumptions" :key="item">{{ item }}</li></ul>
     <p v-if="submittedReview" class="status-line status-ok"><i />已创建审核记录：{{ submittedReview.id }}</p>
-    <p class="muted" style="font-size:12px">比较结果可选择一套方案提交人工复核，审核只改变业务状态，不触发设备控制。</p>
+    <p class="muted" style="font-size:14px">比较结果可选择一套方案提交人工复核，审核只改变业务状态，不触发设备控制。</p>
   </div>
 
   <div class="warning" style="margin-top:18px">所有方案均为分析草稿，数据和假设需由业务人员确认后才能进入审批。</div>
