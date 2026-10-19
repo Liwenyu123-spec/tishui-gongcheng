@@ -63,3 +63,5 @@
 /* 保留必要的辅助文字层级，但不再低于 12px。 */
 .work-order-hint, .analysis-steps__title, .analysis-step, .station-heartbeat-time,
 .report-source-ids { font-size: 13px; }
+.login-page .recognized-role { font-size: 14px; }
+.login-page .login-note { font-size: 13px; }
