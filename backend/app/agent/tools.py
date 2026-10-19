@@ -61,7 +61,7 @@ def plan_for_intent(intent: AgentIntent) -> AgentPlan:
         return AgentPlan(
             "trend_analysis_agent",
             ("trend_analysis_agent", "event_context_agent"),
-            common + (READ_ONLY_TOOLS["read_telemetry"], READ_ONLY_TOOLS["read_alarms"], READ_ONLY_TOOLS["read_event_context"]),
+            common + (READ_ONLY_TOOLS["read_telemetry"], READ_ONLY_TOOLS["read_event_context"]),
         )
     if intent == "diagnosis":
         return AgentPlan(
