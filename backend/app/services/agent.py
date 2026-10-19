@@ -27,6 +27,9 @@ _STATION_ALIASES = {
     "平定入口": "pingding-inlet",
 }
 
+# 监控路由使用同一固定时间序列；Agent 返回该时间作为 Mock 测点观测时间。
+_MOCK_TELEMETRY_AT = datetime(2026, 10, 15, 10, 0, tzinfo=timezone.utc)
+
 # 当前知识库接口只保存文档元数据，因此先用版本化规则表模拟可追溯的规程引用。
 # 后续接入知识库正文或检索服务时，保留 source_id 和引用位置字段即可替换来源。
 _DIAGNOSTIC_KNOWLEDGE = {
@@ -194,6 +197,7 @@ def _answer_for_status(message: str, user: dict, request_id: str, now: datetime,
         confidence="medium",
         pending_items=["接入真实遥测后复核数据时间、测点质量和现场状态"],
         time_range=_time_range_label(message),
+        observed_at=_MOCK_TELEMETRY_AT,
         generated_at=now,
     )
 
@@ -226,6 +230,7 @@ def _answer_for_trend(message: str, user: dict, request_id: str, now: datetime, 
         confidence="medium",
         pending_items=["确认趋势时间窗内的原始测点和采样完整性"],
         time_range=_time_range_label(message),
+        observed_at=alarm["occurred_at"],
         generated_at=now,
     )
 
@@ -267,6 +272,7 @@ def _answer_for_diagnosis(message: str, user: dict, request_id: str, now: dateti
         confidence="low",
         pending_items=["现场确认泵组运行状态和下游压力", "接入真实测点和维修历史后复核诊断"],
         time_range=_time_range_label(message),
+        observed_at=alarm["occurred_at"],
         generated_at=now,
     )
 
