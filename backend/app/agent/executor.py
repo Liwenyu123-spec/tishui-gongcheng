@@ -11,6 +11,7 @@ from ..data.monitoring import _ALARMS, _STATIONS
 from ..data.supply import _SUPPLY_AREAS
 from ..dependencies import user_has_station_access
 from ..schemas.agent import AgentAnswer, AgentChatRequest
+from ..services.analysis import compare_variation, metric_label
 from ..services.knowledge_search import search_rules
 from .tools import AgentPlan, ReadOnlyTool, ToolName
 
@@ -153,11 +154,32 @@ def _execute_read_telemetry(tool: ReadOnlyTool, context: ToolContext) -> ToolExe
     """按可见站点读取确定性 Mock 遥测摘要。"""
 
     station = _station_from_context(context)
+    # 趋势问题需要读取全部可见站点，不能只读取答案引用中的第一个站点。
+    is_cross_station_trend = (
+        context.request.station_id is None
+        and any(word in context.request.message for word in ("过去", "最近", "趋势", "波动", "变化"))
+        and not any(alias in context.request.message for alias in ("集泉", "一泵站", "二泵站", "三泵站", "四泵站", "平定入口"))
+    )
+    if is_cross_station_trend:
+        visible = [item for item in _STATIONS if user_has_station_access(context.user, item["id"])]
+        metric = "flow" if "流量" in context.request.message else "level" if "水位" in context.request.message else "energy" if "能耗" in context.request.message else "pressure"
+        comparisons = compare_variation(visible, metric)
+        if not comparisons:
+            return ToolExecution(tool=tool, status="completed", summary="可见范围内没有可读取的趋势测点", source_ids=())
+        top = comparisons[0]
+        return ToolExecution(
+            tool=tool,
+            status="completed",
+            summary=f"已读取 {len(comparisons)} 个站点的{metric_label(metric)}时间序列，最大波动为 {top['station_name']} {top['variation']} {top['unit']}",
+            source_ids=tuple(item["station_id"] for item in comparisons),
+        )
     if station is None:
         return ToolExecution(tool=tool, status="completed", summary="可见范围内没有可读取的遥测站点", source_ids=())
-    # 与监控 Mock 保持一致的基础值，只做展示摘要，不伪造实时采样。
-    flow = round(1120.0 - (station["sequence"] - 1) * 18, 3)
-    summary = f"已读取 {station['name']} Mock 遥测：流量约 {flow} m³/h，站点状态 {station['status']}"
+    metric = "flow" if "流量" in context.request.message else "level" if "水位" in context.request.message else "energy" if "能耗" in context.request.message else "pressure"
+    comparisons = compare_variation([station], metric)
+    latest = comparisons[0]["latest"] if comparisons else "无"
+    unit = comparisons[0]["unit"] if comparisons else ""
+    summary = f"已读取 {station['name']} Mock 遥测：{metric_label(metric)}约 {latest} {unit}，站点状态 {station['status']}"
     return ToolExecution(tool=tool, status="completed", summary=summary, source_ids=(station["id"],))
 
 

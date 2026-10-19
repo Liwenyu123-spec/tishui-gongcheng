@@ -201,7 +201,7 @@ def _answer_for_trend(message: str, user: dict, request_id: str, now: datetime, 
     # 选择站点时只分析该站点；未选择时比较当前账号可见的全部站点。
     if requested_station_id is not None:
         selected_station = _find_station(message, requested_station_id, user)
-        stations = [selected_station] if selected_station else []
+        stations = [selected_station] if selected_station is not None else []
     else:
         stations = _visible_stations(user)
     metric = "flow" if "流量" in message else "level" if "水位" in message else "energy" if "能耗" in message else "pressure"
