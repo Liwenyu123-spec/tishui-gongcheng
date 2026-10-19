@@ -12,7 +12,7 @@ from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, Knowl
 from ..services.audit import record_audit
 from ..services.knowledge_search import search_rules
 
-# 知识库接口只管理文档元数据，当前不返回文档正文。
+# 知识库接口管理文档生命周期；检索只返回正文摘要，不提供全文读取。
 router = APIRouter(prefix="/api/v1", tags=["知识库"])
 
 
