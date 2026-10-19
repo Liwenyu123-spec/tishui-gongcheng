@@ -15,6 +15,7 @@ from ..data.monitoring import _ALARMS, _STATIONS
 from ..data.supply import _SUPPLY_AREAS
 from ..dependencies import user_has_station_access
 from ..schemas.agent import AgentAnswer, AgentCitation, AgentChatRequest, AgentIntent, AgentWorkOrderSuggestion
+from .knowledge_search import search_rules
 
 
 _CONTROL_WORDS = ("启动", "停止", "开阀", "关阀", "切换阀", "修改压力", "下发", "控制指令")
@@ -29,32 +30,6 @@ _STATION_ALIASES = {
 
 # 监控路由使用同一固定时间序列；Agent 返回该时间作为 Mock 测点观测时间。
 _MOCK_TELEMETRY_AT = datetime(2026, 10, 15, 10, 0, tzinfo=timezone.utc)
-
-# 当前知识库接口只保存文档元数据，因此先用版本化规则表模拟可追溯的规程引用。
-# 后续接入知识库正文或检索服务时，保留 source_id 和引用位置字段即可替换来源。
-_DIAGNOSTIC_KNOWLEDGE = {
-    "flow": {
-        "source_id": "mock-knowledge-flow-v1.2",
-        "title": "泵站流量异常核查规程 v1.2",
-        "detail": "先核对入口压力、泵组运行电流和下游压力，再决定是否升级人工处置。",
-    },
-    "pressure": {
-        "source_id": "mock-knowledge-pressure-v1.1",
-        "title": "输水压力异常处置规程 v1.1",
-        "detail": "先确认上下游压力测点有效，再核查阀门状态和泵组运行记录。",
-    },
-    "level": {
-        "source_id": "mock-knowledge-level-v1.0",
-        "title": "泵站水位巡检规程 v1.0",
-        "detail": "连续观察水位趋势并核对来水情况，禁止仅凭单个 Mock 测点下结论。",
-    },
-    "current": {
-        "source_id": "mock-knowledge-current-v1.0",
-        "title": "泵组电流异常核查规程 v1.0",
-        "detail": "核查电机负荷、运行记录和保护状态，必要时交由现场负责人确认。",
-    },
-}
-
 
 def _now() -> datetime:
     """返回带时区的 UTC 时间，保证 SSE 返回时间格式统一。"""
@@ -171,14 +146,15 @@ def _event_context(station_id: str, user: dict) -> tuple[list[str], list[str], l
 
 
 def _knowledge_context(alarm: dict) -> AgentCitation:
-    """根据告警测点返回一条版本化的只读规程引用。"""
+    """根据告警测点检索一条版本化的只读规程引用。"""
 
-    rule = _DIAGNOSTIC_KNOWLEDGE.get(alarm["metric"], _DIAGNOSTIC_KNOWLEDGE["flow"])
+    hits = search_rules(f"{alarm['metric']} 异常核查", metric=alarm["metric"], limit=1)
+    rule = hits[0] if hits else search_rules("泵站 异常", limit=1)[0]
     return AgentCitation(
         source_type="knowledge",
-        source_id=rule["source_id"],
-        title=rule["title"],
-        detail=rule["detail"],
+        source_id=rule.source_id,
+        title=rule.title,
+        detail=rule.detail,
     )
 
 

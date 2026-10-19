@@ -45,3 +45,22 @@ class KnowledgeDocument(BaseModel):
     imported_at: datetime
     # 数据来源标记。
     source: str = "mock"
+
+
+class KnowledgeSearchHit(BaseModel):
+    """本地规程检索返回的引用片段。"""
+
+    source_id: str
+    title: str
+    version: str
+    detail: str
+    score: int
+    source: Literal["mock-rule"] = "mock-rule"
+
+
+class KnowledgeSearchResponse(BaseModel):
+    """Agent 或知识库页面可以消费的检索结果。"""
+
+    query: str
+    results: list[KnowledgeSearchHit]
+    data_quality: Literal["mock"] = "mock"

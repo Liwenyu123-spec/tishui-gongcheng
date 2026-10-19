@@ -3,12 +3,13 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..data.knowledge import _KNOWLEDGE
 from ..dependencies import get_current_user, require_roles
-from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeStatusUpdateRequest
+from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
 from ..services.audit import record_audit
+from ..services.knowledge_search import search_rules
 
 # 知识库接口只管理文档元数据，当前不返回文档正文。
 router = APIRouter(prefix="/api/v1", tags=["知识库"])
@@ -20,6 +21,20 @@ def knowledge(_: dict = Depends(get_current_user)) -> list[KnowledgeDocument]:
 
     # 只返回当前进程内的元数据，正文不会从 Mock 存储中返回。
     return list(_KNOWLEDGE.values())
+
+
+@router.get("/knowledge/search", response_model=KnowledgeSearchResponse)
+def search_knowledge(
+    q: str = Query(min_length=1, max_length=200),
+    metric: str | None = Query(default=None, max_length=32),
+    limit: int = Query(default=5, ge=1, le=10),
+    _: dict = Depends(get_current_user),
+) -> KnowledgeSearchResponse:
+    """检索本地版本化规程，不返回未建立索引的导入正文。"""
+
+    hits = search_rules(q, metric=metric, limit=limit)
+    # 服务层使用不可变数据类，路由边界显式转换为 API 响应模型，避免隐式序列化失败。
+    return KnowledgeSearchResponse(query=q, results=[KnowledgeSearchHit(**hit.__dict__) for hit in hits])
 
 
 @router.get("/knowledge/{document_id}", response_model=KnowledgeDocument)

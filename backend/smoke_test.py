@@ -67,6 +67,15 @@ def run_smoke_checks() -> None:
     assert duplicate_review["id"] == review["id"]
     expect("审核员查询人工复核", client.get("/api/v1/reviews", headers=reviewer_headers), 200)
 
+    # 本地规程检索只返回版本化规则引用，不依赖数据库或向量库。
+    knowledge_search = expect(
+        "本地规程检索",
+        client.get("/api/v1/knowledge/search", headers=admin_headers, params={"q": "流量异常核查", "metric": "flow"}),
+        200,
+    )
+    assert knowledge_search["data_quality"] == "mock"
+    assert knowledge_search["results"] and knowledge_search["results"][0]["source_id"] == "mock-knowledge-flow-v1.2"
+
     # 管理员可以查看全部站点；站点账号只能访问授权的二泵站。
     stations = expect("管理员站点列表", client.get("/api/v1/stations", headers=admin_headers), 200)
     assert len(stations) >= 1
