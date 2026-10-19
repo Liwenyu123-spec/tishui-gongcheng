@@ -3,12 +3,17 @@ import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
 
-interface Scheme {
+interface SchemeInput {
   scheme_id: string
   name: string
   supply: number
   delay_minutes: number
   energy: number
+  risk: string
+  load_percent?: number
+}
+
+interface Scheme extends SchemeInput {
   load_percent: number
   risk: string
   supply_gap: number
@@ -36,7 +41,7 @@ interface ReviewResponse {
   status: string
 }
 
-const mockSchemes: Scheme[] = [
+const mockSchemes: SchemeInput[] = [
   { scheme_id: 'scheme-a', name: '方案 A · 保守供水', supply: 12000, delay_minutes: 45, energy: 820, risk: 'low' },
   { scheme_id: 'scheme-b', name: '方案 B · 均衡调度', supply: 13400, delay_minutes: 52, energy: 910, risk: 'medium' },
   { scheme_id: 'scheme-c', name: '方案 C · 峰时补水', supply: 14100, delay_minutes: 38, energy: 1080, risk: 'high' },
@@ -116,7 +121,7 @@ onMounted(loadComparison)
         <div>负荷<strong>{{ s.load_percent }}%</strong></div>
       </div>
       <p class="muted" style="font-size:11px;margin:15px 0">供需差额：{{ s.supply_gap.toLocaleString() }} m³/d · 风险等级：{{ riskNames[s.risk] || s.risk }} · 评分：{{ s.score }}</p>
-      <p :class="['status-line', s.feasible ? 'status-ok' : 'status-warn']"><i />{{ s.feasible ? '满足当前 Mock 约束' : `存在约束问题：${s.constraint_violations.join('；')}` }}</p>
+      <p :class="['status-line', s.feasible ? 'status-ok' : 'status-danger']"><i />{{ s.feasible ? '满足当前 Mock 约束' : `存在约束问题：${s.constraint_violations.join('；')}` }}</p>
       <el-radio v-model="selectedSchemeId" :label="s.scheme_id">选择方案</el-radio>
     </div>
   </div>
