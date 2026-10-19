@@ -45,6 +45,7 @@ interface AgentAnswer {
   pending_items?: string[]
   time_range?: string
   observed_at?: string | null
+  freshness?: 'fresh' | 'stale' | 'unknown'
   work_order_suggestion?: {
     station_id: string
     title: string
@@ -104,6 +105,7 @@ const assignmentOrder = ref<WorkOrderDraft | null>(null)
 const assignmentForm = ref({ owner: '', due_at: '' })
 const workOrderStatusNames: Record<string, string> = { draft: '草稿', assigned: '已分派', in_progress: '处理中', completed: '已完成', cancelled: '已取消' }
 const confidenceNames: Record<string, string> = { low: '低', medium: '中', high: '高' }
+const freshnessNames: Record<string, string> = { fresh: '新鲜', stale: '已过期', unknown: '未知' }
 
 // 加载当前账号可见的工单，站点范围由后端再次校验。
 const loadWorkOrders = async () => {
@@ -182,6 +184,7 @@ const ask = async (q = input.value) => {
       ...(answer.pending_items || []).map(item => `待确认项：${item}`),
       `时间范围：${answer.time_range || '当前 Mock 样本'}`,
       ...(answer.observed_at ? [`数据观测时间：${formatLocalDateTime(answer.observed_at)}`] : []),
+      `数据新鲜度：${freshnessNames[answer.freshness || 'unknown'] || answer.freshness || '未知'}`,
       `来源：${answer.source} · 意图：${answer.intent}`,
     ].join('\n')
     aiMessage.text = answer.answer

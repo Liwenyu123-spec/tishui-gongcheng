@@ -145,6 +145,7 @@ def run_smoke_checks() -> None:
         assert '"pending_items":' in agent_response.text
         assert '"time_range":' in agent_response.text
         assert '"observed_at":' in agent_response.text
+        assert '"freshness":' in agent_response.text
         assert "event: start" in agent_response.text
         assert "event: result" in agent_response.text
         assert "event: done" in agent_response.text

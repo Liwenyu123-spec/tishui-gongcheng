@@ -66,6 +66,8 @@ class AgentAnswer(BaseModel):
     time_range: str = "当前 Mock 样本"
     # 事实数据的观测时间；没有对应测点时为空，不能用回答生成时间代替。
     observed_at: datetime | None = None
+    # 观测数据的新鲜度与数据质量分开表示；没有观测时间时使用 unknown。
+    freshness: Literal["fresh", "stale", "unknown"] = "unknown"
     source: Literal["mock-rule"] = "mock-rule"
     generated_at: datetime
 
