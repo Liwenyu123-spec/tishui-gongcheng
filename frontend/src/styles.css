@@ -23,3 +23,43 @@
 .button-stable--lg { --button-stable-width: 128px; }
 .button-stable--xl { --button-stable-width: 156px; }
 .button-stable--block { width: 100%; min-width: 0; flex: 0 0 auto; }
+
+/* 调度工作台可读性：统一提高正文、表格和操作控件字号。 */
+:root {
+  --el-font-size-extra-small: 12px;
+  --el-font-size-small: 13px;
+  --el-font-size-base: 15px;
+  --el-font-size-medium: 16px;
+  --el-font-size-large: 18px;
+}
+
+.brand strong { font-size: 17px; }
+.brand span, .env-tag, .nav-group p, .sidebar-foot { font-size: 12px; }
+.nav-item { font-size: 15px; padding-top: 12px; padding-bottom: 12px; }
+.eyebrow { font-size: 12px; }
+.topbar h1 { font-size: 25px; }
+.top-actions { font-size: 14px; }
+.page-title h2 { font-size: 23px; }
+.page-title p { font-size: 14px; }
+.panel-head h3 { font-size: 16px; }
+.panel-head span, .metric-label, .metric-foot, .status-line, .tag { font-size: 13px; }
+.metric-value small { font-size: 13px; }
+.kpi-row, .warning { font-size: 14px; }
+.message { font-size: 15px; }
+.evidence { font-size: 13px; }
+.flow-node strong { font-size: 15px; }
+.flow-node span { font-size: 12px; }
+
+/* Element Plus 控件和数据表统一使用适合值班阅读的字号。 */
+.el-button { font-size: 15px; }
+.el-button--small { font-size: 14px; }
+.el-input__inner, .el-textarea__inner, .el-select, .el-form-item__label,
+.el-checkbox__label, .el-radio__label { font-size: 15px; }
+.el-table { font-size: 14px; }
+.el-table th.el-table__cell .cell, .el-table td.el-table__cell .cell { font-size: 14px; line-height: 1.5; }
+.el-dialog, .el-dialog__body, .el-dialog__footer { font-size: 15px; }
+.el-tag { font-size: 13px; }
+
+/* 保留必要的辅助文字层级，但不再低于 12px。 */
+.work-order-hint, .analysis-steps__title, .analysis-step, .station-heartbeat-time,
+.report-source-ids { font-size: 13px; }
