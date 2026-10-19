@@ -145,7 +145,12 @@ def _event_context(station_id: str, user: dict) -> tuple[list[str], list[str], l
 def _knowledge_context(alarm: dict) -> AgentCitation:
     """根据告警测点检索一条版本化的只读规程引用。"""
 
-    hits = search_rules(f"{alarm['metric']} 异常核查", metric=alarm["metric"], limit=1)
+    hits = search_rules(
+        f"{alarm['metric']} 异常核查",
+        metric=alarm["metric"],
+        limit=1,
+        station_id=alarm["station_id"],
+    )
     rule = hits[0] if hits else search_rules("泵站 异常", limit=1)[0]
     return AgentCitation(
         source_type="knowledge",

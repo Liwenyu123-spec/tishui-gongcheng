@@ -5,8 +5,9 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from ..data.knowledge import _KNOWLEDGE
-from ..dependencies import get_current_user, require_roles
+from ..data.knowledge import _KNOWLEDGE, _KNOWLEDGE_CONTENT
+from ..data.monitoring import _STATIONS
+from ..dependencies import get_current_user, require_roles, user_has_station_access
 from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
 from ..services.audit import record_audit
 from ..services.knowledge_search import search_rules
@@ -28,11 +29,23 @@ def search_knowledge(
     q: str = Query(min_length=1, max_length=200),
     metric: str | None = Query(default=None, max_length=32),
     limit: int = Query(default=5, ge=1, le=10),
-    _: dict = Depends(get_current_user),
+    station_id: str | None = Query(default=None, max_length=64),
+    user: dict = Depends(get_current_user),
 ) -> KnowledgeSearchResponse:
-    """检索本地版本化规程，不返回未建立索引的导入正文。"""
+    """检索内置规则和已批准、当前有效的导入文档。"""
 
-    hits = search_rules(q, metric=metric, limit=limit)
+    visible_station_ids = {
+        station["id"] for station in _STATIONS if user_has_station_access(user, station["id"])
+    }
+    if station_id is not None and station_id not in visible_station_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权检索该站点资料")
+    hits = search_rules(
+        q,
+        metric=metric,
+        limit=limit,
+        station_id=station_id,
+        visible_station_ids=visible_station_ids,
+    )
     # 服务层使用不可变数据类，路由边界显式转换为 API 响应模型，避免隐式序列化失败。
     return KnowledgeSearchResponse(query=q, results=[KnowledgeSearchHit(**hit.__dict__) for hit in hits])
 
@@ -57,18 +70,29 @@ def import_knowledge(
     """保存知识文档元数据并记录正文长度。"""
 
     # 使用短 UUID 生成文档编号，避免依赖上传文件名的唯一性。
-    # 记录文件名、版本和正文长度；正文只用于计算长度，不直接返回。
+    unknown_stations = sorted({station_id for station_id in payload.station_ids if station_id not in {item["id"] for item in _STATIONS}})
+    if unknown_stations:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"未知适用站点：{', '.join(unknown_stations)}")
+    if payload.effective_from and payload.effective_to and payload.effective_to <= payload.effective_from:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="失效时间必须晚于生效时间")
+    now = datetime.now(timezone.utc)
+    # 导入资料先进入待审状态，只有管理员将其设为现行后才会参与检索。
     document = KnowledgeDocument(
         id=f"knowledge-{uuid4().hex[:10]}",
         filename=payload.filename,
         title=payload.title,
         version=payload.version,
+        status="pending",
         content_length=len(payload.content),
-        imported_at=datetime.now(timezone.utc),
+        imported_at=now,
+        station_ids=list(dict.fromkeys(payload.station_ids)),
+        effective_from=payload.effective_from,
+        effective_to=payload.effective_to,
     )
-    # 保存导入结果，并通过审计日志记录可追踪的文档编号。
+    # 保存元数据和正文；正文只通过检索命中摘要间接返回，不作为全文接口返回。
     _KNOWLEDGE[document.id] = document
-    record_audit("import", "knowledge", document.id, f"导入文档 {document.filename}")
+    _KNOWLEDGE_CONTENT[document.id] = payload.content
+    record_audit("import", "knowledge", document.id, f"导入文档 {document.filename}，状态为待审")
     return document
 
 
@@ -84,7 +108,8 @@ def update_knowledge_status(
     document = _KNOWLEDGE.get(document_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识文档不存在")
-    # Literal 已限制状态取值，这里只更新状态并保留原有元数据。
+    # Literal 已限制状态取值；进入现行状态时记录批准时间。
     document.status = payload.status
+    document.approved_at = datetime.now(timezone.utc) if payload.status == "valid" else None
     record_audit("status_update", "knowledge", document_id, f"知识文档 {document.title} 状态更新为 {payload.status}")
     return document
