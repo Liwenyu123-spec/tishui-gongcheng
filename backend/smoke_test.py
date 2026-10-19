@@ -146,6 +146,10 @@ def run_smoke_checks() -> None:
         assert '"time_range":' in agent_response.text
         assert '"observed_at":' in agent_response.text
         assert '"freshness":' in agent_response.text
+        assert '"coordinator": "dispatch_coordinator"' in agent_response.text
+        assert '"allowed_tools":' in agent_response.text
+        assert '"read_only": true' in agent_response.text
+        assert "start_pump" not in agent_response.text
         assert "event: start" in agent_response.text
         assert "event: result" in agent_response.text
         assert "event: done" in agent_response.text
