@@ -12,7 +12,21 @@ from ..data.supply import _SUPPLY_AREAS
 from ..dependencies import user_has_station_access
 from ..schemas.agent import AgentAnswer, AgentChatRequest
 from ..services.knowledge_search import search_rules
-from .tools import AgentPlan, ReadOnlyTool
+from .tools import AgentPlan, ReadOnlyTool, ToolName
+
+
+# 与 Agent 服务保持一致的中文别名，避免工具层只能识别站点编号。
+_STATION_ALIASES = {
+    "集泉": "jq-01",
+    "一泵站": "pump-01",
+    "二泵站": "pump-02",
+    "三泵站": "pump-03",
+    "四泵站": "pump-04",
+    "平定入口": "pingding-inlet",
+}
+
+# 这些引用不是站点实体，允许在任意授权账号的工具结果中出现。
+_GLOBAL_SOURCE_IDS = {"mock-readonly-policy"}
 
 
 @dataclass(frozen=True)
@@ -41,22 +55,84 @@ def _visible_station_ids(user: dict) -> set[str]:
     return {station["id"] for station in _STATIONS if user_has_station_access(user, station["id"])}
 
 
+def _station_by_id(station_id: str, visible: set[str]) -> dict | None:
+    """仅在可见范围内按站点编号取站点。"""
+
+    if station_id not in visible:
+        return None
+    return next((station for station in _STATIONS if station["id"] == station_id), None)
+
+
+def _station_from_message(message: str, visible: set[str]) -> dict | None:
+    """从问题文本中的中文别名解析可见站点。"""
+
+    for alias, station_id in _STATION_ALIASES.items():
+        if alias in message:
+            station = _station_by_id(station_id, visible)
+            if station is not None:
+                return station
+    return None
+
+
 def _station_from_context(context: ToolContext) -> dict | None:
-    """优先使用请求中的站点，其次从答案引用中回退到可见站点。"""
+    """按请求站点、问题别名、答案引用的优先级解析目标站点。
+
+    告警引用的 source_id 是告警编号而不是站点编号，需要额外映射，否则会误落到
+    第一个可见站点，并把其他站点告警带进工具摘要。
+    """
 
     visible = _visible_station_ids(context.user)
     requested = context.request.station_id
-    if requested and requested in visible:
-        return next((station for station in _STATIONS if station["id"] == requested), None)
+    if requested:
+        return _station_by_id(requested, visible)
+
+    from_message = _station_from_message(context.request.message, visible)
+    if from_message is not None:
+        return from_message
+
     for citation in context.answer.citations:
-        if citation.source_type in {"telemetry", "alarm", "supply"} and citation.source_id in visible:
-            station = next((item for item in _STATIONS if item["id"] == citation.source_id), None)
+        if citation.source_type == "telemetry" or citation.source_type == "supply":
+            station = _station_by_id(citation.source_id, visible)
             if station is not None:
                 return station
+        if citation.source_type == "alarm":
             alarm = next((item for item in _ALARMS if item["id"] == citation.source_id), None)
-            if alarm is not None and alarm["station_id"] in visible:
-                return next((item for item in _STATIONS if item["id"] == alarm["station_id"]), None)
-    return next((station for station in _STATIONS if station["id"] in visible), None)
+            if alarm is not None:
+                station = _station_by_id(alarm["station_id"], visible)
+                if station is not None:
+                    return station
+    return None
+
+
+def _filter_source_ids(tool_name: ToolName, source_ids: tuple[str, ...], context: ToolContext) -> tuple[str, ...]:
+    """二次过滤工具引用，阻止越权站点、告警或事件编号漏出。"""
+
+    visible = _visible_station_ids(context.user)
+    if tool_name in {"search_knowledge", "apply_control_boundary"}:
+        # 规程目录和控制策略是全局只读规则，不按站点裁剪。
+        return source_ids
+    if tool_name == "check_scope":
+        return tuple(item for item in source_ids if item in visible)
+
+    allowed: list[str] = []
+    for item in source_ids:
+        if item in _GLOBAL_SOURCE_IDS or item in visible:
+            allowed.append(item)
+            continue
+        alarm = next((row for row in _ALARMS if row["id"] == item), None)
+        if alarm is not None and alarm["station_id"] in visible:
+            allowed.append(item)
+            continue
+        incident = _INCIDENTS.get(item)
+        if incident is not None and incident.station_id in visible:
+            allowed.append(item)
+            continue
+        notification = _NOTIFICATIONS.get(item)
+        if notification is not None:
+            related = _INCIDENTS.get(notification.incident_id)
+            if related is not None and related.station_id in visible:
+                allowed.append(item)
+    return tuple(allowed)
 
 
 def _execute_check_scope(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
@@ -91,10 +167,9 @@ def _execute_read_alarms(tool: ReadOnlyTool, context: ToolContext) -> ToolExecut
     visible = _visible_station_ids(context.user)
     alarms = [alarm for alarm in _ALARMS if alarm["station_id"] in visible]
     station = _station_from_context(context)
+    # 已解析到目标站点时必须收窄，即使该站点暂无告警也不能回退成全量可见告警。
     if station is not None:
-        scoped = [alarm for alarm in alarms if alarm["station_id"] == station["id"]]
-        if scoped:
-            alarms = scoped
+        alarms = [alarm for alarm in alarms if alarm["station_id"] == station["id"]]
     source_ids = tuple(alarm["id"] for alarm in alarms)
     if not alarms:
         return ToolExecution(tool=tool, status="completed", summary="可见范围内没有匹配的 Mock 告警", source_ids=())
@@ -108,6 +183,7 @@ def _execute_read_event_context(tool: ReadOnlyTool, context: ToolContext) -> Too
 
     visible = _visible_station_ids(context.user)
     station = _station_from_context(context)
+    # 有明确站点时只读该站；没有时才退回全部可见站点，避免串站点上下文。
     station_ids = {station["id"]} if station is not None else visible
     incidents = [
         incident
@@ -188,7 +264,18 @@ def execute_tool(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
     handler = _TOOL_HANDLERS.get(tool.name)
     if handler is None:
         return ToolExecution(tool=tool, status="completed", summary="已完成只读工具检查", source_ids=())
-    return handler(tool, context)
+    execution = handler(tool, context)
+    # 统一做一次权限裁剪，防止单个工具实现遗漏时把越权编号发给前端。
+    filtered_ids = _filter_source_ids(tool.name, execution.source_ids, context)
+    if filtered_ids == execution.source_ids:
+        return execution
+    return ToolExecution(
+        tool=execution.tool,
+        status=execution.status,
+        summary=execution.summary,
+        source_ids=filtered_ids,
+        read_only=execution.read_only,
+    )
 
 
 def execute_plan(plan: AgentPlan, context: ToolContext) -> tuple[ToolExecution, ...]:

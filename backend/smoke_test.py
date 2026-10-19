@@ -175,12 +175,29 @@ def run_smoke_checks() -> None:
     assert "alarm-20261015-001" in diagnosis_tools.text
     assert "mock-knowledge-flow-v1.2" in diagnosis_tools.text
     assert "已读取" in diagnosis_tools.text or "已检索" in diagnosis_tools.text
+    # 明确提到二泵站时，工具层不得把三四泵站告警一并带出。
+    assert "alarm-20261015-002" not in diagnosis_tools.text
+    assert "alarm-20261015-003" not in diagnosis_tools.text
 
     # 控制边界工具只返回只读拒绝摘要，不出现写操作工具名。
     control_tools = client.post("/api/v1/chat/stream", headers=admin_headers, json={"message": "启动二泵站"})
     assert control_tools.status_code == 200
     assert "mock-readonly-policy" in control_tools.text
     assert "未生成泵组/阀门/PLC 写指令" in control_tools.text
+    assert "start_pump" not in control_tools.text
+
+    # 站点账号只能看到授权站点范围；诊断工具引用不得越权到其他站点告警。
+    station_scope = client.post(
+        "/api/v1/chat/stream",
+        headers=station_headers,
+        json={"message": "二泵站流量下降后先检查什么？"},
+    )
+    assert station_scope.status_code == 200
+    assert '"source_ids": ["pump-02"]' in station_scope.text or "pump-02" in station_scope.text
+    assert "alarm-20261015-001" in station_scope.text
+    assert "alarm-20261015-002" not in station_scope.text
+    assert "pump-04" not in station_scope.text
+    assert "可见 1 个站点" in station_scope.text
 
     unauthorized_agent = client.post(
         "/api/v1/chat/stream",
