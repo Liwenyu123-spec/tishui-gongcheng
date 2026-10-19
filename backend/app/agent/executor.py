@@ -234,9 +234,23 @@ def _execute_search_knowledge(tool: ReadOnlyTool, context: ToolContext) -> ToolE
             metric = alarm["metric"]
             break
     query = context.request.message.strip() or "泵站 异常核查"
-    hits = search_rules(query, metric=metric, limit=3)
+    station = _station_from_context(context)
+    visible = _visible_station_ids(context.user)
+    hits = search_rules(
+        query,
+        metric=metric,
+        limit=3,
+        station_id=station["id"] if station else None,
+        visible_station_ids=visible,
+    )
     if not hits and metric:
-        hits = search_rules(f"{metric} 异常核查", metric=metric, limit=3)
+        hits = search_rules(
+            f"{metric} 异常核查",
+            metric=metric,
+            limit=3,
+            station_id=station["id"] if station else None,
+            visible_station_ids=visible,
+        )
     source_ids = tuple(hit.source_id for hit in hits)
     if not hits:
         return ToolExecution(tool=tool, status="completed", summary="本地规程目录未匹配到适用规则", source_ids=())
