@@ -25,10 +25,18 @@ _REVIEW_STATUS_TRANSITIONS: dict[str, set[str]] = {
 @router.post("/reviews", response_model=Review)
 def create_review(
     payload: ReviewCreateRequest,
-    _: dict = Depends(require_roles("admin", "operator")),
+    user: dict = Depends(require_roles("admin", "operator")),
 ) -> Review:
     """创建一条待人工处理的审核记录。"""
 
+    # Agent 转办主题带有唯一请求编号；重复点击时直接返回原待办，避免生成重复审核记录。
+    if payload.subject.startswith("Agent "):
+        existing = next(
+            (item for item in _REVIEWS.values() if item.subject == payload.subject and item.status == "pending"),
+            None,
+        )
+        if existing is not None:
+            return existing
     # 使用统一 UTC 时间记录创建和更新时间，避免跨时区比较产生歧义。
     now = datetime.now(timezone.utc)
     # 新建记录固定为 pending，审核人后续通过 PATCH 接口提交结论。
@@ -41,6 +49,14 @@ def create_review(
     )
     # Mock 阶段将审核记录放入进程内字典，重启服务后会清空。
     _REVIEWS[review.id] = review
+    # 记录转人工复核的操作人，便于管理员在审计页面追踪 Agent 转办来源。
+    record_audit(
+        "create",
+        "review",
+        review.id,
+        f"创建人工复核记录：{review.subject}",
+        operator=user.get("username", "mock-admin"),
+    )
     return review
 
 

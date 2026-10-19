@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .routers.auth import router as auth_router
 from .routers.audit import router as audit_router
+from .routers.agent import router as agent_router
 from .routers.health import router as health_router
 from .routers.imports import router as imports_router
 from .routers.incidents import router as incidents_router
@@ -66,6 +67,7 @@ app.include_router(users_router)
 app.include_router(knowledge_router)
 app.include_router(imports_router)
 app.include_router(audit_router)
+app.include_router(agent_router)
 
 
 # 前端构建目录位于项目根目录的 frontend/dist；开发时可以先执行 npm run build。

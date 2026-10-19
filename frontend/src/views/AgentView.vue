@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
 
@@ -17,10 +17,83 @@ interface WorkOrderDraft {
   source: string
 }
 
+interface AgentStation {
+  id: string
+  name: string
+  status: string
+}
+
+interface AgentCitation {
+  source_type: string
+  source_id: string
+  title: string
+  detail: string
+}
+
+interface AgentAnswer {
+  request_id: string
+  intent: string
+  answer: string
+  facts: string[]
+  recommendations: string[]
+  citations: AgentCitation[]
+  source: string
+  generated_at: string
+  data_quality?: 'mock' | 'partial' | 'live' | 'stale'
+  limitations?: string[]
+  confidence?: 'low' | 'medium' | 'high'
+  pending_items?: string[]
+  time_range?: string
+  work_order_suggestion?: {
+    station_id: string
+    title: string
+    issue: string
+    suggested_action: string
+    priority: 'low' | 'medium' | 'high'
+  } | null
+}
+
+interface AgentMessage {
+  id: string
+  role: 'user' | 'ai'
+  text: string
+  evidence?: string
+  steps?: string[]
+  pending?: boolean
+}
+
 const input = ref('')
-const messages = ref([{ role: 'ai', text: '您好，我是调度辅助 Agent。当前使用 Mock 数据，只提供只读分析和建议草稿。请描述您要查询的运行问题。' }])
+const messages = ref<AgentMessage[]>([
+  {
+    id: 'welcome',
+    role: 'ai',
+    text: '您好，我是调度辅助 Agent。当前使用规则驱动的 Mock 数据，只提供只读分析和建议草稿。请描述您要查询的运行问题。',
+    evidence: '当前模式：rule-mock · 不调用大模型 · 不生成现场控制指令',
+  },
+])
+const agentLoading = ref(false)
+let agentAbortController: AbortController | null = null
+const reviewId = ref('')
+// 保存最近一次完整的 Agent 答案，工单草稿会从其中读取结构化诊断建议。
+const latestAgentAnswer = ref<AgentAnswer | null>(null)
+// 只有诊断答案带有结构化建议时，页面才显示生成工单入口。
+const canCreateWorkOrder = computed(() => Boolean(latestAgentAnswer.value?.work_order_suggestion))
+// 只有管理员和值班调度员可以创建待人工审核记录，审批负责人负责后续处理。
+const currentUserRole = (() => {
+  try {
+    return (JSON.parse(localStorage.getItem('current_user') || '{}') as { role?: string }).role || ''
+  } catch {
+    return ''
+  }
+})()
+const canTransferToReview = computed(() =>
+  ['admin', 'operator'].includes(currentUserRole) && Boolean(latestAgentAnswer.value?.pending_items?.length) && !reviewId.value,
+)
+const stations = ref<AgentStation[]>([])
+const selectedStationId = ref('')
 const workOrder = ref<WorkOrderDraft | null>(null)
 const workOrderLoading = ref(false)
+const reviewLoading = ref(false)
 const workOrders = ref<WorkOrderDraft[]>([])
 const workOrderListLoading = ref(false)
 const workOrderStatusLoading = ref<string | null>(null)
@@ -29,6 +102,7 @@ const assignmentSaving = ref(false)
 const assignmentOrder = ref<WorkOrderDraft | null>(null)
 const assignmentForm = ref({ owner: '', due_at: '' })
 const workOrderStatusNames: Record<string, string> = { draft: '草稿', assigned: '已分派', in_progress: '处理中', completed: '已完成', cancelled: '已取消' }
+const confidenceNames: Record<string, string> = { low: '低', medium: '中', high: '高' }
 
 // 加载当前账号可见的工单，站点范围由后端再次校验。
 const loadWorkOrders = async () => {
@@ -41,24 +115,144 @@ const loadWorkOrders = async () => {
     workOrderListLoading.value = false
   }
 }
-const ask = (q = input.value) => {
-  if (!q) return
-  messages.value.push({ role: 'user', text: q })
-  messages.value.push({ role: 'ai', text: '基于当前模拟数据，二泵站过去 2 小时压力波动最大。建议先核查 2 号泵入口压力、泵组电流以及渠道前段水位。该结论需要接入真实测点后复核。' })
+// 加载当前账号可见站点，后端会再次校验站点范围，前端选择只用于提供查询上下文。
+const loadStations = async () => {
+  try {
+    stations.value = await api<AgentStation[]>('/api/v1/stations')
+  } catch {
+    ElMessage.warning('站点列表接口暂不可用，Agent 将按问题内容识别站点')
+  }
+}
+const ask = async (q = input.value) => {
+  const question = q.trim()
+  // 正在请求时不允许重复提交，避免多个 SSE 流同时修改同一段对话。
+  if (!question || agentLoading.value) return
+  const token = localStorage.getItem('access_token')
+  if (!token) {
+    ElMessage.warning('请先登录后再使用 Agent 问答')
+    return
+  }
+
+  const userMessage: AgentMessage = { id: `user-${Date.now()}`, role: 'user', text: question }
+  const aiMessage = reactive<AgentMessage>({
+    id: `ai-${Date.now()}`,
+    role: 'ai',
+    text: '正在读取 Mock 数据并进行规则分析…',
+    pending: true,
+  })
+  messages.value.push(userMessage, aiMessage)
   input.value = ''
+  // 新问题开始后清空旧答案，避免在新请求期间误用上一条诊断建议生成工单。
+  latestAgentAnswer.value = null
+  reviewId.value = ''
+  // 清空当前预览；已生成的历史工单仍保留在下面的工单列表中。
+  workOrder.value = null
+  agentLoading.value = true
+  agentAbortController = new AbortController()
+
+  const handleEvent = (rawEvent: string) => {
+    const lines = rawEvent.split(/\r?\n/)
+    const eventName = lines.find(line => line.startsWith('event:'))?.slice(6).trim() || 'message'
+    const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n')
+    if (!data) return
+    if (eventName === 'start') {
+      aiMessage.text = '已定位问题，正在整理事实和引用依据…'
+      return
+    }
+    if (eventName === 'tool') {
+      const tool = JSON.parse(data) as { label?: string; status?: string }
+      if (tool.label && tool.status === 'completed') {
+        aiMessage.steps = [...(aiMessage.steps || []), tool.label]
+        aiMessage.evidence = `分析步骤：${aiMessage.steps.join(' → ')}`
+      }
+      return
+    }
+    if (eventName !== 'result') return
+    const answer = JSON.parse(data) as AgentAnswer
+    latestAgentAnswer.value = answer
+    const evidence = [
+      ...(aiMessage.steps?.length ? [`分析步骤：${aiMessage.steps.join(' → ')}`] : []),
+      ...answer.facts.map(fact => `事实：${fact}`),
+      ...answer.recommendations.map(item => `建议：${item}`),
+      ...answer.citations.map(citation => `引用：${citation.title} · ${citation.detail}`),
+      `数据质量：${answer.data_quality || 'mock'}`,
+      ...(answer.limitations || []).map(item => `限制：${item}`),
+      `置信度：${confidenceNames[answer.confidence || 'medium'] || answer.confidence || '中'}`,
+      ...(answer.pending_items || []).map(item => `待确认项：${item}`),
+      `时间范围：${answer.time_range || '当前 Mock 样本'}`,
+      `来源：${answer.source} · 意图：${answer.intent}`,
+    ].join('\n')
+    aiMessage.text = answer.answer
+    aiMessage.evidence = evidence
+    aiMessage.pending = false
+  }
+
+  try {
+    const response = await fetch('/api/v1/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ message: question, station_id: selectedStationId.value || null }),
+      signal: agentAbortController.signal,
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload && typeof payload.detail === 'string' ? payload.detail : `请求失败（${response.status}）`)
+    }
+    if (!response.body) throw new Error('浏览器不支持 SSE 响应流')
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { value, done } = await reader.read()
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+      const events = buffer.split('\n\n')
+      buffer = done ? '' : (events.pop() || '')
+      events.filter(Boolean).forEach(handleEvent)
+      if (done) break
+    }
+    if (buffer.trim()) handleEvent(buffer)
+    if (aiMessage.pending) throw new Error('Agent 没有返回完整结果')
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      // 用户主动停止时保留这条消息，但明确标记为未完成，避免误认为已得到结论。
+      aiMessage.text = '本次分析已停止，未生成完整结论。'
+      aiMessage.evidence = '可以补充问题后重新发送。'
+      aiMessage.pending = false
+      return
+    }
+    aiMessage.text = error instanceof Error ? `Agent 请求失败：${error.message}` : 'Agent 请求失败，请稍后重试'
+    aiMessage.evidence = '请确认后端已启动，并检查浏览器是否保留了当前登录 Token。'
+    aiMessage.pending = false
+    ElMessage.error('Agent 接口调用失败')
+  } finally {
+    agentLoading.value = false
+    agentAbortController = null
+  }
+}
+
+// 中止当前 SSE 请求；后端不会把未完成的回答当作有效结论保存。
+const cancelAgent = () => {
+  agentAbortController?.abort()
 }
 
 const createWorkOrder = async () => {
+  const suggestion = latestAgentAnswer.value?.work_order_suggestion
+  if (!suggestion) {
+    ElMessage.warning('请先提问诊断类问题，获取可生成工单的建议')
+    return
+  }
   workOrderLoading.value = true
   try {
     workOrder.value = await api<WorkOrderDraft>('/api/v1/work-orders/draft', {
       method: 'POST',
       body: JSON.stringify({
-        title: '二泵站流量下降核查',
-        station_id: 'pump-02',
-        issue: '二泵站过去 2 小时压力波动较大，出水流量存在下降风险。',
-        suggested_action: '核查 2 号泵入口压力、泵组电流和渠道前段水位。',
-        priority: 'medium',
+        // 这些字段来自最近一次诊断答案，后端仍会再次校验站点权限。
+        title: suggestion.title,
+        station_id: suggestion.station_id,
+        issue: suggestion.issue,
+        suggested_action: suggestion.suggested_action,
+        priority: suggestion.priority,
       }),
     })
     workOrders.value = [workOrder.value, ...workOrders.value.filter(item => item.id !== workOrder.value?.id)]
@@ -67,6 +261,32 @@ const createWorkOrder = async () => {
     ElMessage.warning('工单接口暂不可用，请稍后重试')
   } finally {
     workOrderLoading.value = false
+  }
+}
+
+// 将当前答案和待确认项提交为人工审核记录；接口只创建待审核事项，不执行现场控制。
+const transferToReview = async () => {
+  const answer = latestAgentAnswer.value
+  if (!answer || !answer.pending_items?.length || !canTransferToReview.value) {
+    ElMessage.warning('当前回答没有可转交的待确认项')
+    return
+  }
+  reviewLoading.value = true
+  try {
+    const review = await api<{ id: string }>('/api/v1/reviews', {
+      method: 'POST',
+      body: JSON.stringify({
+        subject: `Agent ${answer.intent} 复核 · ${answer.request_id}`,
+        recommendation: [answer.answer, ...answer.pending_items.map(item => `待确认：${item}`)].join('；'),
+        comment: '由 Agent 待确认项转交人工复核。',
+      }),
+    })
+    reviewId.value = review.id
+    ElMessage.success(`已提交人工复核：${review.id}`)
+  } catch {
+    ElMessage.error('人工复核提交失败，请确认当前账号具备调度权限')
+  } finally {
+    reviewLoading.value = false
   }
 }
 
@@ -124,7 +344,10 @@ const saveAssignment = async () => {
 }
 
 // 页面进入时加载已生成的 Mock 工单。
-onMounted(loadWorkOrders)
+onMounted(() => {
+  loadWorkOrders()
+  loadStations()
+})
 
 const formatTime = (value: string) => value.slice(11, 16)
 </script>
@@ -144,14 +367,27 @@ const formatTime = (value: string) => value.slice(11, 16)
         <el-tag size="small" type="success">协调 Agent</el-tag>
         <span class="muted" style="font-size:11px;margin-left:10px">8 个专业 Agent 可协作</span>
       </div>
-      <div v-for="m in messages" :key="m.text+m.role" :class="['message',m.role==='user'?'user':'ai']">
+      <div v-for="m in messages" :key="m.id" :class="['message',m.role==='user'?'user':'ai']">
         <b>{{m.role==='user'?'你':'Agent'}}</b>
         <div>{{m.text}}</div>
-        <div v-if="m.role==='ai'" class="evidence">证据：telemetry_mock · 二泵站 · 过去 2 小时<br>规程：二泵站运行规程 v1.2 · 第三章（现行）</div>
+        <div v-if="m.role==='ai' && m.steps?.length" class="analysis-steps">
+          <span class="analysis-steps__title">分析步骤</span>
+          <span v-for="(step, index) in m.steps" :key="`${m.id}-step-${index}`" class="analysis-step">
+            {{ index + 1 }}. {{ step }}
+          </span>
+        </div>
+        <div v-if="m.role==='ai' && m.evidence" class="evidence" style="white-space:pre-line">{{m.evidence}}</div>
+      </div>
+      <div style="padding:12px 18px 0;display:flex;gap:8px;align-items:center">
+        <span class="muted" style="font-size:11px;white-space:nowrap">分析站点</span>
+        <el-select v-model="selectedStationId" clearable filterable placeholder="按问题内容识别" style="width:210px">
+          <el-option v-for="station in stations" :key="station.id" :label="`${station.name} · ${station.status}`" :value="station.id" />
+        </el-select>
       </div>
       <div style="padding:12px 18px;display:flex;gap:8px">
-        <el-input v-model="input" placeholder="例如：过去 2 小时哪个泵站压力波动最大？" @keyup.enter="ask()" />
-        <el-button type="primary" @click="ask()">发送</el-button>
+        <el-input v-model="input" :disabled="agentLoading" placeholder="例如：过去 2 小时哪个泵站压力波动最大？" @keyup.enter="ask()" />
+        <el-button type="primary" :loading="agentLoading" :disabled="agentLoading" @click="ask()">发送</el-button>
+        <el-button v-if="agentLoading" type="warning" plain @click="cancelAgent">停止分析</el-button>
       </div>
     </div>
 
@@ -160,7 +396,15 @@ const formatTime = (value: string) => value.slice(11, 16)
       <div class="table-wrap">
         <el-button v-for="q in ['现在四泵站出水流量是多少？','过去 2 小时哪个泵站压力波动最大？','二泵站流量下降后先核查什么？']" :key="q" style="width:100%;margin-bottom:9px;text-align:left" @click="ask(q)">{{q}}</el-button>
         <div class="warning" style="margin-top:8px">控制边界：涉及启动/停止泵、切阀或压力设定的请求将被拒绝，不生成控制命令。</div>
-        <el-button class="button-stable button-stable--block" type="primary" plain :loading="workOrderLoading" style="width:100%;margin-top:12px" @click="createWorkOrder">生成核查工单草稿</el-button>
+        <template v-if="canCreateWorkOrder">
+          <el-button class="button-stable button-stable--block" type="primary" plain :loading="workOrderLoading" style="width:100%;margin-top:12px" @click="createWorkOrder">生成核查工单草稿</el-button>
+          <p class="muted work-order-hint">当前按钮使用最近一次诊断建议填充工单。</p>
+        </template>
+        <template v-if="canTransferToReview">
+          <el-button class="button-stable button-stable--block" type="warning" plain :loading="reviewLoading" style="width:100%;margin-top:10px" @click="transferToReview">提交人工复核</el-button>
+          <p class="muted work-order-hint">只创建审核待办，不执行现场控制。</p>
+          <p v-if="reviewId" class="muted work-order-hint">审核记录：{{ reviewId }}</p>
+        </template>
         <div v-if="workOrder" class="panel" style="margin-top:14px;padding:12px">
           <div class="panel-head"><h3>工单草稿</h3><span>{{ workOrderStatusNames[workOrder.status] || workOrder.status }} · {{ workOrder.source === 'mock' ? '后端 Mock' : workOrder.source }}</span></div>
           <p class="muted">{{ workOrder.title }} · {{ formatTime(workOrder.created_at) }}</p>
@@ -204,4 +448,8 @@ const formatTime = (value: string) => value.slice(11, 16)
 .work-order-row:last-child { border-bottom:0; }
 .work-order-row p { margin:4px 0 0; }
 .work-order-actions { display:flex; align-items:center; gap:4px; flex-wrap:wrap; justify-content:flex-end; }
+.work-order-hint { margin:8px 0 0; font-size:11px; }
+.analysis-steps { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; align-items:center; }
+.analysis-steps__title { color:#5be0ca; font-size:11px; }
+.analysis-step { padding:3px 7px; border:1px solid #265464; border-radius:999px; color:#9bc5ca; background:#0b2431; font-size:10px; }
 </style>

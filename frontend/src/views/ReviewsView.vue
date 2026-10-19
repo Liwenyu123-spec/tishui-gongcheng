@@ -49,12 +49,20 @@ const pendingCount = computed(() => rows.value.filter(row => row.status === '待
 // 待审核和待补充记录都可以继续给出审核结论；已通过或已驳回记录保持只读。
 const canReviewRow = (row: ReviewRow) => row.status === '待审核' || row.status === '待补充'
 
+// 后端审核时间统一保存为带时区的 UTC，列表和详情统一转换为浏览器本地时间。
+const formatLocalDateTime = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 const formatReview = (review: ApiReview): ReviewRow => ({
   id: review.id,
   title: review.subject,
   recommendation: review.recommendation,
   comment: review.comment,
-  time: review.created_at.slice(11, 16),
+  time: formatLocalDateTime(review.created_at),
   status: statusNames[review.status] || review.status,
   source: review.source === 'mock' ? '后端 Mock' : review.source,
 })
@@ -157,7 +165,7 @@ onMounted(loadReviews)
       <el-table :data="rows">
         <el-table-column prop="title" label="审核主题" min-width="210" />
         <el-table-column prop="recommendation" label="建议结论" min-width="300" />
-        <el-table-column prop="time" label="提交时间" width="100" />
+        <el-table-column prop="time" label="提交时间" width="180" />
         <el-table-column prop="source" label="数据来源" width="120" />
         <el-table-column prop="status" label="状态" width="100" />
         <el-table-column label="操作" width="330">
@@ -177,6 +185,8 @@ onMounted(loadReviews)
     <div v-loading="detailLoading" v-if="selectedDetail">
       <p><strong>{{ selectedDetail.subject }}</strong></p>
       <p>状态：{{ statusNames[selectedDetail.status] || selectedDetail.status }}</p>
+      <p>创建时间：{{ formatLocalDateTime(selectedDetail.created_at) }}</p>
+      <p>更新时间：{{ formatLocalDateTime(selectedDetail.updated_at) }}</p>
       <p>建议结论：{{ selectedDetail.recommendation }}</p>
       <p>补充说明：{{ selectedDetail.comment || '暂无' }}</p>
       <p class="muted">记录编号：{{ selectedDetail.id }}</p>

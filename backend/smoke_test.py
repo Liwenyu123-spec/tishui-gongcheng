@@ -44,6 +44,29 @@ def run_smoke_checks() -> None:
     login = expect("管理员登录", client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"}), 200)
     assert login["user"]["role"] == "admin"
 
+    # Agent 待确认项可转为人工审核待办；创建记录应保留操作人并可被审核员查询。
+    review = expect(
+        "人工复核创建",
+        client.post(
+            "/api/v1/reviews",
+            headers=operator_headers,
+            json={"subject": "Agent 诊断复核", "recommendation": "现场确认泵组状态", "comment": "Mock 转人工"},
+        ),
+        200,
+    )
+    assert review["status"] == "pending"
+    duplicate_review = expect(
+        "重复人工复核幂等",
+        client.post(
+            "/api/v1/reviews",
+            headers=operator_headers,
+            json={"subject": "Agent 诊断复核", "recommendation": "现场确认泵组状态", "comment": "Mock 转人工"},
+        ),
+        200,
+    )
+    assert duplicate_review["id"] == review["id"]
+    expect("审核员查询人工复核", client.get("/api/v1/reviews", headers=reviewer_headers), 200)
+
     # 管理员可以查看全部站点；站点账号只能访问授权的二泵站。
     stations = expect("管理员站点列表", client.get("/api/v1/stations", headers=admin_headers), 200)
     assert len(stations) >= 1
@@ -92,8 +115,44 @@ def run_smoke_checks() -> None:
     escalated = expect("通知升级", client.post(f"/api/v1/notifications/{notification['id']}/escalate", headers=operator_headers), 200)
     acknowledged = expect("升级通知确认", client.post(f"/api/v1/notifications/{escalated['id']}/ack", headers=operator_headers), 200)
     assert acknowledged["status"] == "acknowledged"
+
+    # Agent 诊断应读取同一站点的未关闭事件和平台通知，并把它们作为引用返回。
+    agent_with_event = client.post(
+        "/api/v1/chat/stream",
+        headers=operator_headers,
+        json={"message": "二泵站流量下降后先检查什么？"},
+    )
+    assert agent_with_event.status_code == 200
+    assert incident["id"] in agent_with_event.text
+    assert escalated["id"] in agent_with_event.text
+
     resolved = expect("事件关闭", client.post(f"/api/v1/incidents/{incident['id']}/resolve", headers=operator_headers), 200)
     assert resolved["status"] == "resolved"
+
+    # 规则驱动 Agent 只读取 Mock 数据；SSE 必须按 start、result、done 顺序结束。
+    agent_questions = [
+        ("现在二泵站的压力是多少？", '"intent": "status"'),
+        ("过去两小时哪个泵站波动最大？", '"intent": "trend"'),
+        ("二泵站流量下降后先检查什么？", '"intent": "diagnosis"'),
+        ("当前哪个片区供需缺口最大？", '"intent": "supply"'),
+        ("启动二泵站", '"intent": "control_rejected"'),
+    ]
+    for question, expected_intent in agent_questions:
+        agent_response = client.post("/api/v1/chat/stream", headers=admin_headers, json={"message": question})
+        assert agent_response.status_code == 200
+        assert expected_intent in agent_response.text
+        assert '"confidence":' in agent_response.text
+        assert '"pending_items":' in agent_response.text
+        assert '"time_range":' in agent_response.text
+        assert "event: start" in agent_response.text
+        assert "event: result" in agent_response.text
+        assert "event: done" in agent_response.text
+    unauthorized_agent = client.post(
+        "/api/v1/chat/stream",
+        headers=station_headers,
+        json={"message": "现在四泵站的压力是多少？"},
+    )
+    assert unauthorized_agent.status_code == 403
 
     # 管理员可以查询前面操作产生的审计记录，普通调度员不能查询审计接口。
     audit_events = expect("审计查询", client.get("/api/v1/audit-events", headers=admin_headers), 200)

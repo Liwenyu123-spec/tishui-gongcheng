@@ -2,24 +2,29 @@
 
 from typing import Annotated, Any, Callable
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, HTTPException, Security, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .data.users import _TOKENS, _USERS
 from .services.audit import record_audit
 
+# 使用 FastAPI 标准 Bearer 方案，让 Swagger 的 Authorize 按钮可以自动注入请求头。
+bearer_scheme = HTTPBearer(auto_error=False)
 
-def get_current_username(authorization: Annotated[str | None, Header()] = None) -> str:
+def get_current_username(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Security(bearer_scheme)] = None,
+) -> str:
     """解析并校验 Authorization: Bearer <token> 请求头。"""
 
-    # 没有 Authorization，或请求头不是 Bearer 格式时，先拒绝请求。
-    if not authorization or not authorization.lower().startswith("bearer "):
+    # 没有 Bearer 凭据时，统一返回认证错误，避免受保护接口泄露数据。
+    if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="缺少 Bearer Token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    # 去掉 Bearer 前缀后查找 Mock Token 对应的用户名。
-    username = _TOKENS.get(authorization[7:].strip())
+    # HTTPBearer 已经解析 Bearer 前缀，这里只用凭据值查找 Mock Token 对应的用户名。
+    username = _TOKENS.get(credentials.credentials.strip())
     if not username:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

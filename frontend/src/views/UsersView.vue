@@ -66,8 +66,8 @@ const auditVisible = ref(false)
 const auditLoading = ref(false)
 const auditRows = ref<AuditRow[]>([])
 const accessDenied = ref(false)
-const auditActionNames: Record<string, string> = { create: '创建', update: '修改', import: '导入', acknowledge: '确认', approved: '通过', rejected: '驳回', supplement: '退回补充' }
-const auditResourceNames: Record<string, string> = { user: '用户', knowledge: '知识文档', alarm: '告警', review: '审核记录' }
+const auditActionNames: Record<string, string> = { create: '创建', update: '修改', import: '导入', acknowledge: '确认', approved: '通过', rejected: '驳回', supplement: '退回补充', agent_query: 'Agent 查询' }
+const auditResourceNames: Record<string, string> = { user: '用户', knowledge: '知识文档', alarm: '告警', review: '审核记录', agent_run: 'Agent 运行' }
 
 const pendingCount = computed(() => rows.value.length)
 
@@ -86,6 +86,14 @@ const formatUser = (user: ApiUser, source = '后端 Mock 数据'): UserRow => ({
   last: '—',
   source,
 })
+
+// 后端审计时间统一使用带时区的 UTC，页面转换为当前浏览器本地时间再展示。
+const formatAuditTime = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
 
 const loadUsers = async () => {
   loading.value = true
@@ -169,7 +177,7 @@ const viewAudit = async () => {
       action: auditActionNames[event.action] || event.action,
       resource: auditResourceNames[event.resource] || event.resource,
       operator: event.operator,
-      time: event.occurred_at.slice(0, 16).replace('T', ' '),
+      time: formatAuditTime(event.occurred_at),
       detail: event.detail,
       source: event.source === 'mock' ? '后端 Mock' : event.source,
     }))
@@ -190,7 +198,10 @@ onMounted(loadUsers)
       <h2>用户与权限</h2>
       <p>最小权限原则 · 站点/片区范围可配置 · 操作写入审计日志 · {{ sourceLabel }}</p>
     </div>
-    <el-button v-if="!accessDenied" class="button-stable button-stable--md" type="primary" :loading="loading" @click="openCreate">新增用户</el-button>
+    <div v-if="!accessDenied" style="display:flex;gap:8px">
+      <el-button class="button-stable button-stable--md" plain :loading="auditLoading" @click="viewAudit">查看审计记录</el-button>
+      <el-button class="button-stable button-stable--md" type="primary" :loading="loading" @click="openCreate">新增用户</el-button>
+    </div>
   </div>
 
   <div v-if="accessDenied" class="warning">当前账号没有用户管理权限。请使用管理员账号登录，或联系系统管理员配置权限。</div>
