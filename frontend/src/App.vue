@@ -182,6 +182,19 @@ const escalateNotification = async (item: NotificationItem) => {
   }
 }
 
+const retryNotification = async (item: NotificationItem) => {
+  notificationActionKey.value = `retry:${item.id}`
+  try {
+    const updated = await api<NotificationItem>(`/api/v1/notifications/${encodeURIComponent(item.id)}/retry`, { method: 'POST' })
+    Object.assign(item, updated)
+    ElMessage.success('失败通知已重新发送')
+  } catch {
+    ElMessage.error('通知重试失败，请确认通知仍处于发送失败状态')
+  } finally {
+    notificationActionKey.value = ''
+  }
+}
+
 const resolveNotificationIncident = async (item: NotificationItem) => {
   notificationActionKey.value = `resolve:${item.id}`
   try {
@@ -231,8 +244,9 @@ onBeforeUnmount(() => {
     <div v-for="item in notifications" :key="item.id" class="panel" style="padding:14px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><strong>{{ item.incident_id }}</strong><span :class="['tag', item.status === 'sent' ? 'tag-amber' : item.status === 'failed' ? 'tag-red' : 'tag-green']">{{ notificationStatusName[item.status] || item.status }}</span></div>
       <p class="muted" style="margin:8px 0 0">事件状态：{{ incidentStatusName[item.incident_status] || item.incident_status }} · 渠道：{{ item.channel }} · 接收人：{{ item.recipient }} · {{ formatNotificationTime(item.sent_at) }}</p>
+       <p v-if="item.status === 'failed'" class="muted" style="margin:8px 0 0">失败原因：{{ item.failure_reason || '未提供' }} · 已重试 {{ item.retry_count }} 次</p>
       <p v-if="item.escalated_at" class="muted" style="margin:8px 0 0">已升级给备用联系人</p>
-      <div v-if="canManageNotifications" style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px"><el-button v-if="item.status === 'sent' && !item.escalated_at" class="button-stable button-stable--sm" size="small" :loading="notificationActionKey === `escalate:${item.id}`" :disabled="Boolean(notificationActionKey)" @click="escalateNotification(item)">升级通知</el-button><el-button v-if="item.status === 'sent'" class="button-stable button-stable--sm" size="small" type="primary" :loading="notificationActionKey === `ack:${item.id}`" :disabled="Boolean(notificationActionKey)" @click="acknowledgeNotification(item)">确认通知</el-button><el-button v-if="item.incident_status !== 'resolved'" class="button-stable button-stable--sm" size="small" type="success" plain :loading="notificationActionKey === `resolve:${item.id}`" :disabled="Boolean(notificationActionKey)" @click="resolveNotificationIncident(item)">关闭事件</el-button></div>
+       <div v-if="canManageNotifications" style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px"><el-button v-if="item.status === 'failed'" class="button-stable button-stable--sm" size="small" type="warning" :loading="notificationActionKey === `retry:${item.id}`" :disabled="Boolean(notificationActionKey)" @click="retryNotification(item)">重试发送</el-button><el-button v-if="item.status === 'sent' && !item.escalated_at" class="button-stable button-stable--sm" size="small" :loading="notificationActionKey === `escalate:${item.id}`" :disabled="Boolean(notificationActionKey)" @click="escalateNotification(item)">升级通知</el-button><el-button v-if="item.status === 'sent'" class="button-stable button-stable--sm" size="small" type="primary" :loading="notificationActionKey === `ack:${item.id}`" :disabled="Boolean(notificationActionKey)" @click="acknowledgeNotification(item)">确认通知</el-button><el-button v-if="item.incident_status !== 'resolved'" class="button-stable button-stable--sm" size="small" type="success" plain :loading="notificationActionKey === `resolve:${item.id}`" :disabled="Boolean(notificationActionKey)" @click="resolveNotificationIncident(item)">关闭事件</el-button></div>
     </div>
   </el-dialog>
 </template>
