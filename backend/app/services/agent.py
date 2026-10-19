@@ -15,6 +15,7 @@ from ..data.monitoring import _ALARMS, _STATIONS
 from ..data.supply import _SUPPLY_AREAS
 from ..dependencies import user_has_station_access
 from ..schemas.agent import AgentAnswer, AgentCitation, AgentChatRequest, AgentIntent, AgentWorkOrderSuggestion
+from .analysis import compare_variation, latest_telemetry, metric_label
 from .knowledge_search import search_rules
 
 
@@ -27,9 +28,6 @@ _STATION_ALIASES = {
     "四泵站": "pump-04",
     "平定入口": "pingding-inlet",
 }
-
-# 监控路由使用同一固定时间序列；Agent 返回该时间作为 Mock 测点观测时间。
-_MOCK_TELEMETRY_AT = datetime(2026, 10, 15, 10, 0, tzinfo=timezone.utc)
 
 def _now() -> datetime:
     """返回带时区的 UTC 时间，保证 SSE 返回时间格式统一。"""
@@ -97,13 +95,12 @@ def _intent(message: str) -> AgentIntent:
 
 
 def _telemetry_value(station: dict, metric: str) -> tuple[float, str]:
-    """生成与监控接口一致的确定性 Mock 测点值。"""
+    """从统一的只读分析服务取得最新 Mock 测点值。"""
 
-    base_values = {"flow": (1120.0, "m³/h"), "pressure": (0.72, "MPa"), "level": (3.7, "m"), "energy": (184.0, "kWh")}
-    value, unit = base_values[metric]
-    # 不同站点使用稳定偏移，便于 Agent 回答具有区分度。
-    offset = (station["sequence"] - 1) * 18 if metric == "flow" else (station["sequence"] - 1) * 0.02
-    return round(value - offset, 3), unit
+    sample = latest_telemetry(station, metric)
+    if sample is None:
+        raise ValueError(f"站点不支持测点: {metric}")
+    return sample.value, sample.unit
 
 
 def _event_context(station_id: str, user: dict) -> tuple[list[str], list[str], list[AgentCitation]]:
@@ -169,20 +166,33 @@ def _answer_for_status(message: str, user: dict, request_id: str, now: datetime,
             generated_at=now,
         )
     metric = "pressure" if "压力" in message else "level" if "水位" in message else "energy" if "能耗" in message else "flow"
-    value, unit = _telemetry_value(station, metric)
-    title = f"{station['name']} {metric} Mock 测点"
+    sample = latest_telemetry(station, metric)
+    if sample is None:
+        return AgentAnswer(
+            request_id=request_id,
+            intent="status",
+            answer=f"{station['name']}没有可用的{metric_label(metric)}测点，暂时不能给出数值。",
+            facts=[f"站点：{station['name']}（{station['id']}）", f"请求指标：{metric_label(metric)}"],
+            recommendations=["请确认该站点的测点配置或改查其他指标。"],
+            confidence="low",
+            pending_items=[f"补充{station['name']}的{metric_label(metric)}测点配置"],
+            time_range=_time_range_label(message),
+            generated_at=now,
+        )
+    value, unit = sample.value, sample.unit
+    title = f"{station['name']} {metric_label(metric)} Mock 测点"
     return AgentAnswer(
         request_id=request_id,
         intent="status",
-        answer=f"{station['name']}当前{metric}为 {value} {unit}，站点状态为 {station['status']}。",
+        answer=f"{station['name']}当前{metric_label(metric)}为 {value} {unit}，站点状态为 {station['status']}。",
         facts=[f"站点：{station['name']}（{station['id']}）", f"{metric}：{value} {unit}", f"数据来源：Mock 遥测"],
         recommendations=["当前结果仅用于联调，请在接入真实测点后复核。"],
-        citations=[AgentCitation(source_type="telemetry", source_id=station["id"], title=title, detail="由现有监控 Mock 数据按固定规则生成")],
+        citations=[AgentCitation(source_type="telemetry", source_id=station["id"], title=title, detail=f"观测时间：{sample.observed_at.isoformat()}；质量：{sample.quality}")],
         confidence="medium",
         pending_items=["接入真实遥测后复核数据时间、测点质量和现场状态"],
         time_range=_time_range_label(message),
-        observed_at=_MOCK_TELEMETRY_AT,
-        freshness=_freshness(_MOCK_TELEMETRY_AT, now),
+        observed_at=sample.observed_at,
+        freshness=_freshness(sample.observed_at, now),
         generated_at=now,
     )
 
