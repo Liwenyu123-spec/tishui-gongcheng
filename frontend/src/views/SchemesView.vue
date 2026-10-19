@@ -47,7 +47,7 @@ const mockSchemes: SchemeInput[] = [
   { scheme_id: 'scheme-c', name: '方案 C · 峰时补水', supply: 14100, delay_minutes: 38, energy: 1080, risk: 'high' },
 ]
 const riskNames: Record<string, string> = { high: '高', medium: '中', low: '低' }
-const schemes = ref<Scheme[]>(mockSchemes.map(scheme => ({ ...scheme })))
+const schemes = ref<Scheme[]>([])
 const selectedSchemeId = ref('')
 const recommendation = ref('当前显示本地 Mock 数据')
 const loading = ref(false)
@@ -68,6 +68,15 @@ const loadComparison = async () => {
     comparisonMeta.value = result
     sourceLabel.value = result.source === 'mock' ? '后端 Mock 数据' : result.source
   } catch {
+    schemes.value = mockSchemes.map(scheme => ({
+      ...scheme,
+      load_percent: scheme.load_percent || 0,
+      supply_gap: 0,
+      feasible: true,
+      constraint_violations: [],
+      score: 0,
+      calculation_basis: [],
+    }))
     sourceLabel.value = '本地 Mock 数据'
     ElMessage.warning('方案比较接口暂不可用，当前显示本地 Mock 数据')
   } finally {
