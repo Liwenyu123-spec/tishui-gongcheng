@@ -5,7 +5,7 @@
 """
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -73,6 +73,14 @@ def _time_range_label(message: str, default: str = "当前 Mock 样本") -> str:
     if "最近" in message:
         return "最近一段 Mock 样本"
     return default
+
+
+def _freshness(observed_at: datetime | None, now: datetime) -> str:
+    """按一小时阈值标记观测数据新鲜度，避免 Mock 旧样本伪装成实时数据。"""
+
+    if observed_at is None:
+        return "unknown"
+    return "stale" if now - observed_at > timedelta(hours=1) else "fresh"
 
 
 def _visible_stations(user: dict) -> list[dict]:
@@ -198,6 +206,7 @@ def _answer_for_status(message: str, user: dict, request_id: str, now: datetime,
         pending_items=["接入真实遥测后复核数据时间、测点质量和现场状态"],
         time_range=_time_range_label(message),
         observed_at=_MOCK_TELEMETRY_AT,
+        freshness=_freshness(_MOCK_TELEMETRY_AT, now),
         generated_at=now,
     )
 
@@ -231,6 +240,7 @@ def _answer_for_trend(message: str, user: dict, request_id: str, now: datetime, 
         pending_items=["确认趋势时间窗内的原始测点和采样完整性"],
         time_range=_time_range_label(message),
         observed_at=alarm["occurred_at"],
+        freshness=_freshness(alarm["occurred_at"], now),
         generated_at=now,
     )
 
@@ -273,6 +283,7 @@ def _answer_for_diagnosis(message: str, user: dict, request_id: str, now: dateti
         pending_items=["现场确认泵组运行状态和下游压力", "接入真实测点和维修历史后复核诊断"],
         time_range=_time_range_label(message),
         observed_at=alarm["occurred_at"],
+        freshness=_freshness(alarm["occurred_at"], now),
         generated_at=now,
     )
 
