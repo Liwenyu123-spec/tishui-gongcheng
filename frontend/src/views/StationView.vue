@@ -92,6 +92,7 @@ const reportForm = ref({
   level: 'medium',
   description: '',
   deduplicationKey: '',
+  simulateDeliveryFailure: false,
 })
 const stationIds = computed<Record<string, string>>(() => Object.fromEntries(stationRecords.value.map(item => [item.name, item.id])))
 const selectedStationId = computed(() => stationIds.value[station.value] || fallbackStationIds[station.value])
@@ -202,6 +203,7 @@ const openIncidentReport = () => {
     level: 'medium',
     description: '',
     deduplicationKey: '',
+    simulateDeliveryFailure: false,
   }
   reportVisible.value = true
 }
@@ -222,6 +224,7 @@ const submitIncidentReport = async () => {
         description: reportForm.value.description.trim(),
         reported_by: currentUser.username || 'station-operator',
         deduplication_key: reportForm.value.deduplicationKey.trim() || undefined,
+        simulate_delivery_failure: reportForm.value.simulateDeliveryFailure,
       }),
     })
     reportVisible.value = false
@@ -258,6 +261,7 @@ onBeforeUnmount(() => {
       <el-form-item label="严重等级"><el-select v-model="reportForm.level" style="width:100%"><el-option label="一般" value="low" /><el-option label="重要" value="medium" /><el-option label="严重" value="high" /><el-option label="紧急" value="critical" /></el-select></el-form-item>
       <el-form-item label="问题描述"><el-input v-model="reportForm.description" type="textarea" :rows="4" placeholder="请描述现场现象、发生时间和已采取的措施" /></el-form-item>
       <el-form-item label="事件指纹"><el-input v-model="reportForm.deduplicationKey" placeholder="可选；相同故障重复上报时用于合并通知" /></el-form-item>
+      <el-form-item label="通知测试"><el-checkbox v-model="reportForm.simulateDeliveryFailure">模拟通知发送失败（Mock）</el-checkbox></el-form-item>
     </el-form>
     <template #footer><el-button @click="reportVisible = false">取消</el-button><el-button class="button-stable button-stable--md" type="warning" :loading="reportSubmitting" @click="submitIncidentReport">提交上报</el-button></template>
   </el-dialog>
