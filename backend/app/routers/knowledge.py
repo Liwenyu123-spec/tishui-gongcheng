@@ -17,11 +17,18 @@ router = APIRouter(prefix="/api/v1", tags=["知识库"])
 
 
 @router.get("/knowledge", response_model=list[KnowledgeDocument])
-def knowledge(_: dict = Depends(get_current_user)) -> list[KnowledgeDocument]:
+def knowledge(user: dict = Depends(get_current_user)) -> list[KnowledgeDocument]:
     """返回已导入知识文档的元数据。"""
 
-    # 只返回当前进程内的元数据，正文不会从 Mock 存储中返回。
-    return list(_KNOWLEDGE.values())
+    visible_station_ids = {
+        station["id"] for station in _STATIONS if user_has_station_access(user, station["id"])
+    }
+    # 只返回当前账号可见范围内的元数据，正文不会从 Mock 存储中返回。
+    return [
+        document
+        for document in _KNOWLEDGE.values()
+        if not document.station_ids or set(document.station_ids).intersection(visible_station_ids)
+    ]
 
 
 @router.get("/knowledge/search", response_model=KnowledgeSearchResponse)
@@ -51,7 +58,7 @@ def search_knowledge(
 
 
 @router.get("/knowledge/{document_id}", response_model=KnowledgeDocument)
-def knowledge_detail(document_id: str, _: dict = Depends(get_current_user)) -> KnowledgeDocument:
+def knowledge_detail(document_id: str, user: dict = Depends(get_current_user)) -> KnowledgeDocument:
     """按文档编号查询知识文档元数据。"""
 
     # 详情接口仍只返回元数据，不把导入正文暴露给当前 Mock API。
@@ -59,6 +66,11 @@ def knowledge_detail(document_id: str, _: dict = Depends(get_current_user)) -> K
     if document is None:
         # 文档编号不存在时返回 404，避免返回一个虚构的空文档。
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识文档不存在")
+    visible_station_ids = {
+        station["id"] for station in _STATIONS if user_has_station_access(user, station["id"])
+    }
+    if document.station_ids and not set(document.station_ids).intersection(visible_station_ids):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权查看该站点资料")
     return document
 
 
