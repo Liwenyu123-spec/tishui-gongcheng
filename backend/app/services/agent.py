@@ -198,35 +198,50 @@ def _answer_for_status(message: str, user: dict, request_id: str, now: datetime,
 
 
 def _answer_for_trend(message: str, user: dict, request_id: str, now: datetime, requested_station_id: str | None) -> AgentAnswer:
-    # 选择站点时只分析该站点；未选择时保留跨站点趋势排序行为。
+    # 选择站点时只分析该站点；未选择时比较当前账号可见的全部站点。
     if requested_station_id is not None:
         selected_station = _find_station(message, requested_station_id, user)
-        visible_ids = {selected_station["id"]} if selected_station else set()
+        stations = [selected_station] if selected_station else []
     else:
-        visible_ids = {station["id"] for station in _visible_stations(user)}
-    alarms = [alarm for alarm in _ALARMS if alarm["station_id"] in visible_ids]
-    alarm = max(alarms, key=lambda item: {"high": 3, "medium": 2, "low": 1}.get(item["level"], 0), default=None)
-    if alarm is None:
+        stations = _visible_stations(user)
+    metric = "flow" if "流量" in message else "level" if "水位" in message else "energy" if "能耗" in message else "pressure"
+    comparisons = compare_variation(stations, metric)
+    if not comparisons:
         return AgentAnswer(
             request_id=request_id,
             intent="trend",
-            answer="当前可见范围没有可分析的告警或趋势样本。",
-            pending_items=["补充有效时间范围或等待新的遥测、告警样本"],
+            answer=f"当前可见范围没有可分析的{metric_label(metric)}趋势样本。",
+            pending_items=[f"补充有效时间范围或等待新的{metric_label(metric)}遥测样本"],
             generated_at=now,
         )
-    context_facts, context_recommendations, context_citations = _event_context(alarm["station_id"], user)
+    top = comparisons[0]
+    station = next(item for item in stations if item["id"] == top["station_id"])
+    context_facts, context_recommendations, context_citations = _event_context(top["station_id"], user)
+    telemetry_citations = [
+        AgentCitation(
+            source_type="telemetry",
+            source_id=item["station_id"],
+            title=f"{item['station_name']} {metric_label(metric)}趋势",
+            detail=f"最大值 {item['maximum']} {item['unit']}，最小值 {item['minimum']} {item['unit']}，波动范围 {item['variation']} {item['unit']}",
+        )
+        for item in comparisons
+    ]
+    comparison_facts = [
+        f"{item['station_name']}：波动范围 {item['variation']} {item['unit']}，最新值 {item['latest']} {item['unit']}"
+        for item in comparisons[:3]
+    ]
     return AgentAnswer(
         request_id=request_id,
         intent="trend",
-        answer=f"当前 Mock 样本中，{alarm['station_name']} 的 {alarm['metric']} 波动风险最高，告警等级为 {alarm['level']}。",
-        facts=[f"告警值：{alarm['value']} {alarm['unit']}", f"阈值：{alarm['threshold']}", f"告警状态：{alarm['status']}"] + context_facts,
-        recommendations=["建议查看该站点最近遥测，并核对泵组运行记录。"] + context_recommendations,
-        citations=[AgentCitation(source_type="alarm", source_id=alarm["id"], title=f"{alarm['station_name']} {alarm['metric']} 告警", detail=alarm["description"])] + context_citations,
+        answer=f"按当前 Mock 时间序列的最大值减最小值计算，{top['station_name']}的{metric_label(metric)}波动最大，范围为 {top['variation']} {top['unit']}。",
+        facts=[f"分析指标：{metric_label(metric)}", f"分析站点数：{len(comparisons)}", *comparison_facts] + context_facts,
+        recommendations=[f"建议优先核对{station['name']}的原始测点、采样完整性和泵组运行记录。"] + context_recommendations,
+        citations=telemetry_citations + context_citations,
         confidence="medium",
-        pending_items=["确认趋势时间窗内的原始测点和采样完整性"],
+        pending_items=["确认趋势时间窗内的原始测点、单位和采样完整性", "当前结果仍是 Mock 样本，不能替代现场趋势判断"],
         time_range=_time_range_label(message),
-        observed_at=alarm["occurred_at"],
-        freshness=_freshness(alarm["occurred_at"], now),
+        observed_at=top["observed_at"],
+        freshness=_freshness(top["observed_at"], now),
         generated_at=now,
     )
 
