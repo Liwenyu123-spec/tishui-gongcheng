@@ -263,7 +263,11 @@ const updateReportStatus = async (status: 'reviewed' | 'archived') => {
 }
 
 // 统一生成当前报告的 Markdown 文本，复制和下载操作共用同一份内容。
-const buildMarkdown = () => `# ${report.value.title}\n\n- 日期：${report.value.report_date}\n- 状态：${statusNames[report.value.status] || report.value.status}\n\n## 摘要\n\n${report.value.summary}`
+const buildMarkdown = () => {
+  const metricLines = (report.value.metrics || []).map(metric => `- ${metric.label}：${metric.value} ${metric.unit}`)
+  const sourceLine = (report.value.source_ids || []).join(', ') || '无'
+  return `# ${report.value.title}\n\n- 日期：${report.value.report_date}\n- 状态：${statusNames[report.value.status] || report.value.status}\n- 统计时间窗：${reportDateTime(report.value.from_time)} 至 ${reportDateTime(report.value.to_time)}\n\n## 摘要\n\n${report.value.summary}\n\n## 核心指标\n\n${metricLines.length ? metricLines.join('\\n') : '- 暂无结构化指标'}\n\n## 数据来源\n\n${sourceLine}`
+}
 
 const copyMarkdown = async () => {
   try {
@@ -333,6 +337,16 @@ onMounted(loadReports)
       <div class="table-wrap">
         <p class="muted">报告摘要</p>
         <p>{{ report.summary }}</p>
+        <p class="muted">核心指标</p>
+        <div v-if="report.metrics?.length" class="report-metrics">
+          <div v-for="metric in report.metrics" :key="metric.key" class="report-metric">
+            <span>{{ metric.label }}</span>
+            <strong>{{ metric.value.toLocaleString() }} {{ metric.unit }}</strong>
+          </div>
+        </div>
+        <p v-else class="muted">当前报告没有结构化指标。</p>
+        <p class="muted">数据来源</p>
+        <p class="report-source-ids">{{ report.source_ids?.join('、') || '暂无来源编号' }}</p>
         <p class="muted">供水量摘要</p>
         <p>今日累计供水量 24,860 m³，较昨日同期上升 4.2%。</p>
         <p class="muted">关键告警</p>
