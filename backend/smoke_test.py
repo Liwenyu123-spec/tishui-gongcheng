@@ -76,6 +76,87 @@ def run_smoke_checks() -> None:
     assert knowledge_search["data_quality"] == "mock"
     assert knowledge_search["results"] and knowledge_search["results"][0]["source_id"] == "mock-knowledge-flow-v1.2"
 
+    # 知识文档生命周期：新导入文档先待审，设为现行后才允许检索。
+    imported_knowledge = expect(
+        "导入待审知识文档",
+        client.post(
+            "/api/v1/knowledge/import",
+            headers=admin_headers,
+            json={
+                "filename": "smoke-retry-procedure.md",
+                "title": "Smoke 通知重试规程",
+                "version": "1.0",
+                "content": "通知失败后核对失败原因并执行重试。",
+                "station_ids": ["pump-02"],
+            },
+        ),
+        200,
+    )
+    pending_search = expect(
+        "待审知识不可检索",
+        client.get("/api/v1/knowledge/search", headers=station_headers, params={"q": "通知重试规程", "station_id": "pump-02"}),
+        200,
+    )
+    assert not any(hit["source_id"] == imported_knowledge["id"] for hit in pending_search["results"])
+    valid_knowledge = expect(
+        "批准知识文档",
+        client.patch(
+            f"/api/v1/knowledge/{imported_knowledge['id']}/status",
+            headers=admin_headers,
+            json={"status": "valid"},
+        ),
+        200,
+    )
+    assert valid_knowledge["status"] == "valid"
+    approved_search = expect(
+        "现行知识可检索",
+        client.get("/api/v1/knowledge/search", headers=station_headers, params={"q": "通知重试规程", "station_id": "pump-02"}),
+        200,
+    )
+    assert any(hit["source_id"] == imported_knowledge["id"] for hit in approved_search["results"])
+
+    # 方案比较：检查目标需求、约束违反项和确定性推荐结果。
+    comparison = expect(
+        "方案比较约束分析",
+        client.post(
+            "/api/v1/schemes/compare",
+            headers=operator_headers,
+            json={
+                "schemes": [
+                    {"scheme_id": "scheme-a", "name": "方案 A", "supply": 12000, "delay_minutes": 45, "energy": 80, "load_percent": 70, "risk": "low"},
+                    {"scheme_id": "scheme-b", "name": "方案 B", "supply": 14000, "delay_minutes": 55, "energy": 60, "load_percent": 75, "risk": "medium"},
+                ]
+            },
+        ),
+        200,
+    )
+    assert comparison["recommended_scheme_id"] == "scheme-b"
+    assert comparison["target_demand"] == 13000.0
+    assert all("score" in item and "constraint_violations" in item for item in comparison["results"])
+
+    # 报告草稿：结构化指标和来源编号必须随生命周期保留。
+    report = expect(
+        "报告指标来源",
+        client.post(
+            "/api/v1/reports/generate",
+            headers=operator_headers,
+            json={"report_type": "daily", "report_date": "2026-10-19", "from_time": "2026-10-19T00:00:00Z", "to_time": "2026-10-19T23:59:59Z"},
+        ),
+        200,
+    )
+    assert report["status"] == "draft"
+    assert len(report["metrics"]) == 5 and report["source_ids"]
+    edited_report = expect(
+        "报告草稿编辑",
+        client.patch(f"/api/v1/reports/{report['id']}", headers=operator_headers, json={"summary": "Smoke 报告摘要"}),
+        200,
+    )
+    assert edited_report["summary"] == "Smoke 报告摘要"
+    expect("报告跳过复核被拒绝", client.patch(f"/api/v1/reports/{report['id']}/status", headers=admin_headers, json={"status": "archived"}), 409)
+    reviewed_report = expect("报告标记复核", client.patch(f"/api/v1/reports/{report['id']}/status", headers=reviewer_headers, json={"status": "reviewed"}), 200)
+    archived_report = expect("报告归档", client.patch(f"/api/v1/reports/{report['id']}/status", headers=reviewer_headers, json={"status": "archived"}), 200)
+    assert reviewed_report["metrics"] == archived_report["metrics"] and archived_report["status"] == "archived"
+
     # 管理员可以查看全部站点；站点账号只能访问授权的二泵站。
     stations = expect("管理员站点列表", client.get("/api/v1/stations", headers=admin_headers), 200)
     assert len(stations) >= 1
