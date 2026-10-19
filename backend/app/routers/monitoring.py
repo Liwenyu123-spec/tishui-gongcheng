@@ -1,11 +1,12 @@
 """拓扑、站点、遥测和告警查询路由。"""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..data.monitoring import _ALARMS, _STATIONS
 from ..dependencies import require_roles, require_station_access, user_has_station_access
+from ..services.analysis import telemetry_series
 from ..services.audit import record_audit as _record_audit
 from ..schemas.monitoring import Alarm, AlarmDetail, Station, StationDetail, TelemetryPoint, TopologyEdge, TopologyNode, TopologyResponse
 
@@ -59,23 +60,19 @@ def telemetry(station_id: str, metric: str | None = Query(default=None, max_leng
     # 依赖项完成权限校验后，路由仍要确认站点存在，避免为未知站点生成数据。
     if not any(station["id"] == station_id for station in _STATIONS):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="站点不存在")
-    # 每种测点定义一个基准值和单位，供 Mock 时间序列生成使用。
-    values = {"flow": (1120.0, "m³/h"), "pressure": (0.72, "MPa"), "level": (3.7, "m"), "energy": (184.0, "kWh")}
+    station = next(item for item in _STATIONS if item["id"] == station_id)
     # 指定 metric 时只返回单个测点，否则返回全部支持的测点。
-    metrics = [metric] if metric else list(values)
+    metrics = [metric] if metric else list(station["metrics"])
+    if any(item not in station["metrics"] for item in metrics):
+        unsupported = next(item for item in metrics if item not in station["metrics"])
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"站点不支持的测点: {unsupported}")
     points: list[TelemetryPoint] = []
-    # Mock 时间序列固定起点，from/to 参数当前仅保留接口兼容性，不参与计算。
-    base_time = datetime(2026, 10, 15, 10, 0, tzinfo=timezone.utc)
-    # 生成六个时间点，每个点相隔十分钟，用于前端趋势图展示。
+    series_by_metric = {metric_name: telemetry_series(station, metric_name) for metric_name in metrics}
+    # 生成六个时间点，每个点相隔十分钟，用于前端趋势图展示；from/to 当前仅保留接口兼容性。
     for offset in range(6):
         for metric_name in metrics:
-            # 未知测点属于请求参数错误，不返回伪造数据。
-            value_unit = values.get(metric_name)
-            if value_unit is None:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"不支持的测点: {metric_name}")
-            value, unit = value_unit
-            # offset 越大表示更早的观测点，同时让数值产生可视化趋势变化。
-            points.append(TelemetryPoint(observed_at=base_time - timedelta(minutes=offset * 10), metric=metric_name, value=round(value + offset * 2, 3), unit=unit))
+            sample = series_by_metric[metric_name][offset]
+            points.append(TelemetryPoint(observed_at=sample.observed_at, metric=sample.metric, value=sample.value, unit=sample.unit, quality=sample.quality))
     # 生成顺序为当前时间到较早时间，前端可直接用于趋势图展示。
     return points
 
