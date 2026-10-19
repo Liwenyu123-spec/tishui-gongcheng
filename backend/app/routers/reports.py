@@ -5,9 +5,11 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from ..data.monitoring import _ALARMS
 from ..data.reports import _REPORTS
-from ..dependencies import require_roles
-from ..schemas.reports import Report, ReportContentUpdateRequest, ReportGenerateRequest, ReportStatusUpdateRequest
+from ..data.supply import _SUPPLY_AREAS
+from ..dependencies import require_roles, user_has_station_access
+from ..schemas.reports import Report, ReportContentUpdateRequest, ReportGenerateRequest, ReportMetric, ReportStatusUpdateRequest
 from ..services.audit import record_audit
 
 # 报告路由只生成待人工复核的 Mock 草稿。
@@ -21,10 +23,74 @@ _REPORT_STATUS_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+def _build_report_metrics(user: dict) -> tuple[list[ReportMetric], list[str]]:
+    """按当前账号可见站点汇总报告指标，并返回扁平化来源编号。"""
+
+    # 报告只能使用当前账号可见的片区和告警，避免在导出内容中串出越权站点。
+    visible_areas = [
+        area for area in _SUPPLY_AREAS if user_has_station_access(user, area["station_id"])
+    ]
+    visible_alarms = [
+        alarm for alarm in _ALARMS if user_has_station_access(user, alarm["station_id"])
+    ]
+    area_sources = [f"supply:{area['station_id']}" for area in visible_areas]
+    alarm_sources = [str(alarm["id"]) for alarm in visible_alarms]
+    total_supply = sum(float(area["supply"]) for area in visible_areas)
+    total_demand = sum(float(area["demand"]) for area in visible_areas)
+    balance = total_supply - total_demand
+    bottleneck = min(
+        visible_areas,
+        key=lambda area: float(area["supply"]) - float(area["demand"]),
+        default=None,
+    )
+    metrics = [
+        ReportMetric(
+            key="total_supply",
+            label="总供水量",
+            value=round(total_supply, 2),
+            unit="m³/d",
+            source_ids=area_sources,
+        ),
+        ReportMetric(
+            key="total_demand",
+            label="总需求量",
+            value=round(total_demand, 2),
+            unit="m³/d",
+            source_ids=area_sources,
+        ),
+        ReportMetric(
+            key="total_balance",
+            label="供需结余",
+            value=round(balance, 2),
+            unit="m³/d",
+            source_ids=area_sources,
+        ),
+        ReportMetric(
+            key="alarm_count",
+            label="关联告警数",
+            value=float(len(visible_alarms)),
+            unit="条",
+            source_ids=alarm_sources,
+        ),
+    ]
+    if bottleneck is not None:
+        metrics.append(
+            ReportMetric(
+                key="bottleneck_balance",
+                label=f"瓶颈片区：{bottleneck['area']}",
+                value=round(float(bottleneck["supply"]) - float(bottleneck["demand"]), 2),
+                unit="m³/d",
+                source_ids=[f"supply:{bottleneck['station_id']}"],
+            )
+        )
+    source_ids = list(dict.fromkeys(area_sources + alarm_sources))
+    return metrics, source_ids
+
+
 @router.post("/reports/generate", response_model=Report)
 def generate_report(
     payload: ReportGenerateRequest,
-    _: dict = Depends(require_roles("admin", "operator")),
+    user: dict = Depends(require_roles("admin", "operator")),
 ) -> Report:
     """生成一份需要人工复核的报告草稿。"""
 
@@ -32,6 +98,7 @@ def generate_report(
     now = datetime.now(timezone.utc)
     # 未提供报告日期时使用服务器当前日期；新报告统一处于草稿状态。
     report_date = payload.report_date or now.date().isoformat()
+    metrics, source_ids = _build_report_metrics(user)
     report = Report(
         id=f"report-{uuid4().hex[:10]}",
         report_type=payload.report_type,
@@ -43,6 +110,8 @@ def generate_report(
         to_time=payload.to_time or f"{report_date}T23:59:59Z",
         data_version="mock-monitoring-v1",
         created_at=now,
+        metrics=metrics,
+        source_ids=source_ids,
     )
     # 当前阶段仅在内存中保存草稿，服务重启后记录会清空。
     _REPORTS[report.id] = report
