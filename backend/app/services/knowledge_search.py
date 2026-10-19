@@ -5,8 +5,11 @@
 或数据库时，可以保留本服务的命中模型和引用格式。
 """
 
+from datetime import datetime, timezone
 from dataclasses import dataclass
 import re
+
+from ..data.knowledge import _KNOWLEDGE, _KNOWLEDGE_CONTENT
 
 
 @dataclass(frozen=True)
@@ -76,11 +79,51 @@ def _terms(value: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(re.findall(r"[\u4e00-\u9fff]{2,}|[a-zA-Z][a-zA-Z0-9_-]*|\d+", value.lower())))
 
 
-def search_rules(query: str, *, metric: str | None = None, limit: int = 5) -> list[KnowledgeHit]:
-    """按关键词和可选测点检索本地规程，并返回稳定排序的命中结果。"""
+def _is_current(document, now: datetime) -> bool:
+    """判断文档是否处于现行且有效时间窗口。"""
+
+    if document.status != "valid":
+        return False
+    effective_from = document.effective_from
+    effective_to = document.effective_to
+    if effective_from is not None:
+        effective_from = effective_from if effective_from.tzinfo else effective_from.replace(tzinfo=timezone.utc)
+        if now < effective_from:
+            return False
+    if effective_to is not None:
+        effective_to = effective_to if effective_to.tzinfo else effective_to.replace(tzinfo=timezone.utc)
+        if now >= effective_to:
+            return False
+    return True
+
+
+def _document_applies(document, *, station_id: str | None, visible_station_ids: set[str] | None) -> bool:
+    """按请求站点和账号可见范围过滤知识文档。"""
+
+    applicable = set(document.station_ids)
+    if station_id is not None and applicable and station_id not in applicable:
+        return False
+    if visible_station_ids is not None and applicable and not applicable.intersection(visible_station_ids):
+        return False
+    return True
+
+
+def search_rules(
+    query: str,
+    *,
+    metric: str | None = None,
+    limit: int = 5,
+    station_id: str | None = None,
+    visible_station_ids: set[str] | None = None,
+    now: datetime | None = None,
+) -> list[KnowledgeHit]:
+    """按关键词、状态、有效期和站点检索内置规则及已批准导入文档。"""
 
     normalized = query.strip().lower()
     query_terms = _terms(normalized)
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
     hits: list[KnowledgeHit] = []
     for rule in KNOWLEDGE_RULES:
         score = 0
@@ -100,6 +143,43 @@ def search_rules(query: str, *, metric: str | None = None, limit: int = 5) -> li
                     version=rule.version,
                     detail=rule.detail,
                     score=score,
+                )
+            )
+    metric_terms = {
+        "flow": ("flow", "流量"),
+        "pressure": ("pressure", "压力"),
+        "level": ("level", "水位", "液位"),
+        "current": ("current", "电流"),
+    }.get(metric or "", ())
+    for document_id, document in _KNOWLEDGE.items():
+        if not _is_current(document, current_time) or not _document_applies(
+            document,
+            station_id=station_id,
+            visible_station_ids=visible_station_ids,
+        ):
+            continue
+        content = _KNOWLEDGE_CONTENT.get(document_id, "")
+        searchable = f"{document.title} {document.filename} {content}".lower()
+        score = 0
+        for term in query_terms:
+            if term in searchable:
+                score += 2
+            if term in document.title.lower():
+                score += 2
+        if normalized and normalized in searchable:
+            score += 3
+        if metric_terms and any(term in searchable for term in metric_terms):
+            score += 4
+        if score:
+            detail = content.strip().replace("\r", " ").replace("\n", " ")[:500]
+            hits.append(
+                KnowledgeHit(
+                    source_id=document_id,
+                    title=f"{document.title} {document.version}",
+                    version=document.version,
+                    detail=detail or "已批准文档，正文未提供可展示摘要",
+                    score=score,
+                    source="mock-document",
                 )
             )
     hits.sort(key=lambda hit: (-hit.score, hit.source_id))
