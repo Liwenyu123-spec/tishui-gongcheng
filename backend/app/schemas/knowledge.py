@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class KnowledgeImportRequest(BaseModel):
@@ -18,7 +18,7 @@ class KnowledgeImportRequest(BaseModel):
     # 导入的正文内容，Mock 阶段直接保存在内存中。
     content: str
     # 适用站点；为空表示全局规程。
-    station_ids: list[str] = []
+    station_ids: list[str] = Field(default_factory=list)
     # 文档有效时间窗口；为空表示不设置对应边界。
     effective_from: datetime | None = None
     effective_to: datetime | None = None
@@ -49,7 +49,7 @@ class KnowledgeDocument(BaseModel):
     # 文档导入时间。
     imported_at: datetime
     # 适用站点；为空表示全局规程。
-    station_ids: list[str] = []
+    station_ids: list[str] = Field(default_factory=list)
     # 文档生效和失效时间。
     effective_from: datetime | None = None
     effective_to: datetime | None = None
