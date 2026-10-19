@@ -17,6 +17,11 @@ class KnowledgeImportRequest(BaseModel):
     version: str = "1.0"
     # 导入的正文内容，Mock 阶段直接保存在内存中。
     content: str
+    # 适用站点；为空表示全局规程。
+    station_ids: list[str] = []
+    # 文档有效时间窗口；为空表示不设置对应边界。
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
 
 
 class KnowledgeStatusUpdateRequest(BaseModel):
@@ -37,12 +42,19 @@ class KnowledgeDocument(BaseModel):
     title: str
     # 当前文档版本。
     version: str
-    # 文档状态，默认表示可以使用。
-    status: str = "valid"
+    # 文档状态：pending 待审、valid 现行、revoked 废止。
+    status: Literal["valid", "pending", "revoked"] = "pending"
     # 正文字符长度，列表接口不直接返回正文。
     content_length: int
     # 文档导入时间。
     imported_at: datetime
+    # 适用站点；为空表示全局规程。
+    station_ids: list[str] = []
+    # 文档生效和失效时间。
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    # 最近一次进入现行状态的时间。
+    approved_at: datetime | None = None
     # 数据来源标记。
     source: str = "mock"
 
@@ -55,7 +67,7 @@ class KnowledgeSearchHit(BaseModel):
     version: str
     detail: str
     score: int
-    source: Literal["mock-rule"] = "mock-rule"
+    source: Literal["mock-rule", "mock-document"] = "mock-rule"
 
 
 class KnowledgeSearchResponse(BaseModel):
