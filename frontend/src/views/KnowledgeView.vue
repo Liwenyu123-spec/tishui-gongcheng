@@ -11,6 +11,10 @@ interface ApiKnowledgeDocument {
   status: string
   content_length: number
   imported_at: string
+  station_ids: string[]
+  effective_from: string | null
+  effective_to: string | null
+  approved_at: string | null
   source: string
 }
 
@@ -31,13 +35,14 @@ interface KnowledgeRow {
   status: string
   date: string
   contentLength: number
+  applicability: string
   source: string
 }
 
 const localDocuments: KnowledgeRow[] = [
-  { id: 'local-1', title: '二泵站运行规程', filename: 'pump-02-operation.md', version: 'v1.2', status: '现行', date: '2026-08-12', contentLength: 1840, source: '本地示例' },
-  { id: 'local-2', title: '泵组异常处理预案', filename: 'pump-alarm-plan.md', version: 'v0.9', status: '待审', date: '2026-10-01', contentLength: 1260, source: '本地示例' },
-  { id: 'local-3', title: '四泵站 2 号泵维修手册', filename: 'pump-04-maintenance.pdf', version: 'v2.1', status: '废止', date: '2025-12-18', contentLength: 3520, source: '本地示例' },
+  { id: 'local-1', title: '二泵站运行规程', filename: 'pump-02-operation.md', version: 'v1.2', status: '现行', date: '2026-08-12', contentLength: 1840, applicability: '二泵站', source: '本地示例' },
+  { id: 'local-2', title: '泵组异常处理预案', filename: 'pump-alarm-plan.md', version: 'v0.9', status: '待审', date: '2026-10-01', contentLength: 1260, applicability: '全局', source: '本地示例' },
+  { id: 'local-3', title: '四泵站 2 号泵维修手册', filename: 'pump-04-maintenance.pdf', version: 'v2.1', status: '废止', date: '2025-12-18', contentLength: 3520, applicability: '四泵站', source: '本地示例' },
 ]
 const statusNames: Record<string, string> = { valid: '现行', pending: '待审', revoked: '废止' }
 const statusCodes: Record<string, string> = { 现行: 'valid', 待审: 'pending', 废止: 'revoked' }
@@ -48,7 +53,7 @@ const loading = ref(false)
 const sourceLabel = ref('本地示例')
 const importVisible = ref(false)
 const importing = ref(false)
-const importForm = reactive({ filename: '', title: '', version: '1.0', content: '' })
+const importForm = reactive({ filename: '', title: '', version: '1.0', content: '', stationIds: '', effectiveFrom: '', effectiveTo: '' })
 const csvVisible = ref(false)
 const csvLoading = ref(false)
 const csvResult = ref<CsvImportResponse | null>(null)
@@ -76,6 +81,7 @@ const formatDocument = (document: ApiKnowledgeDocument): KnowledgeRow => ({
   status: statusNames[document.status] || document.status,
   date: document.imported_at.slice(0, 10),
   contentLength: document.content_length,
+  applicability: document.station_ids?.length ? document.station_ids.join('、') : '全局',
   source: document.source === 'mock' ? '后端 Mock' : document.source,
 })
 
@@ -103,6 +109,9 @@ const openImport = () => {
   importForm.title = ''
   importForm.version = '1.0'
   importForm.content = ''
+  importForm.stationIds = ''
+  importForm.effectiveFrom = ''
+  importForm.effectiveTo = ''
   importVisible.value = true
 }
 
@@ -115,7 +124,15 @@ const importDocument = async () => {
   try {
     const result = await api<ApiKnowledgeDocument>('/api/v1/knowledge/import', {
       method: 'POST',
-      body: JSON.stringify(importForm),
+      body: JSON.stringify({
+        filename: importForm.filename,
+        title: importForm.title,
+        version: importForm.version,
+        content: importForm.content,
+        station_ids: importForm.stationIds.split(/[,，\s]+/).map(item => item.trim()).filter(Boolean),
+        effective_from: importForm.effectiveFrom ? new Date(importForm.effectiveFrom).toISOString() : null,
+        effective_to: importForm.effectiveTo ? new Date(importForm.effectiveTo).toISOString() : null,
+      }),
     })
     rows.value.unshift(formatDocument(result))
     sourceLabel.value = result.source === 'mock' ? '后端 Mock 数据' : result.source
@@ -201,6 +218,7 @@ onMounted(loadKnowledge)
         <el-table-column prop="title" label="资料名称" min-width="190" />
         <el-table-column prop="filename" label="文件名" min-width="190" />
         <el-table-column prop="version" label="版本" width="90" />
+        <el-table-column prop="applicability" label="适用范围" width="120" />
         <el-table-column prop="contentLength" label="正文长度" width="100" />
         <el-table-column prop="date" label="导入时间" width="120" />
         <el-table-column prop="status" label="状态" width="90">
@@ -225,6 +243,9 @@ onMounted(loadKnowledge)
       <el-form-item label="文件名"><el-input v-model="importForm.filename" placeholder="例如 pump-02-operation.md" /></el-form-item>
       <el-form-item label="资料名称"><el-input v-model="importForm.title" placeholder="例如二泵站运行规程" /></el-form-item>
       <el-form-item label="版本"><el-input v-model="importForm.version" /></el-form-item>
+      <el-form-item label="适用站点"><el-input v-model="importForm.stationIds" placeholder="例如 pump-02；留空表示全局" /></el-form-item>
+      <el-form-item label="生效时间"><el-input v-model="importForm.effectiveFrom" type="datetime-local" /></el-form-item>
+      <el-form-item label="失效时间"><el-input v-model="importForm.effectiveTo" type="datetime-local" /></el-form-item>
       <el-form-item label="正文内容"><el-input v-model="importForm.content" type="textarea" :rows="6" placeholder="输入需要保存的资料正文" /></el-form-item>
     </el-form>
     <template #footer>
