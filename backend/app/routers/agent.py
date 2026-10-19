@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
+from ..agent.executor import execute_plan
 from ..agent.orchestrator import coordinate
 from ..dependencies import require_roles
 from ..schemas.agent import AgentAnswer, AgentChatRequest
@@ -31,6 +32,7 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
 
     answer = build_answer(payload, user)
     plan = coordinate(answer)
+    executions = execute_plan(plan, answer)
     # 记录一次 Agent 查询的摘要，便于管理员在审计页面追踪请求编号和分析分支。
     # 当前只保存意图、来源和站点编号，不保存完整问题正文，避免审计日志膨胀。
     record_audit(
@@ -55,7 +57,8 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
             },
         )
         # tool 事件只描述确定性只读步骤，不代表调用了真实现场或外部系统。
-        for tool in plan.tools:
+        for execution in executions:
+            tool = execution.tool
             yield _sse_event(
                 "tool",
                 {
@@ -63,8 +66,10 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
                     "name": tool.name,
                     "label": tool.label,
                     "agent": plan.primary_agent,
-                    "status": "completed",
-                    "read_only": True,
+                    "status": execution.status,
+                    "summary": execution.summary,
+                    "source_ids": list(execution.source_ids),
+                    "read_only": execution.read_only,
                 },
             )
         # result 事件只返回结构化答案，前端不需要解析自然语言日志。

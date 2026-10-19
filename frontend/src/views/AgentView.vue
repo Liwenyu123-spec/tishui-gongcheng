@@ -163,9 +163,10 @@ const ask = async (q = input.value) => {
       return
     }
     if (eventName === 'tool') {
-      const tool = JSON.parse(data) as { label?: string; status?: string }
+      const tool = JSON.parse(data) as { label?: string; summary?: string; status?: string }
       if (tool.label && tool.status === 'completed') {
-        aiMessage.steps = [...(aiMessage.steps || []), tool.label]
+        const step = tool.summary ? `${tool.label}：${tool.summary}` : tool.label
+        aiMessage.steps = [...(aiMessage.steps || []), step]
         aiMessage.evidence = `分析步骤：${aiMessage.steps.join(' → ')}`
       }
       return
