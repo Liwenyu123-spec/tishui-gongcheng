@@ -31,6 +31,8 @@ class IncidentCreateRequest(BaseModel):
     reported_by: str = "station-operator"
     # 用于识别重复上报的业务键；为空时不做显式去重。
     deduplication_key: str | None = None
+    # 仅用于 Mock 验收：让新通知进入失败状态，演示失败原因和重试流程。
+    simulate_delivery_failure: bool = False
 
 
 class Incident(BaseModel):
@@ -66,6 +68,8 @@ class Incident(BaseModel):
     updated_at: datetime
     # 数据来源标记，当前为内存 Mock。
     data_source: str = "mock"
+    # Mock 验收标记；真实通知网关接入后不应由业务人员传入此字段。
+    simulate_delivery_failure: bool = False
 
 
 class Notification(BaseModel):
