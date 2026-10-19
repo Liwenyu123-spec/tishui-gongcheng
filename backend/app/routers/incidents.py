@@ -66,11 +66,16 @@ def _create_notifications(incident: Incident, now: datetime) -> None:
     recipients = _STATION_CONTACTS.get(incident.station_id, ["dispatch-admin"])
     # 每个主联系人生成一条平台内通知，当前不调用外部短信或电话服务。
     for recipient in recipients:
+        # 失败模拟只用于验收通知兜底；正常上报仍保持 sent 状态。
+        delivery_failed = incident.simulate_delivery_failure
         notification = Notification(
             id=_next_identifier("通知", _NOTIFICATIONS, now),
             incident_id=incident.id,
             recipient=recipient,
             sent_at=now,
+            status="failed" if delivery_failed else "sent",
+            retry_count=1 if delivery_failed else 0,
+            failure_reason="Mock 通知网关模拟失败" if delivery_failed else None,
         )
         _NOTIFICATIONS[notification.id] = notification
 
@@ -106,6 +111,7 @@ def report_incident(station_id: str, payload: IncidentCreateRequest, _: dict = D
         reported_by=payload.reported_by,
         description=payload.description,
         deduplication_key=payload.deduplication_key,
+        simulate_delivery_failure=payload.simulate_delivery_failure,
         created_at=now,
         updated_at=now,
     )
@@ -233,6 +239,28 @@ def acknowledge_notification(notification_id: str, user: dict = Depends(require_
                 if related.incident_id == incident.id:
                     related.incident_status = incident.status
         record_audit("acknowledge", "notification", notification_id, f"确认站点事件通知：{notification.incident_id}")
+    return notification
+
+
+@router.post("/notifications/{notification_id}/retry", response_model=Notification)
+def retry_notification(notification_id: str, user: dict = Depends(require_roles("admin", "operator"))) -> Notification:
+    """重试发送失败的 Mock 通知，并保留重试次数和审计记录。"""
+
+    # 先定位通知，再通过关联事件校验站点范围，避免只凭通知编号越权重试。
+    notification = _NOTIFICATIONS.get(notification_id)
+    if notification is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="通知不存在")
+    incident = _INCIDENTS.get(notification.incident_id)
+    if incident is None or not user_has_station_access(user, incident.station_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权处理该站点通知")
+    # 只有失败通知可以重试；已发送或已确认通知保持幂等边界。
+    if notification.status != "failed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有发送失败的通知可以重试")
+    notification.status = "sent"
+    notification.retry_count += 1
+    notification.failure_reason = None
+    notification.sent_at = _now()
+    record_audit("retry", "notification", notification_id, f"重试发送站点事件通知：{notification.incident_id}")
     return notification
 
 
