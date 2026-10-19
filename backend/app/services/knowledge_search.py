@@ -171,7 +171,7 @@ def search_rules(
         if metric_terms and any(term in searchable for term in metric_terms):
             score += 4
         if station_id is not None and station_id in document.station_ids:
-            score += 6
+            score += 10
         if score:
             detail = content.strip().replace("\r", " ").replace("\n", " ")[:500]
             hits.append(
