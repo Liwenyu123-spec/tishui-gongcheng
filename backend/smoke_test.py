@@ -206,6 +206,33 @@ def run_smoke_checks() -> None:
     acknowledged = expect("升级通知确认", client.post(f"/api/v1/notifications/{escalated['id']}/ack", headers=operator_headers), 200)
     assert acknowledged["status"] == "acknowledged"
 
+    # 通知失败兜底：失败通知保存原因和重试次数，重试后恢复为待确认状态。
+    failed_incident = expect(
+        "模拟通知发送失败",
+        client.post(
+            "/api/v1/stations/pump-02/incidents",
+            headers=operator_headers,
+            json={
+                "category": "smoke-test-delivery-failure",
+                "level": "high",
+                "description": "模拟通知网关失败",
+                "deduplication_key": "smoke-test-delivery-failure-20261019",
+                "simulate_delivery_failure": True,
+            },
+        ),
+        200,
+    )
+    failed_notifications = expect("查询失败通知", client.get("/api/v1/notifications", headers=reviewer_headers), 200)
+    failed_notification = next(item for item in failed_notifications if item["incident_id"] == failed_incident["id"])
+    assert failed_notification["status"] == "failed" and failed_notification["failure_reason"] and failed_notification["retry_count"] == 1
+    retried_notification = expect(
+        "重试失败通知",
+        client.post(f"/api/v1/notifications/{failed_notification['id']}/retry", headers=operator_headers),
+        200,
+    )
+    assert retried_notification["status"] == "sent" and retried_notification["retry_count"] == 2 and retried_notification["failure_reason"] is None
+    expect("重复重试已恢复通知被拒绝", client.post(f"/api/v1/notifications/{failed_notification['id']}/retry", headers=operator_headers), 409)
+
     # Agent 诊断应读取同一站点的未关闭事件和平台通知，并把它们作为引用返回。
     agent_with_event = client.post(
         "/api/v1/chat/stream",
