@@ -44,6 +44,7 @@ interface AgentAnswer {
   confidence?: 'low' | 'medium' | 'high'
   pending_items?: string[]
   time_range?: string
+  observed_at?: string | null
   work_order_suggestion?: {
     station_id: string
     title: string
@@ -180,6 +181,7 @@ const ask = async (q = input.value) => {
       `置信度：${confidenceNames[answer.confidence || 'medium'] || answer.confidence || '中'}`,
       ...(answer.pending_items || []).map(item => `待确认项：${item}`),
       `时间范围：${answer.time_range || '当前 Mock 样本'}`,
+      ...(answer.observed_at ? [`数据观测时间：${formatLocalDateTime(answer.observed_at)}`] : []),
       `来源：${answer.source} · 意图：${answer.intent}`,
     ].join('\n')
     aiMessage.text = answer.answer
@@ -350,6 +352,14 @@ onMounted(() => {
 })
 
 const formatTime = (value: string) => value.slice(11, 16)
+
+// Agent 的观测时间来自 UTC Mock 测点，展示时转换为浏览器本地时间。
+const formatLocalDateTime = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
 </script>
 
 <template>

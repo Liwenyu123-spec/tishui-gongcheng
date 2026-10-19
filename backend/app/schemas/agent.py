@@ -64,6 +64,8 @@ class AgentAnswer(BaseModel):
     pending_items: list[str] = Field(default_factory=list)
     # 标识本次规则分析覆盖的时间范围，避免把样本周期误认为实时结论。
     time_range: str = "当前 Mock 样本"
+    # 事实数据的观测时间；没有对应测点时为空，不能用回答生成时间代替。
+    observed_at: datetime | None = None
     source: Literal["mock-rule"] = "mock-rule"
     generated_at: datetime
 
