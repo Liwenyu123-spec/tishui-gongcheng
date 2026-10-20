@@ -49,6 +49,9 @@ def smoke_temp_root() -> str:
 # 向量库和知识文档落盘都指向临时目录，避免冒烟读写真实的 backend/data。
 os.environ["RAG_CHROMA_DIR"] = tempfile.mkdtemp(prefix="smoke_rag_chroma_", dir=smoke_temp_root())
 os.environ["KNOWLEDGE_STORE_DIR"] = tempfile.mkdtemp(prefix="smoke_knowledge_store_", dir=smoke_temp_root())
+# 固定 tempfile 的缓存值，让后续 TemporaryDirectory 也用同一个绝对目录，
+# 否则 TEMP 为相对路径时 chromadb 会拿到相对路径并打不开数据库。
+tempfile.tempdir = smoke_temp_root()
 
 from fastapi.testclient import TestClient
 
