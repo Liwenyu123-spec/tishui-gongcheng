@@ -13,6 +13,8 @@ dist/
 build/
 node_modules/
 frontend/dist/
+backend/data/rag_chroma_db/
+backend/data/rag_chroma_test/
 logs/
 *.log
 .DS_Store
