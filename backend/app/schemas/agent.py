@@ -1,6 +1,7 @@
 """规则驱动 Agent 接口的请求和响应模型。
 
-当前阶段不调用大模型，只把已有 Mock 数据整理成可追溯的结构化答案。
+测点、告警和供需仍由只读规则整理。诊断中的规程说明可在配置密钥后
+基于检索片段生成，不得编造实时数字或控制指令。
 """
 
 from datetime import datetime
@@ -54,6 +55,8 @@ class AgentAnswer(BaseModel):
     citations: list[AgentCitation] = Field(default_factory=list)
     # 只有诊断类答案提供工单建议，状态查询等答案保持为空。
     work_order_suggestion: AgentWorkOrderSuggestion | None = None
+    # 诊断时基于检索片段整理的规程说明；无强相关命中时为空。
+    protocol_explanation: str | None = None
     # 当前阶段所有结果均来自进程内 Mock 数据，不代表实时现场数据。
     data_quality: Literal["mock", "partial", "live", "stale"] = "mock"
     # 明确回答可用于什么范围，避免把联调结果当作生产结论。

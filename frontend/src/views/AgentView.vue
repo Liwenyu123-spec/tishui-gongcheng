@@ -53,6 +53,7 @@ interface AgentAnswer {
     suggested_action: string
     priority: 'low' | 'medium' | 'high'
   } | null
+  protocol_explanation?: string | null
 }
 
 interface AgentMessage {
@@ -178,6 +179,7 @@ const ask = async (q = input.value) => {
       ...(aiMessage.steps?.length ? [`分析步骤：${aiMessage.steps.join(' → ')}`] : []),
       ...answer.facts.map(fact => `事实：${fact}`),
       ...answer.recommendations.map(item => `建议：${item}`),
+      ...(answer.protocol_explanation ? [`规程说明：${answer.protocol_explanation}`] : []),
       ...answer.citations.filter(citation => ['telemetry', 'alarm', 'supply', 'incident', 'notification'].includes(citation.source_type)).map(citation => `数据引用：${citation.title} · ${citation.detail}`),
       ...answer.citations.filter(citation => ['knowledge', 'policy'].includes(citation.source_type)).map(citation => `规程引用：${citation.title} · ${citation.detail}`),
       `数据质量：${answer.data_quality || 'mock'}`,

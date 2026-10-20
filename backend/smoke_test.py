@@ -557,6 +557,9 @@ def run_smoke_checks() -> None:
         assert '"time_range":' in agent_response.text
         assert '"observed_at":' in agent_response.text
         assert '"freshness":' in agent_response.text
+        if expected_intent == '"intent": "diagnosis"':
+            assert "规程说明" in agent_response.text or '"protocol_explanation"' in agent_response.text
+            assert "mock-knowledge-flow-v1.2" in agent_response.text
         assert '"coordinator": "dispatch_coordinator"' in agent_response.text
         assert '"allowed_tools":' in agent_response.text
         assert '"read_only": true' in agent_response.text

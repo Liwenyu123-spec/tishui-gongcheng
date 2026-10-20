@@ -142,23 +142,44 @@ def _event_context(station_id: str, user: dict) -> tuple[list[str], list[str], l
     return facts, recommendations, citations
 
 
-def _knowledge_context(alarm: dict) -> AgentCitation:
-    """根据告警测点检索一条版本化的只读规程引用。"""
+def _knowledge_hits(alarm: dict, message: str = "") -> list[KnowledgeHit]:
+    """按告警测点与问句检索可引用规程，已过滤低置信命中。"""
 
+    from .knowledge_generate import clean_query
+
+    query = clean_query(f"{alarm.get('station_name', '')}{alarm['metric']}异常核查 {message}".strip())
     hits = [
         hit
         for hit in search_rules(
-            f"{alarm['metric']} 异常核查",
+            query or f"{alarm['metric']} 异常核查",
             metric=alarm["metric"],
-            limit=3,
+            limit=5,
             station_id=alarm["station_id"],
         )
         if hit.confidence != "low"
     ]
     if not hits:
+        hits = [
+            hit
+            for hit in search_rules(
+                f"{alarm['metric']} 异常核查",
+                metric=alarm["metric"],
+                limit=5,
+                station_id=alarm["station_id"],
+            )
+            if hit.confidence != "low"
+        ]
+    if not hits:
         hits = [hit for hit in search_rules("泵站 异常", limit=3) if hit.confidence != "low"]
-    rule = hits[0] if hits else KNOWLEDGE_RULES[0]
-    if not isinstance(rule, KnowledgeHit):
+    return hits
+
+
+def _knowledge_context(alarm: dict, message: str = "") -> AgentCitation:
+    """根据告警测点检索一条版本化的只读规程引用。"""
+
+    hits = _knowledge_hits(alarm, message)
+    rule = hits[0] if hits else None
+    if rule is None:
         builtin = KNOWLEDGE_RULES[0]
         rule = KnowledgeHit(
             source_id=builtin.source_id,
@@ -173,6 +194,47 @@ def _knowledge_context(alarm: dict) -> AgentCitation:
         title=rule.title,
         detail=rule.detail,
     )
+
+
+def _protocol_explanation(alarm: dict, message: str) -> tuple[str | None, list[AgentCitation]]:
+    """用强相关规程片段生成说明；无密钥时回退为原文摘要。测点数字不交给模型。"""
+
+    from .knowledge_generate import (
+        check_groundedness,
+        compress_hits,
+        generation_status,
+        select_strong_hits,
+        _complete,
+    )
+
+    hits = _knowledge_hits(alarm, message)
+    strong, _gate = select_strong_hits(hits)
+    if not strong:
+        citation = _knowledge_context(alarm, message)
+        return None, [citation]
+
+    citations = [
+        AgentCitation(source_type="knowledge", source_id=hit.source_id, title=hit.title, detail=hit.detail)
+        for hit in strong[:3]
+    ]
+    status = generation_status()
+    metric_name = metric_label(alarm["metric"])
+    question = (
+        f"{alarm['station_name']}出现{metric_name}告警，按现行规程应如何核查？"
+        "只根据资料说明核查要点，不要写实时数字，不要给出开关泵或阀门指令。"
+    )
+    if status["generation_ready"]:
+        compressed, _ = compress_hits(strong[:3], question)
+        try:
+            text = _complete(question, compressed)
+            grounded = check_groundedness(text, compressed)
+            if not grounded["grounded"]:
+                text = f"{text}\n（忠实度提示：请以规程原文为准，勿作为操作依据。）"
+            return text, citations
+        except Exception:
+            pass
+    top = strong[0]
+    return f"依据《{top.title}》：{top.detail}", citations
 
 
 def _diagnosis_checks(alarm: dict) -> list[str]:
@@ -301,7 +363,7 @@ def _answer_for_diagnosis(message: str, user: dict, request_id: str, now: dateti
             generated_at=now,
         )
     context_facts, context_recommendations, context_citations = _event_context(alarm["station_id"], user)
-    knowledge_citation = _knowledge_context(alarm)
+    protocol_text, knowledge_citations = _protocol_explanation(alarm, message)
     checks = _diagnosis_checks(alarm)
     station = next((item for item in _STATIONS if item["id"] == alarm["station_id"]), None)
     telemetry = latest_telemetry(station, alarm["metric"]) if station else None
@@ -321,18 +383,24 @@ def _answer_for_diagnosis(message: str, user: dict, request_id: str, now: dateti
         suggested_action=alarm["suggested_action"],
         priority=alarm["level"] if alarm["level"] in {"low", "medium", "high"} else "medium",
     )
+    answer_lines = [
+        f"根据 {alarm['station_name']} 的 Mock 告警，建议先执行：{checks[0]}。",
+        "当前只能形成核查建议，不能认定设备已经故障。",
+    ]
+    if protocol_text:
+        answer_lines.append(f"规程说明：{protocol_text}")
     return AgentAnswer(
         request_id=request_id,
         intent="diagnosis",
-        answer=f"根据 {alarm['station_name']} 的 Mock 告警，建议先执行：{checks[0]}。当前只能形成核查建议，不能认定设备已经故障。",
+        answer="\n".join(answer_lines),
         facts=[alarm["description"], f"告警值：{alarm['value']} {alarm['unit']}；阈值：{alarm['threshold']}", f"关联关系：{alarm['relation'] or '暂无关联片区'}", f"核查顺序：{'；'.join(checks)}"] + context_facts,
         recommendations=[*checks, "核查完成前不要生成现场控制指令。"] + context_recommendations,
         citations=[
             AgentCitation(source_type="alarm", source_id=alarm["id"], title="关联告警", detail=alarm["description"]),
             AgentCitation(source_type="policy", source_id="mock-readonly-policy", title="只读分析边界", detail="Agent 只能提供分析和建议，不能操作泵组或阀门"),
-            knowledge_citation,
-        ] + telemetry_citations + context_citations,
+        ] + knowledge_citations + telemetry_citations + context_citations,
         work_order_suggestion=work_order_suggestion,
+        protocol_explanation=protocol_text,
         confidence="low",
         pending_items=["现场确认泵组运行状态和下游压力", "接入真实测点和维修历史后复核诊断"],
         time_range=_time_range_label(message),
