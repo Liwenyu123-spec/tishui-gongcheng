@@ -79,6 +79,19 @@ def check_chroma_index_policy() -> None:
         hits = store.search("通知重试规程", station_id="pump-02")
         assert hits and hits[0]["document_id"] == "doc-valid"
         assert hits[0]["score"] < 40
+        store.sync_document(
+            document_id="doc-other",
+            filename="other.md",
+            title="无关流量记录",
+            version="1.0",
+            content="这里只记录泵站流量下降和入口压力，不涉及通知。",
+            station_ids=["pump-02"],
+            status="valid",
+            effective_from=now - timedelta(days=1),
+            effective_to=now + timedelta(days=1),
+        )
+        keyword_hits = store.search("通知重试规程", station_id="pump-02")
+        assert keyword_hits and keyword_hits[0]["document_id"] == "doc-valid"
         removed = store.sync_document(
             document_id="doc-valid",
             filename="valid.md",

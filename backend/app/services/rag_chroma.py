@@ -377,6 +377,53 @@ class ChromaRagStore:
             score += 3
         return score
 
+    def _visible_rows(self, station_id: str | None, visible_station_ids: set[str] | None) -> list[tuple[str, dict[str, Any]]]:
+        """读取集合中当前可见的分片，供关键词检索使用。"""
+
+        data = self.collection.get(include=["documents", "metadatas"])
+        rows: list[tuple[str, dict[str, Any]]] = []
+        for text, metadata in zip(data.get("documents") or [], data.get("metadatas") or []):
+            if not metadata or not self._visible(metadata, station_id, visible_station_ids):
+                continue
+            rows.append((str(text or ""), metadata))
+        return rows
+
+    @staticmethod
+    def _bm25_scores(query: str, rows: list[tuple[str, dict[str, Any]]]) -> dict[str, float]:
+        """对可见分片做 BM25。对齐参考项目的稀疏检索，但不依赖外部分词模型。"""
+
+        if not rows:
+            return {}
+        documents = [_tokenize(f"{metadata.get('title') or ''} {text}") for text, metadata in rows]
+        query_terms = _tokenize(query)
+        doc_count = len(documents)
+        avg_len = sum(len(tokens) for tokens in documents) / doc_count
+        df: dict[str, int] = {}
+        for tokens in documents:
+            for token in set(tokens):
+                df[token] = df.get(token, 0) + 1
+        scores: dict[str, float] = {}
+        k1 = 1.5
+        b = 0.75
+        for (text, metadata), tokens in zip(rows, documents):
+            counts: dict[str, int] = {}
+            for token in tokens:
+                counts[token] = counts.get(token, 0) + 1
+            score = 0.0
+            for term in query_terms:
+                if term not in counts:
+                    continue
+                idf = math.log(1 + (doc_count - df.get(term, 0) + 0.5) / (df.get(term, 0) + 0.5))
+                freq = counts[term]
+                denom = freq + k1 * (1 - b + b * len(tokens) / (avg_len or 1))
+                score += idf * freq * (k1 + 1) / (denom or 1)
+            document_id = str(metadata.get("document_id"))
+            if score > scores.get(document_id, 0.0):
+                scores[document_id] = score
+                scores[f"{document_id}:text"] = text  # 保留最高分片正文，下面会拆开
+                scores[f"{document_id}:meta"] = metadata  # type: ignore[assignment]
+        return scores
+
     def search(
         self,
         query: str,
@@ -388,36 +435,48 @@ class ChromaRagStore:
         total = self.collection.count()
         if not query.strip() or total == 0:
             return []
-        # 多取候选再按状态过滤，避免待审或废止残留分片占满前几名。
+        rows = self._visible_rows(station_id, visible_station_ids)
+        if not rows:
+            return []
+        sparse = self._bm25_scores(query, rows)
         result = self.collection.query(
             query_texts=[query],
             n_results=min(max(limit * 8, 24), total),
             include=["documents", "metadatas", "distances"],
         )
+        vector_best: dict[str, tuple[float, str, dict[str, Any]]] = {}
         documents = (result.get("documents") or [[]])[0]
         metadatas = (result.get("metadatas") or [[]])[0]
         distances = (result.get("distances") or [[]])[0]
-        best: dict[str, dict[str, Any]] = {}
         for document, metadata, distance in zip(documents, metadatas, distances):
-            if not self._visible(metadata, station_id, visible_station_ids):
+            if not metadata or not self._visible(metadata, station_id, visible_station_ids):
                 continue
             document_id = str(metadata.get("document_id"))
             similarity = 1.0 - float(distance)
-            lexical = self._lexical_score(query, str(document), str(metadata.get("title") or ""))
-            # 哈希向量只作小幅加分；没有关键词重合且相似度偏低时丢弃。
-            if lexical == 0 and similarity < 0.35:
+            current = vector_best.get(document_id)
+            if current is None or similarity > current[0]:
+                vector_best[document_id] = (similarity, str(document), metadata)
+        candidate_ids = set(vector_best) | {key for key in sparse if ":" not in key and sparse[key] > 0}
+        max_sparse = max((sparse[key] for key in candidate_ids), default=0.0)
+        best: dict[str, dict[str, Any]] = {}
+        for document_id in candidate_ids:
+            similarity, vector_text, vector_meta = vector_best.get(document_id, (0.0, "", {}))
+            text = vector_text or str(sparse.get(f"{document_id}:text") or "")
+            metadata = vector_meta or sparse.get(f"{document_id}:meta") or {}
+            lexical = self._lexical_score(query, text, str(metadata.get("title") or ""))
+            sparse_score = float(sparse.get(document_id) or 0.0)
+            # 向量和 BM25 都只作小幅加分，关键词重合仍决定主要排序。
+            if lexical == 0 and similarity < 0.35 and sparse_score <= 0:
                 continue
             vector_bonus = round(max(0.0, similarity) * 6) if similarity >= 0.2 else 0
-            score = int(lexical + vector_bonus)
+            sparse_bonus = round(sparse_score / max_sparse * 4) if max_sparse and sparse_score > 0 else 0
+            score = int(lexical + vector_bonus + sparse_bonus)
             if score <= 0:
-                continue
-            current = best.get(document_id)
-            if current is not None and int(current["score"]) >= score:
                 continue
             best[document_id] = {
                 "document_id": document_id,
                 "metadata": metadata,
-                "text": document,
+                "text": text,
                 "score": score,
             }
         hits = sorted(best.values(), key=lambda item: (-int(item["score"]), str(item["document_id"])))
@@ -438,6 +497,7 @@ class ChromaRagStore:
             "embedding": self.embedding.name(),
             "embedding_fallback": self.embedding_fallback,
             "engine_mode": "local-hash" if isinstance(self.embedding, LocalHashEmbedding) else "sentence-transformers",
+            "retrieval": "vector+bm25",
             "generation": "disabled",
         }
 
