@@ -27,31 +27,43 @@ os.environ["RAG_GENERATION_ENABLED"] = "0"
 
 
 def smoke_temp_root() -> str:
-    """返回绝对路径的临时根目录，避免临时文件落进仓库。
+    """返回可安全使用的绝对临时目录，避免临时文件落进仓库。
 
-    若 TEMP / TMP 被设成相对路径（例如 `.smoke-temp`），`tempfile` 会按当前
-    工作目录展开，冒烟产物就会写进 backend/ 并被 git 自动提交。这里统一
-    解析成绝对路径，落在仓库内时改用系统临时目录。
+    TEMP / TMP 被设成相对路径（例如 `.smoke-temp`）时，`tempfile` 会按当前
+    工作目录展开，冒烟产物就会写进 backend/ 并被 git 自动提交；chromadb 的
+    sqlite 也会读这个变量，相对路径会直接导致「unable to open database file」。
+    所以这里只接受绝对路径，仓库内目录一律不用，其余情况回退到系统临时目录。
     """
 
-    root = Path(tempfile.gettempdir())
-    if not root.is_absolute():
-        root = Path(os.path.abspath(root))
     repo_root = BACKEND_DIR.parent.resolve()
-    resolved = root.resolve()
-    if resolved == repo_root or repo_root in resolved.parents:
-        # 仓库内的临时目录一律不用，避免污染工作区。
-        root = Path.home() / "AppData" / "Local" / "Temp"
-        root.mkdir(parents=True, exist_ok=True)
-    return str(root)
+    for name in ("TEMP", "TMP", "TMPDIR"):
+        candidate = (os.environ.get(name) or "").strip()
+        if not candidate:
+            continue
+        path = Path(candidate)
+        # 相对路径不信任，避免随当前工作目录漂移。
+        if not path.is_absolute():
+            continue
+        resolved = path.resolve()
+        # 仓库内的目录不用于临时文件，否则会被 git 提交。
+        if resolved == repo_root or repo_root in resolved.parents:
+            continue
+        if resolved.is_dir():
+            return str(resolved)
+    fallback = Path.home() / "AppData" / "Local" / "Temp"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return str(fallback)
 
+
+# 统一进程内的临时目录设置：tempfile 缓存、sqlite 读取的 TEMP/TMP 都指向同一处。
+_SMOKE_TMP_ROOT = smoke_temp_root()
+for _name in ("TEMP", "TMP", "TMPDIR"):
+    os.environ[_name] = _SMOKE_TMP_ROOT
+tempfile.tempdir = _SMOKE_TMP_ROOT
 
 # 向量库和知识文档落盘都指向临时目录，避免冒烟读写真实的 backend/data。
-os.environ["RAG_CHROMA_DIR"] = tempfile.mkdtemp(prefix="smoke_rag_chroma_", dir=smoke_temp_root())
-os.environ["KNOWLEDGE_STORE_DIR"] = tempfile.mkdtemp(prefix="smoke_knowledge_store_", dir=smoke_temp_root())
-# 固定 tempfile 的缓存值，让后续 TemporaryDirectory 也用同一个绝对目录，
-# 否则 TEMP 为相对路径时 chromadb 会拿到相对路径并打不开数据库。
-tempfile.tempdir = smoke_temp_root()
+os.environ["RAG_CHROMA_DIR"] = tempfile.mkdtemp(prefix="smoke_rag_chroma_", dir=_SMOKE_TMP_ROOT)
+os.environ["KNOWLEDGE_STORE_DIR"] = tempfile.mkdtemp(prefix="smoke_knowledge_store_", dir=_SMOKE_TMP_ROOT)
 
 from fastapi.testclient import TestClient
 
