@@ -100,8 +100,9 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
     reciprocal_sum = 0.0
     answerable = 0
     abstain_total = 0
-    abstain_correct = 0
-    false_reject = 0
+    # 两套门控同时统计，用于对比「只看分数」和「分数 + 重排置信度」。
+    abstain_correct = {"score": 0, "rerank": 0}
+    false_reject = {"score": 0, "rerank": 0}
     rows: list[dict[str, Any]] = []
 
     for case in cases:
@@ -112,6 +113,9 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
         top_score = hits[0]["score"] if hits else 0
         # 与线上门控保持一致：最高分不足阈值即视为「资料不足」。
         gated = top_score < min_score
+        # 重排把弱相关片段的 confidence 标成 low，这是比分数更直接的「资料里没有」信号。
+        rerank_weak = bool(hits) and hits[0].get("confidence") == "low"
+        gated_rerank = gated or rerank_weak
 
         row: dict[str, Any] = {
             "id": case.get("id"),
@@ -120,6 +124,7 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
             "rank": None,
             "top_score": top_score,
             "gated": gated,
+            "gated_rerank": gated_rerank,
             "top_ids": ids[:k],
             "note": case.get("note"),
         }
@@ -127,23 +132,23 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
         if expected is None:
             abstain_total += 1
             # 无答案问句：被门控拦住才算正确；返回了高相关片段就是误答。
-            if gated:
-                abstain_correct += 1
-                row["result"] = "abstain_ok"
-            else:
-                row["result"] = f"abstain_fail(top={ids[0] if ids else None})"
+            abstain_correct["score"] += 1 if gated else 0
+            abstain_correct["rerank"] += 1 if gated_rerank else 0
+            row["result"] = "abstain_ok" if gated_rerank else f"abstain_fail(top={ids[0] if ids else None})"
         else:
             answerable += 1
             rank = ids.index(expected) + 1 if expected in ids else None
             row["rank"] = rank
             if rank is None:
                 row["result"] = "miss"
-            elif gated:
-                # 排对了但被阈值拦住：召回够、门控过严，会直接表现为「答不上来」。
-                false_reject += 1
-                row["result"] = f"false_reject(rank={rank})"
             else:
-                row["result"] = f"hit(rank={rank})"
+                false_reject["score"] += 1 if gated else 0
+                false_reject["rerank"] += 1 if gated_rerank else 0
+                if gated_rerank:
+                    # 排对了但被门控拦住：召回够、门控过严，会直接表现为「答不上来」。
+                    row["result"] = f"false_reject(rank={rank})"
+                else:
+                    row["result"] = f"hit(rank={rank})"
             for cutoff in rank_hits:
                 if rank is not None and rank <= cutoff:
                     rank_hits[cutoff] += 1
@@ -162,8 +167,10 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
         "recall_at_3": ratio(rank_hits[3], answerable),
         "recall_at_5": ratio(rank_hits[5], answerable),
         "mrr_at_5": round(reciprocal_sum / answerable, 4) if answerable else 0.0,
-        "abstain_accuracy": ratio(abstain_correct, abstain_total),
-        "false_reject_rate": ratio(false_reject, answerable),
+        "abstain_accuracy": ratio(abstain_correct["score"], abstain_total),
+        "false_reject_rate": ratio(false_reject["score"], answerable),
+        "abstain_accuracy_rerank_gate": ratio(abstain_correct["rerank"], abstain_total),
+        "false_reject_rate_rerank_gate": ratio(false_reject["rerank"], answerable),
         "min_score": min_score,
         "k": k,
         "rows": rows,
@@ -175,8 +182,10 @@ def print_report(summary: dict[str, Any], *, verbose: bool) -> None:
     print(f"问句总数 {summary['cases']}｜可回答 {summary['answerable']}｜无答案 {summary['abstain_cases']}")
     print(f"Recall@1 {summary['recall_at_1']:.2%}   Recall@3 {summary['recall_at_3']:.2%}   "
           f"Recall@5 {summary['recall_at_5']:.2%}   MRR@5 {summary['mrr_at_5']:.4f}")
-    print(f"无答案正确弃答 {summary['abstain_accuracy']:.2%}   可回答误拒 {summary['false_reject_rate']:.2%}   "
-          f"门控阈值 {summary['min_score']}")
+    print(f"门控阈值 {summary['min_score']}")
+    print(f"  只看分数：无答案正确弃答 {summary['abstain_accuracy']:.2%}，可回答误拒 {summary['false_reject_rate']:.2%}")
+    print(f"  分数+重排置信度：无答案正确弃答 {summary['abstain_accuracy_rerank_gate']:.2%}，"
+          f"可回答误拒 {summary['false_reject_rate_rerank_gate']:.2%}")
 
     def is_success(row: dict[str, Any]) -> bool:
         """命中或正确弃答都算达标；误拒、漏检、误答才算未达标。"""
