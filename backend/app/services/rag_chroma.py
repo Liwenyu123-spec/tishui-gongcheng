@@ -365,7 +365,9 @@ class ChromaRagStore:
         """用与内存规程相同量级的关键词分，避免向量分把弱相关结果排到前面。"""
 
         normalized = query.strip().lower()
-        terms = tuple(dict.fromkeys(re.findall(r"[\u4e00-\u9fff]{2,}|[a-zA-Z][a-zA-Z0-9_-]*|\d+", normalized)))
+        terms = tuple(_tokenize(normalized))
+        if terms == ("empty",):
+            terms = ()
         searchable = f"{title} {text}".lower()
         score = 0
         for term in terms:

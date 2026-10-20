@@ -188,6 +188,16 @@ def run_smoke_checks() -> None:
     assert knowledge_search["data_quality"] == "mock"
     assert knowledge_search["results"] and knowledge_search["results"][0]["source_id"] == "mock-knowledge-flow-v1.2"
     assert knowledge_search["results"][0]["location"] == "内置规程"
+    long_query = expect(
+        "连续中文问法命中流量规程",
+        client.get(
+            "/api/v1/knowledge/search",
+            headers=admin_headers,
+            params={"q": "二泵站流量下降后按规程先核查什么", "metric": "flow"},
+        ),
+        200,
+    )
+    assert long_query["results"] and long_query["results"][0]["source_id"] == "mock-knowledge-flow-v1.2"
 
     # 知识文档生命周期：新导入文档先待审，设为现行后才允许检索。
     imported_knowledge = expect(

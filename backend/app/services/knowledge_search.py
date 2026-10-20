@@ -81,9 +81,21 @@ KNOWLEDGE_RULES: tuple[KnowledgeRule, ...] = (
 
 
 def _terms(value: str) -> tuple[str, ...]:
-    """提取中文词组、英文标识和数字，避免依赖外部分词库。"""
+    """提取中文二字/三字片段、英文标识和数字。
 
-    return tuple(dict.fromkeys(re.findall(r"[\u4e00-\u9fff]{2,}|[a-zA-Z][a-zA-Z0-9_-]*|\d+", value.lower())))
+    连续中文整句不能当成一个词，否则「二泵站流量下降后按规程先核查什么」
+    对不上内置规程里的「流量」「下降」。
+    """
+
+    tokens: list[str] = []
+    for block in re.findall(r"[\u4e00-\u9fff]+|[a-zA-Z][a-zA-Z0-9_-]*|\d+", (value or "").lower()):
+        if re.fullmatch(r"[\u4e00-\u9fff]+", block):
+            tokens.extend(block[i : i + 2] for i in range(max(1, len(block) - 1)))
+            if len(block) >= 3:
+                tokens.extend(block[i : i + 3] for i in range(len(block) - 2))
+        else:
+            tokens.append(block)
+    return tuple(dict.fromkeys(tokens))
 
 
 def _is_current(document, now: datetime) -> bool:
