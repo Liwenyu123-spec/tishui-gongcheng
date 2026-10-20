@@ -178,7 +178,13 @@ def print_report(summary: dict[str, Any], *, verbose: bool) -> None:
     print(f"无答案正确弃答 {summary['abstain_accuracy']:.2%}   可回答误拒 {summary['false_reject_rate']:.2%}   "
           f"门控阈值 {summary['min_score']}")
 
-    failures = [row for row in summary["rows"] if not str(row.get("result", "")).startswith("hit")]
+    def is_success(row: dict[str, Any]) -> bool:
+        """命中或正确弃答都算达标；误拒、漏检、误答才算未达标。"""
+
+        result = str(row.get("result", ""))
+        return result.startswith("hit") or result == "abstain_ok"
+
+    failures = [row for row in summary["rows"] if not is_success(row)]
     if failures:
         print(f"\n未达标 {len(failures)} 条：")
         for row in failures:
@@ -230,10 +236,12 @@ def main() -> int:
             store, cleanup_dir = build_temp_store(corpus, args.provider)
             print(f"模式：临时索引｜{store.embedding.name()}｜文档 {len(corpus)}｜chunks={store.collection.count()}")
 
-        from app.services.rag_chroma import _RERANKER_ERROR, _RERANKER_NAME, get_reranker
+        from app.services import rag_chroma
 
-        get_reranker()
-        rerank_label = _RERANKER_NAME or ("关闭" if _RERANKER_ERROR else "未加载")
+        rag_chroma.get_reranker()
+        # 必须读模块属性：from ... import 拿到的是 import 时的快照，
+        # 而 _RERANKER_NAME 是 get_reranker() 执行后才被赋值的。
+        rerank_label = rag_chroma._RERANKER_NAME or ("关闭" if rag_chroma._RERANKER_ERROR else "未加载")
         summary = evaluate(store, cases, k=args.k, min_score=min_score)
         summary["rerank"] = rerank_label
         summary["embedding"] = store.embedding.name()
