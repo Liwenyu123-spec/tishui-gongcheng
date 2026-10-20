@@ -197,8 +197,10 @@ def search_rules(
                 station_ids = ()
             chunk_index = metadata.get("chunk_index")
             chunk_number = int(chunk_index) if chunk_index is not None and str(chunk_index) != "" else None
-            # 优先用章节路径做引用定位；旧索引没有这个字段时退回分片序号。
+            # 优先用「上下文范围」做引用定位：模型看到的是当前条款加相邻条款，
+            # 只写一条会与实际依据不符。旧索引没有这些字段时退回分片序号。
             section_path = str(metadata.get("section_path") or "").strip()
+            context_label = str(item.get("context_label") or "").strip()
             hits.append(
                 KnowledgeHit(
                     source_id=document_id,
@@ -210,7 +212,8 @@ def search_rules(
                     filename=str(metadata.get("filename") or ""),
                     station_ids=station_ids,
                     chunk_index=chunk_number,
-                    location=section_path or (f"分片 {chunk_number + 1}" if chunk_number is not None else "正文"),
+                    location=context_label or section_path
+                    or (f"分片 {chunk_number + 1}" if chunk_number is not None else "正文"),
                     category=str(metadata.get("category") or "规程"),
                     confidence=str(item.get("confidence") or "normal"),
                     rerank=(float(item["rerank"]) if item.get("rerank") is not None else None),

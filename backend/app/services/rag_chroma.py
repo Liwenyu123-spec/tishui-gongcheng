@@ -625,17 +625,25 @@ class ChromaRagStore:
         # 命中的是「下井前要通风」，而「必须两人以上」在相邻的第二条）。
         # 这里不额外查 Chroma：rows 已经把可见分片全取出来了。
         fragments: dict[str, dict[int, str]] = {}
+        sections: dict[str, dict[int, str]] = {}
         for text, metadata in rows:
             fragment_index = metadata.get("chunk_index")
             if fragment_index is None or str(fragment_index) == "":
                 continue
-            fragments.setdefault(str(metadata.get("document_id")), {})[int(fragment_index)] = text
+            document_key = str(metadata.get("document_id"))
+            position = int(fragment_index)
+            fragments.setdefault(document_key, {})[position] = text
+            sections.setdefault(document_key, {})[position] = str(metadata.get("section_path") or "")
 
-        def context_of(document_id: str, chunk_index: Any) -> str:
-            """取当前分片 + 前后各一片，邻近分片各截断 300 字控制长度。"""
+        def context_of(document_id: str, chunk_index: Any) -> tuple[str, str]:
+            """取当前分片 + 前后各一片，返回 (上下文文本, 引用范围标签)。
+
+            邻近分片各截断 300 字控制长度；引用标签如实反映模型实际看到
+            的范围，避免答案其实在相邻条款、引用却只写一条。
+            """
 
             if chunk_index is None or str(chunk_index) == "":
-                return ""
+                return "", ""
             siblings = fragments.get(document_id) or {}
             current = int(chunk_index)
             parts = []
@@ -646,7 +654,25 @@ class ChromaRagStore:
             following = siblings.get(current + 1)
             if following:
                 parts.append(following[:300])
-            return "\n".join(part for part in parts if part)
+            text = "\n".join(part for part in parts if part)
+
+            paths = [
+                (sections.get(document_id) or {}).get(position, "")
+                for position in (current - 1, current, current + 1)
+                if position in siblings
+            ]
+            paths = [path for path in paths if path]
+            if not paths:
+                return text, ""
+            labels = [path.split(" > ")[-1] for path in paths]
+            parents = {path.rsplit(" > ", 1)[0] if " > " in path else "" for path in paths}
+            if len(labels) <= 1:
+                return text, paths[0]
+            if len(parents) == 1:
+                parent = next(iter(parents))
+                span = f"{labels[0]}～{labels[-1]}"
+                return text, f"{parent} > {span}" if parent else span
+            return text, f"{labels[0]}～{labels[-1]}"
 
         sparse = self._bm25_scores(query, rows)
         result = self.collection.query(
@@ -691,9 +717,11 @@ class ChromaRagStore:
                 "confidence": "normal",
             }
             # 邻域上下文只用于重排和生成，引用位置仍指向精确分片。
-            context = context_of(document_id, metadata.get("chunk_index"))
+            context, context_label = context_of(document_id, metadata.get("chunk_index"))
             if context and context != text:
                 entry["context"] = context
+            if context_label:
+                entry["context_label"] = context_label
             if debug:
                 entry["components"] = {
                     "lexical": lexical,
