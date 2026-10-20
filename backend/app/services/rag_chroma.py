@@ -51,6 +51,15 @@ class LocalHashEmbedding:
     def __call__(self, input: list[str]) -> list[list[float]]:
         return [self._encode(text) for text in input]
 
+    # Chroma 1.x 会优先调用这两个方法，保留 __call__ 兼容旧版 Chroma。
+    def embed_documents(self, input: list[str]) -> list[list[float]]:
+        return self(input)
+
+    def embed_query(self, input: str | list[str]) -> list[float] | list[list[float]]:
+        if isinstance(input, str):
+            return self._encode(input)
+        return self(input)
+
     def _encode(self, text: str) -> list[float]:
         vector = [0.0] * self.dimensions
         for token in _tokenize(text):
