@@ -424,13 +424,22 @@ def check_groundedness(answer: str, hits: list[KnowledgeHit]) -> dict[str, Any]:
             "status": "ungrounded",
         }
     if "资料不足" in text:
-        return {
-            "grounded": True,
-            "overlap": 1.0,
-            "cited_titles": [],
-            "warnings": [],
-            "status": "abstain",
-        }
+        # 模型经常先完整作答、再补一句「如需进一步确认，现有资料不足」。
+        # 早期版本只要出现这四个字就判成弃答，正常的回答也被标成 abstain，
+        # 前端会显示「忠实度：未通过」，与实际质量完全相反。
+        # 只有整段都在推脱时才视为弃答：回答很短，或出现明确的拒绝措辞。
+        refusal = any(
+            marker in text
+            for marker in ("无法回答", "无法确定", "不能回答", "没有相关资料", "无法根据", "资料不足，无法")
+        )
+        if len(text) < 120 or refusal:
+            return {
+                "grounded": True,
+                "overlap": 1.0,
+                "cited_titles": [],
+                "warnings": [],
+                "status": "abstain",
+            }
 
     # 忠实度比对用邻域上下文：模型看到的证据如果比 detail 更长，
     # 只拿 detail 比对会把正常引用判成「资料外」。
