@@ -3,13 +3,14 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
 from ..data.knowledge import _KNOWLEDGE, _KNOWLEDGE_CONTENT
 from ..data.monitoring import _STATIONS
 from ..dependencies import get_current_user, require_roles, user_has_station_access
 from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeRagAskRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
 from ..services.audit import record_audit
+from ..services.document_extract import extract_text, suggested_title
 from ..services.knowledge_search import search_rules
 from ..services.rag_chroma import get_rag_store, rag_store_status
 
@@ -166,6 +167,30 @@ def knowledge_detail(document_id: str, user: dict = Depends(get_current_user)) -
     if document.station_ids and not set(document.station_ids).intersection(visible_station_ids):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权查看该站点资料")
     return document
+
+
+@router.post("/knowledge/extract")
+def extract_knowledge_file(
+    file: UploadFile = File(...),
+    _: dict = Depends(require_roles("admin")),
+) -> dict:
+    """上传 PDF、Word 或文本，抽出正文供导入表单预览。"""
+
+    payload = file.file.read()
+    filename = file.filename or "upload.bin"
+    try:
+        content, parser = extract_text(filename, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    return {
+        "filename": filename,
+        "title": suggested_title(filename),
+        "parser": parser,
+        "content": content,
+        "content_length": len(content),
+    }
 
 
 @router.post("/knowledge/import", response_model=KnowledgeDocument)

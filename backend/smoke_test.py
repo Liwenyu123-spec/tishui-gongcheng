@@ -160,6 +160,19 @@ def run_smoke_checks() -> None:
     assert duplicate_review["id"] == review["id"]
     expect("审核员查询人工复核", client.get("/api/v1/reviews", headers=reviewer_headers), 200)
 
+    markdown_extract = expect(
+        "解析 Markdown 规程",
+        client.post(
+            "/api/v1/knowledge/extract",
+            headers=admin_headers,
+            files={"file": ("pump-02-flow.md", "二泵站流量下降时先核对入口压力。".encode("utf-8"), "text/markdown")},
+        ),
+        200,
+    )
+    assert markdown_extract["parser"] == "plain-text"
+    assert "入口压力" in markdown_extract["content"]
+    assert markdown_extract["title"] == "pump-02-flow"
+
     # 本地规程检索只返回版本化规则引用，不依赖数据库或向量库。
     knowledge_search = expect(
         "本地规程检索",

@@ -72,6 +72,7 @@ const searchMessage = ref('')
 const sourceLabel = ref('本地示例')
 const importVisible = ref(false)
 const importing = ref(false)
+const extracting = ref(false)
 const importForm = reactive({ filename: '', title: '', version: '1.0', category: '规程', content: '', stationIds: '', effectiveFrom: '', effectiveTo: '' })
 const csvVisible = ref(false)
 const csvLoading = ref(false)
@@ -156,6 +157,36 @@ const openImport = () => {
   importForm.effectiveFrom = ''
   importForm.effectiveTo = ''
   importVisible.value = true
+}
+
+const extractFromFile = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  extracting.value = true
+  try {
+    const body = new FormData()
+    body.append('file', file)
+    const token = localStorage.getItem('access_token')
+    const response = await fetch('/api/v1/knowledge/extract', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      body,
+    })
+    const data = await response.json().catch(() => null)
+    if (!response.ok) {
+      throw new Error(data && typeof data.detail === 'string' ? data.detail : `解析失败（${response.status}）`)
+    }
+    importForm.filename = data.filename
+    if (!importForm.title) importForm.title = data.title
+    importForm.content = data.content
+    ElMessage.success(`已从文件抽出 ${data.content_length} 字，解析器 ${data.parser}`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '文件解析失败')
+  } finally {
+    extracting.value = false
+  }
 }
 
 const importDocument = async () => {
@@ -292,6 +323,10 @@ onMounted(loadKnowledge)
 
   <el-dialog v-model="importVisible" title="导入知识资料" width="520px">
     <el-form label-width="90px">
+      <el-form-item label="上传文件">
+        <input type="file" accept=".txt,.md,.html,.htm,.pdf,.docx" :disabled="extracting" @change="extractFromFile" />
+        <p class="muted">支持 PDF、Word、Markdown 和文本；抽出正文后仍需确认导入，新资料默认为待审。</p>
+      </el-form-item>
       <el-form-item label="文件名"><el-input v-model="importForm.filename" placeholder="例如 pump-02-operation.md" /></el-form-item>
       <el-form-item label="资料名称"><el-input v-model="importForm.title" placeholder="例如二泵站运行规程" /></el-form-item>
       <el-form-item label="版本"><el-input v-model="importForm.version" /></el-form-item>
