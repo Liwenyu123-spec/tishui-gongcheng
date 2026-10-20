@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -113,6 +114,39 @@ class ChromaRagStore:
             embedding_function=self.embedding,
         )
         self._lock = Lock()
+        self.target_engine = self._init_target_engine()
+        self.target_sources: dict[str, tuple[str, dict[str, Any]]] = {}
+
+    def _init_target_engine(self) -> Any | None:
+        """按目标项目的 SemanticSearchEngine 尝试启用真实 Embedding/Rerank。"""
+
+        mode = os.getenv("RAG_ENGINE_MODE", "auto").strip().lower()
+        if mode in {"local", "hash", "fallback"}:
+            return None
+        root = Path(
+            os.getenv("RAG_TARGET_ROOT", r"H:\Python工程\rag\chroma文档管理")
+        ).resolve()
+        if not root.is_dir():
+            self.target_error = f"目标 RAG 项目目录不存在：{root}"
+            if mode == "target":
+                raise RuntimeError(self.target_error)
+            return None
+        try:
+            if str(root) not in sys.path:
+                sys.path.insert(0, str(root))
+            # 目标项目读取自己的 CHROMA_PERSIST_DIR。给它独立目录，避免与本地
+            # 测试集合混用；正式部署时可通过环境变量覆盖。
+            os.environ.setdefault("CHROMA_PERSIST_DIR", str(self.persist_path / "target_engine"))
+            from semantic_search.app.engine import SemanticSearchEngine
+
+            engine = SemanticSearchEngine()
+            self.target_error = None
+            return engine
+        except Exception as exc:  # noqa: BLE001
+            self.target_error = str(exc)
+            if mode == "target":
+                raise RuntimeError(f"目标 RAG 引擎初始化失败：{exc}") from exc
+            return None
 
     @staticmethod
     def _metadata(
@@ -173,6 +207,15 @@ class ChromaRagStore:
         with self._lock:
             self.collection.delete(where={"document_id": document_id})
             self.collection.add(ids=ids, documents=chunks, metadatas=metadatas)
+        if self.target_engine is not None:
+            target_name = f"text-{hashlib.sha256(content.encode('utf-8')).hexdigest()[:12]}"
+            try:
+                self.target_engine.delete_by_file_name(target_name)
+                self.target_engine.add_documents([content])
+                self.target_sources[target_name] = (document_id, metadatas[0])
+            except Exception as exc:  # noqa: BLE001
+                self.target_error = str(exc)
+                self.target_engine = None
         return len(chunks)
 
     def update_status(self, document_id: str, status: str) -> int:
@@ -227,6 +270,34 @@ class ChromaRagStore:
     ) -> list[dict[str, Any]]:
         if not query.strip() or self.collection.count() == 0:
             return []
+        if self.target_engine is not None:
+            try:
+                target_hits = self.target_engine.search(query, k=max(limit * 2, limit))
+                hits: list[dict[str, Any]] = []
+                seen: set[str] = set()
+                for item in target_hits:
+                    target_name = str(item.get("file_name") or "")
+                    source = self.target_sources.get(target_name)
+                    if source is None:
+                        continue
+                    document_id, metadata = source
+                    if document_id in seen or not self._visible(metadata, station_id, visible_station_ids):
+                        continue
+                    seen.add(document_id)
+                    similarity = float(item.get("similarity") or 0.0)
+                    hits.append(
+                        {
+                            "document_id": document_id,
+                            "metadata": metadata,
+                            "text": str(item.get("snippet") or item.get("document") or ""),
+                            "score": max(1, min(100, round(similarity * 100))),
+                        }
+                    )
+                    if len(hits) >= limit:
+                        return hits
+            except Exception as exc:  # noqa: BLE001
+                self.target_error = str(exc)
+                self.target_engine = None
         result = self.collection.query(
             query_texts=[query],
             n_results=min(max(limit * 4, limit), max(1, self.collection.count())),
@@ -257,6 +328,8 @@ class ChromaRagStore:
             "collection": self.collection_name,
             "chunks": self.collection.count(),
             "embedding": self.embedding.name(),
+            "engine_mode": "target" if self.target_engine is not None else "local-fallback",
+            "target_engine_error": getattr(self, "target_error", None),
         }
 
 
