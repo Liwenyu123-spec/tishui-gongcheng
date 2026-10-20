@@ -24,9 +24,31 @@ if str(BACKEND_DIR) not in sys.path:
 os.environ["RAG_EMBEDDING_PROVIDER"] = "hash"
 os.environ["RAG_RERANK_ENABLED"] = "0"
 os.environ["RAG_GENERATION_ENABLED"] = "0"
+
+
+def smoke_temp_root() -> str:
+    """返回绝对路径的临时根目录，避免临时文件落进仓库。
+
+    若 TEMP / TMP 被设成相对路径（例如 `.smoke-temp`），`tempfile` 会按当前
+    工作目录展开，冒烟产物就会写进 backend/ 并被 git 自动提交。这里统一
+    解析成绝对路径，落在仓库内时改用系统临时目录。
+    """
+
+    root = Path(tempfile.gettempdir())
+    if not root.is_absolute():
+        root = Path(os.path.abspath(root))
+    repo_root = BACKEND_DIR.parent.resolve()
+    resolved = root.resolve()
+    if resolved == repo_root or repo_root in resolved.parents:
+        # 仓库内的临时目录一律不用，避免污染工作区。
+        root = Path.home() / "AppData" / "Local" / "Temp"
+        root.mkdir(parents=True, exist_ok=True)
+    return str(root)
+
+
 # 向量库和知识文档落盘都指向临时目录，避免冒烟读写真实的 backend/data。
-os.environ["RAG_CHROMA_DIR"] = tempfile.mkdtemp(prefix="smoke_rag_chroma_")
-os.environ["KNOWLEDGE_STORE_DIR"] = tempfile.mkdtemp(prefix="smoke_knowledge_store_")
+os.environ["RAG_CHROMA_DIR"] = tempfile.mkdtemp(prefix="smoke_rag_chroma_", dir=smoke_temp_root())
+os.environ["KNOWLEDGE_STORE_DIR"] = tempfile.mkdtemp(prefix="smoke_knowledge_store_", dir=smoke_temp_root())
 
 from fastapi.testclient import TestClient
 
