@@ -160,7 +160,13 @@ def run_smoke_checks() -> None:
     assert duplicate_review["id"] == review["id"]
     expect("审核员查询人工复核", client.get("/api/v1/reviews", headers=reviewer_headers), 200)
 
-    from app.services.knowledge_generate import check_groundedness, clean_query, compress_detail, resolve_follow_up
+    from app.services.knowledge_generate import (
+        check_groundedness,
+        clean_query,
+        compress_detail,
+        resolve_follow_up,
+        select_strong_hits,
+    )
     from app.services.knowledge_search import KnowledgeHit
 
     assert "泵站" in clean_query("帮我看看水泵流量掉下去先看啥")
@@ -199,6 +205,17 @@ def run_smoke_checks() -> None:
         [grounded_hit],
     )
     assert grounded_bad["grounded"] is False and grounded_bad["warnings"]
+    weak_hit = KnowledgeHit(
+        source_id="smoke-weak-1",
+        title="弱相关样例",
+        version="1.0",
+        detail="台账编号备忘",
+        score=3,
+    )
+    strong_only, weak_gate = select_strong_hits([weak_hit, grounded_hit], min_score=8)
+    assert weak_gate["passed"] is True and len(strong_only) == 1 and strong_only[0].source_id == grounded_hit.source_id
+    none_strong, none_gate = select_strong_hits([weak_hit], min_score=8)
+    assert none_strong == [] and none_gate["passed"] is False and none_gate["top_score"] == 3
 
     markdown_extract = expect(
         "解析 Markdown 规程",

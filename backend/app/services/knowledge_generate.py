@@ -304,6 +304,7 @@ def ask_with_retrieval(
             session = _SESSIONS.setdefault(sid, _AskSession())
             session.pending_question = effective
         return {
+            **status,
             "session_id": sid,
             "question": question,
             "effective_question": effective,
@@ -314,13 +315,37 @@ def ask_with_retrieval(
             "answer": "当前没有可引用的现行资料。请补充资料关键词，或先导入并批准相关规程后再继续。",
             "sources": [],
             "compression": {"enabled": False, "chars_before": 0, "chars_after": 0, "reduced": 0},
+            "retrieval_gate": {"passed": False, "min_score": ask_min_score(), "top_score": 0},
             "generation": "clarify",
+        }
+    strong_hits, gate = select_strong_hits(hits)
+    if not strong_hits:
+        with _SESSION_LOCK:
+            session = _SESSIONS.setdefault(sid, _AskSession())
+            session.pending_question = effective
+        message = (
+            f"检索相关度偏低（最高 {gate['top_score']}，门槛 {gate['min_score']}）。"
+            "请补充泵站、指标或规程关键词后再问，勿依据弱相关片段作答。"
+        )
+        return {
             **status,
+            "session_id": sid,
+            "question": question,
+            "effective_question": effective,
+            "rewritten_query": rewritten,
+            "merged": bool(turn.get("merged")),
+            "needs_clarification": True,
+            "clarification": message,
+            "answer": message,
+            "sources": [_hit_payload(hit) for hit in hits[:3]],
+            "compression": {"enabled": False, "chars_before": 0, "chars_after": 0, "reduced": 0},
+            "retrieval_gate": gate,
+            "generation": "abstain",
         }
     if not status["generation_ready"]:
         raise RuntimeError(status["generation_error"] or "生成问答不可用")
     # 对照参考项目的句级压缩：只把和问句相关的句子送给模型。
-    compressed_hits, compress_stats = compress_hits(hits, rewritten or cleaned or effective)
+    compressed_hits, compress_stats = compress_hits(strong_hits, rewritten or cleaned or effective)
     answer = _complete(effective, compressed_hits)
     groundedness = check_groundedness(answer, compressed_hits)
     if not groundedness["grounded"]:
@@ -346,8 +371,34 @@ def ask_with_retrieval(
         "sources": [_hit_payload(hit) for hit in compressed_hits],
         "compression": compress_stats,
         "groundedness": groundedness,
+        "retrieval_gate": {**gate, "passed": True},
         "generation": "deepseek",
         **status,
+    }
+
+
+def ask_min_score() -> int:
+    """生成问答最低相关度；低于此分不调用模型。可用 RAG_ASK_MIN_SCORE 调整。"""
+
+    raw = os.getenv("RAG_ASK_MIN_SCORE", "8").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 8
+
+
+def select_strong_hits(hits: list[KnowledgeHit], *, min_score: int | None = None) -> tuple[list[KnowledgeHit], dict[str, Any]]:
+    """按相关度门槛筛出可送给模型的命中。"""
+
+    threshold = ask_min_score() if min_score is None else max(0, min_score)
+    top_score = max((hit.score for hit in hits), default=0)
+    strong = [hit for hit in hits if hit.score >= threshold]
+    return strong, {
+        "passed": bool(strong),
+        "min_score": threshold,
+        "top_score": top_score,
+        "kept": len(strong),
+        "total": len(hits),
     }
 
 
