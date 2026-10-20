@@ -5,5 +5,8 @@ chromadb>=1.0,<2.0
 # 目标 chroma 文档管理引擎的可选增强依赖。部署时启用 RAG_ENGINE_MODE=target
 # 前请补齐：llama-index-embeddings-huggingface、llama-index-vector-stores-chroma、
 # sentence-transformers、torch、llama-index-readers-file、jieba、rank-bm25。
-# 真实语义向量的可选依赖（仅当 RAG_EMBEDDING_PROVIDER=sentence-transformers 时安装）：
-# sentence-transformers>=3.0
+# 真实语义向量：RAG_EMBEDDING_PROVIDER=sentence-transformers 时加载 BGE 等模型。
+# sentence-transformers 会用到 transformers；torch 提供推理运行时。
+sentence-transformers>=3.0
+transformers>=4.41
+torch>=2.2
