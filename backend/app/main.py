@@ -70,6 +70,15 @@ app.include_router(audit_router)
 app.include_router(agent_router)
 
 
+@app.on_event("startup")
+def refresh_knowledge_index_on_startup() -> None:
+    """启动时用当前内存文档重刷 Chroma，避免重启后命中已经不存在的资料。"""
+
+    from .routers.knowledge import rebuild_knowledge_index
+
+    rebuild_knowledge_index()
+
+
 # 前端构建目录位于项目根目录的 frontend/dist；开发时可以先执行 npm run build。
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 FRONTEND_INDEX = FRONTEND_DIST / "index.html"

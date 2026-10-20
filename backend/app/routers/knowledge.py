@@ -17,6 +17,38 @@ from ..services.rag_chroma import get_rag_store, rag_store_status
 router = APIRouter(prefix="/api/v1", tags=["知识库"])
 
 
+def rebuild_knowledge_index() -> dict:
+    """按当前内存文档重建索引。重启后内存为空时，会清掉磁盘上残留的旧分片。"""
+
+    store = get_rag_store()
+    if store is None:
+        return rag_store_status()
+    documents = [
+        {
+            "document_id": document.id,
+            "filename": document.filename,
+            "title": document.title,
+            "version": document.version,
+            "category": document.category,
+            "content": _KNOWLEDGE_CONTENT.get(document.id, ""),
+            "station_ids": document.station_ids,
+            "status": document.status,
+            "effective_from": document.effective_from,
+            "effective_to": document.effective_to,
+        }
+        for document in _KNOWLEDGE.values()
+    ]
+    result = store.reindex_documents(documents)
+    indexed_ids = {
+        str(metadata.get("document_id"))
+        for metadata in (store.collection.get(include=["metadatas"]).get("metadatas") or [])
+        if metadata
+    }
+    for document in _KNOWLEDGE.values():
+        document.source = "chroma" if document.id in indexed_ids else "mock"
+    return {**result, **store.stats()}
+
+
 def _sync_knowledge_index(document: KnowledgeDocument) -> None:
     """把内存中的文档生命周期同步到 Chroma；未安装向量库时保持内存检索。"""
 
@@ -96,33 +128,9 @@ def knowledge_rag_status(user: dict = Depends(get_current_user)) -> dict:
 def knowledge_rag_reindex(_: dict = Depends(require_roles("admin"))) -> dict:
     """用当前内存中的知识文档重建 Chroma 索引。切换 Embedding 后需要调用一次。"""
 
-    store = get_rag_store()
-    if store is None:
+    if get_rag_store() is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=rag_store_status().get("error"))
-    documents = [
-        {
-            "document_id": document.id,
-            "filename": document.filename,
-            "title": document.title,
-            "version": document.version,
-            "category": document.category,
-            "content": _KNOWLEDGE_CONTENT.get(document.id, ""),
-            "station_ids": document.station_ids,
-            "status": document.status,
-            "effective_from": document.effective_from,
-            "effective_to": document.effective_to,
-        }
-        for document in _KNOWLEDGE.values()
-    ]
-    result = store.reindex_documents(documents)
-    indexed_ids = {
-        str(metadata.get("document_id"))
-        for metadata in (store.collection.get(include=["metadatas"]).get("metadatas") or [])
-        if metadata
-    }
-    for document in _KNOWLEDGE.values():
-        document.source = "chroma" if document.id in indexed_ids else "mock"
-    return {**result, **store.stats()}
+    return rebuild_knowledge_index()
 
 
 @router.post("/knowledge/rag/ask")
