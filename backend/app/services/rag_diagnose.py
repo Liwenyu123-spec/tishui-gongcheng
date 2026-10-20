@@ -86,12 +86,23 @@ def diagnose(
 
     # 环境问题优先级最高：引擎退化时，后面的分数解释意义不大。
     environment_notes: list[str] = []
+    # 显式指定 hash 与「加载失败回退 hash」表现不同：前者没有 fallback 信息，
+    # 但检索质量一样不可接受，所以两种都算退化。
+    using_hash = str(status.get("engine_mode") or "") == "local-hash"
     if store.embedding_fallback:
         environment_notes.append(f"向量模型回退为哈希：{store.embedding_fallback}")
+    elif using_hash:
+        environment_notes.append(
+            "当前显式使用哈希向量（RAG_EMBEDDING_PROVIDER=hash），仅适合离线自测，检索质量明显低于语义模型。"
+        )
     if not warmup.get("attempted"):
         environment_notes.append("启动预热未执行，首次检索会明显变慢。")
+    # 区分「主动关闭」和「加载失败」，否则运维会去排查一个刻意的配置。
     if rag_chroma._RERANKER is None:
-        environment_notes.append(f"重排未加载：{rag_chroma._RERANKER_ERROR or '尚未初始化'}")
+        if rag_chroma._RERANKER_ERROR == "重排已关闭":
+            environment_notes.append("重排已主动关闭，弱相关片段只能靠分数门槛拦截。")
+        else:
+            environment_notes.append(f"重排未加载：{rag_chroma._RERANKER_ERROR or '尚未初始化'}")
 
     if store.collection.count() == 0:
         return {
@@ -100,7 +111,13 @@ def diagnose(
             "reason_text": REASON_TEXT["no_documents"],
             "verdict": "知识库为空，无法检索",
             "notes": ["先导入资料并把状态改为现行，然后调用 POST /knowledge/rag/reindex。"],
-            "environment": {**status, "warmup": warmup, "degraded": True},
+            "environment": {
+                **status,
+                "warmup": warmup,
+                "rerank_model": rag_chroma._RERANKER_NAME,
+                "rerank_error": None if rag_chroma._RERANKER is not None else rag_chroma._RERANKER_ERROR,
+                "degraded": bool(store.embedding_fallback) or using_hash or rag_chroma._RERANKER is None,
+            },
             "environment_notes": environment_notes,
             "gate": None,
             "hits": [],
@@ -209,7 +226,8 @@ def diagnose(
             "rerank_model": rag_chroma._RERANKER_NAME,
             "rerank_error": None if rag_chroma._RERANKER is not None else rag_chroma._RERANKER_ERROR,
             # 在环境块里直接给结论，前端不必自己判断是否退化。
-            "degraded": bool(store.embedding_fallback) or rag_chroma._RERANKER is None,
+            # 哈希向量即使没有报错也属于退化，否则页面会显示「一切正常」。
+            "degraded": bool(store.embedding_fallback) or using_hash or rag_chroma._RERANKER is None,
         },
         "environment_notes": environment_notes,
         "gate": gate,
