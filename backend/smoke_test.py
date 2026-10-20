@@ -160,7 +160,7 @@ def run_smoke_checks() -> None:
     assert duplicate_review["id"] == review["id"]
     expect("审核员查询人工复核", client.get("/api/v1/reviews", headers=reviewer_headers), 200)
 
-    from app.services.knowledge_generate import clean_query, compress_detail
+    from app.services.knowledge_generate import clean_query, compress_detail, resolve_follow_up
 
     assert "泵站" in clean_query("帮我看看水泵流量掉下去先看啥")
     assert "下降" in clean_query("帮我看看水泵流量掉下去先看啥")
@@ -170,6 +170,11 @@ def run_smoke_checks() -> None:
     )
     assert "入口压力" in compressed
     assert "ABC-001" not in compressed
+    clarify = resolve_follow_up("流量下降后先核查什么", session_id="smoke-ask-1")
+    assert clarify["needs_clarification"] is True
+    merged = resolve_follow_up("二泵站", session_id="smoke-ask-1")
+    assert merged["needs_clarification"] is False
+    assert "流量下降" in merged["effective_question"] and "二泵站" in merged["effective_question"]
 
     markdown_extract = expect(
         "解析 Markdown 规程",
@@ -183,9 +188,19 @@ def run_smoke_checks() -> None:
     assert markdown_extract["parser"] == "plain-text"
     assert "入口压力" in markdown_extract["content"]
     assert markdown_extract["title"] == "pump-02-flow"
+    clarify_api = expect(
+        "缺站点时先补问",
+        client.post("/api/v1/knowledge/rag/ask", headers=admin_headers, json={"question": "流量下降后先核查什么", "session_id": "smoke-api-ask"}),
+        200,
+    )
+    assert clarify_api["needs_clarification"] is True and clarify_api["generation"] == "clarify"
     expect(
         "生成问答在冒烟中关闭",
-        client.post("/api/v1/knowledge/rag/ask", headers=admin_headers, json={"question": "二泵站流量下降先核查什么"}),
+        client.post(
+            "/api/v1/knowledge/rag/ask",
+            headers=admin_headers,
+            json={"question": "二泵站流量下降先核查什么", "session_id": "smoke-api-ask-ready"},
+        ),
         503,
     )
 

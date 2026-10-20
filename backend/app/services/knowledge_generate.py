@@ -139,44 +139,141 @@ def generation_status() -> dict[str, Any]:
     }
 
 
+def _has_station(text: str, station_id: str | None = None) -> bool:
+    if station_id:
+        return True
+    return any(alias in (text or "") for alias in _STATION_ALIASES)
+
+
+def _needs_station(text: str) -> bool:
+    """提到测点或核查，但没写泵站时，先补问站点。"""
+
+    if not any(word in (text or "") for word in _METRIC_WORDS):
+        return False
+    return not _has_station(text)
+
+
+def _looks_like_station_reply(text: str) -> bool:
+    """短回复只含站点名时，视为对上一轮补问的回答。"""
+
+    cleaned = clean_query(text)
+    if not cleaned:
+        return False
+    if any(alias == cleaned or cleaned.endswith(alias) or alias in cleaned for alias in _STATION_ALIASES):
+        # 「二泵站」或「就二泵站吧」这类短补充
+        return len(cleaned) <= 12 or cleaned in _STATION_ALIASES
+    return False
+
+
+def _get_session(session_id: str | None) -> tuple[str, _AskSession]:
+    sid = (session_id or "").strip() or f"ask-{uuid4().hex[:12]}"
+    with _SESSION_LOCK:
+        session = _SESSIONS.get(sid)
+        if session is None:
+            session = _AskSession()
+            _SESSIONS[sid] = session
+        return sid, session
+
+
+def resolve_follow_up(question: str, *, session_id: str | None = None, station_id: str | None = None) -> dict[str, Any]:
+    """合并补问。返回有效问句，或 needs_clarification 提示。"""
+
+    sid, session = _get_session(session_id)
+    raw = (question or "").strip()
+    effective = raw
+    merged = False
+    if session.pending_question and (_looks_like_station_reply(raw) or (session.pending_question and _has_station(raw) and len(raw) <= 20)):
+        effective = f"{session.pending_question}（站点：{raw}）"
+        session.pending_question = None
+        merged = True
+    elif _needs_station(raw) and not station_id:
+        session.pending_question = raw
+        return {
+            "session_id": sid,
+            "question": raw,
+            "effective_question": raw,
+            "needs_clarification": True,
+            "clarification": "请补充要核查的泵站，例如二泵站，或直接回复站点名称继续。",
+            "answer": "请补充要核查的泵站，例如二泵站，或直接回复站点名称继续。",
+            "merged": False,
+            "sources": [],
+            "compression": {"enabled": False, "chars_before": 0, "chars_after": 0, "reduced": 0},
+            "generation": "clarify",
+            "rewritten_query": "",
+        }
+    else:
+        session.pending_question = None
+    return {
+        "session_id": sid,
+        "question": raw,
+        "effective_question": effective,
+        "needs_clarification": False,
+        "clarification": "",
+        "merged": merged,
+    }
+
+
 def ask_with_retrieval(
     question: str,
     *,
     k: int = 5,
     station_id: str | None = None,
     visible_station_ids: set[str] | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """检索现行有效资料后生成说明。没有密钥或没有可用片段时不调用模型。"""
 
     status = generation_status()
-    cleaned = clean_query(question)
+    turn = resolve_follow_up(question, session_id=session_id, station_id=station_id)
+    if turn.get("needs_clarification"):
+        return {**turn, **status}
+    sid = str(turn["session_id"])
+    effective = str(turn["effective_question"])
+    cleaned = clean_query(effective)
     rewritten = cleaned
     if status["generation_ready"]:
         rewritten = _rewrite_query(cleaned) or cleaned
     hits = _search_queries(
-        [question, cleaned, rewritten],
+        [effective, cleaned, rewritten],
         k=k,
         station_id=station_id,
         visible_station_ids=visible_station_ids,
     )
     if not hits:
+        with _SESSION_LOCK:
+            session = _SESSIONS.setdefault(sid, _AskSession())
+            session.pending_question = effective
         return {
+            "session_id": sid,
             "question": question,
+            "effective_question": effective,
             "rewritten_query": rewritten,
-            "answer": "当前没有可引用的现行资料，无法生成说明。请先导入并批准相关规程。",
+            "merged": bool(turn.get("merged")),
+            "needs_clarification": True,
+            "clarification": "当前没有可引用的现行资料。请补充资料关键词，或先导入并批准相关规程后再继续。",
+            "answer": "当前没有可引用的现行资料。请补充资料关键词，或先导入并批准相关规程后再继续。",
             "sources": [],
             "compression": {"enabled": False, "chars_before": 0, "chars_after": 0, "reduced": 0},
-            "generation": "skipped",
+            "generation": "clarify",
             **status,
         }
     if not status["generation_ready"]:
         raise RuntimeError(status["generation_error"] or "生成问答不可用")
     # 对照参考项目的句级压缩：只把和问句相关的句子送给模型。
-    compressed_hits, compress_stats = compress_hits(hits, rewritten or cleaned or question)
-    answer = _complete(question, compressed_hits)
+    compressed_hits, compress_stats = compress_hits(hits, rewritten or cleaned or effective)
+    answer = _complete(effective, compressed_hits)
+    with _SESSION_LOCK:
+        session = _SESSIONS.setdefault(sid, _AskSession())
+        session.pending_question = None
+        session.last_answer = answer
     return {
+        "session_id": sid,
         "question": question,
+        "effective_question": effective,
         "rewritten_query": rewritten,
+        "merged": bool(turn.get("merged")),
+        "needs_clarification": False,
+        "clarification": "",
         "answer": answer,
         "sources": [_hit_payload(hit) for hit in compressed_hits],
         "compression": compress_stats,

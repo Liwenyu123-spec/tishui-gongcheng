@@ -153,6 +153,7 @@ def knowledge_rag_ask(
             k=payload.k,
             station_id=payload.station_id,
             visible_station_ids=visible_station_ids,
+            session_id=payload.session_id,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc

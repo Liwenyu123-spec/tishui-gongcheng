@@ -78,6 +78,9 @@ const askAnswer = ref('')
 const askRewritten = ref('')
 const askCompression = ref('')
 const askSources = ref<SearchHit[]>([])
+const askSessionId = ref(localStorage.getItem('knowledge_ask_session') || '')
+const askTurns = ref<{ role: string; text: string }[]>([])
+const askNeedsClarification = ref(false)
 const asking = ref(false)
 const importForm = reactive({ filename: '', title: '', version: '1.0', category: '规程', content: '', stationIds: '', effectiveFrom: '', effectiveTo: '' })
 const csvVisible = ref(false)
@@ -165,6 +168,18 @@ const openImport = () => {
   importVisible.value = true
 }
 
+const clearAskSession = () => {
+  askSessionId.value = ''
+  localStorage.removeItem('knowledge_ask_session')
+  askTurns.value = []
+  askAnswer.value = ''
+  askRewritten.value = ''
+  askCompression.value = ''
+  askSources.value = []
+  askNeedsClarification.value = false
+  askQuestion.value = ''
+}
+
 const askKnowledge = async () => {
   const question = askQuestion.value.trim()
   if (!question) {
@@ -172,25 +187,42 @@ const askKnowledge = async () => {
     return
   }
   asking.value = true
+  askTurns.value = [...askTurns.value, { role: '用户', text: question }]
   try {
     const result = await api<{
       answer: string
       rewritten_query?: string
+      session_id?: string
+      effective_question?: string
+      needs_clarification?: boolean
+      clarification?: string
+      merged?: boolean
       sources: SearchHit[]
       compression?: { chars_before?: number; chars_after?: number; reduced?: number }
-    }>('/api/v1/knowledge/rag/ask', { method: 'POST', body: JSON.stringify({ question, k: 5 }) })
+    }>('/api/v1/knowledge/rag/ask', {
+      method: 'POST',
+      body: JSON.stringify({ question, k: 5, session_id: askSessionId.value || null }),
+    })
+    if (result.session_id) {
+      askSessionId.value = result.session_id
+      localStorage.setItem('knowledge_ask_session', result.session_id)
+    }
     askAnswer.value = result.answer
-    askRewritten.value = result.rewritten_query || ''
+    askRewritten.value = result.rewritten_query || (result.merged && result.effective_question ? result.effective_question : '')
+    askNeedsClarification.value = Boolean(result.needs_clarification)
     const compression = result.compression
-    askCompression.value = compression
+    askCompression.value = compression && compression.chars_before
       ? `上下文压缩：${compression.chars_before || 0} → ${compression.chars_after || 0} 字（减少 ${compression.reduced || 0}）`
       : ''
     askSources.value = result.sources || []
+    askTurns.value = [...askTurns.value, { role: '助手', text: result.answer }]
+    askQuestion.value = ''
   } catch (error) {
     askAnswer.value = ''
     askRewritten.value = ''
     askCompression.value = ''
     askSources.value = []
+    askNeedsClarification.value = false
     ElMessage.error(error instanceof Error ? error.message : '规程说明生成失败')
   } finally {
     asking.value = false
@@ -316,15 +348,24 @@ onMounted(loadKnowledge)
   </div>
 
   <div class="panel" style="margin-bottom:16px;padding:16px 18px">
-    <p class="muted">规程说明：根据现行检索片段生成，不查询实时测点。</p>
+    <p class="muted">规程说明：根据现行检索片段生成，不查询实时测点。缺泵站时可多轮补问。</p>
     <div class="filterbar" style="padding:0">
-      <el-input v-model="askQuestion" placeholder="例如：二泵站流量下降后按规程先核查什么" style="max-width:520px" clearable />
-      <el-button class="button-stable button-stable--sm" type="primary" :loading="asking" @click="askKnowledge">生成说明</el-button>
+      <el-input
+        v-model="askQuestion"
+        :placeholder="askNeedsClarification ? '例如直接回复：二泵站' : '例如：流量下降后按规程先核查什么'"
+        style="max-width:520px"
+        clearable
+        @keyup.enter="askKnowledge"
+      />
+      <el-button class="button-stable button-stable--sm" type="primary" :loading="asking" @click="askKnowledge">{{ askNeedsClarification ? '继续' : '生成说明' }}</el-button>
+      <el-button class="button-stable button-stable--sm" plain :disabled="asking" @click="clearAskSession">新对话</el-button>
     </div>
-    <div v-if="askAnswer" style="margin-top:12px">
+    <div v-if="askTurns.length" style="margin-top:12px">
+      <p v-for="(turn, index) in askTurns" :key="`${turn.role}-${index}`" class="muted">{{ turn.role }}：{{ turn.text }}</p>
+    </div>
+    <div v-if="askAnswer && !askNeedsClarification" style="margin-top:12px">
       <p v-if="askRewritten" class="muted">检索问法：{{ askRewritten }}</p>
       <p v-if="askCompression" class="muted">{{ askCompression }}</p>
-      <p>{{ askAnswer }}</p>
       <p v-for="source in askSources" :key="source.source_id" class="muted">引用：{{ source.title }} · {{ source.location }}</p>
     </div>
   </div>
