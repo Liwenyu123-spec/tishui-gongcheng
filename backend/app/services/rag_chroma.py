@@ -72,6 +72,42 @@ class LocalHashEmbedding:
         return [value / norm for value in vector]
 
 
+class SentenceTransformerEmbedding:
+    """可选的真实语义 Embedding 适配器。
+
+    依赖和模型均采用延迟加载，默认测试模式不会触发下载或初始化大模型。
+    """
+
+    def __init__(self, model_name: str) -> None:
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise RuntimeError(
+                "未安装 sentence-transformers，无法启用真实 Embedding；"
+                "请安装后再设置 RAG_EMBEDDING_PROVIDER=sentence-transformers"
+            ) from exc
+        self.model_name = model_name
+        try:
+            self.model = SentenceTransformer(model_name)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Embedding 模型加载失败：{model_name}；{exc}") from exc
+
+    def name(self) -> str:
+        return f"sentence-transformers:{self.model_name}"
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        vectors = self.model.encode(input, normalize_embeddings=True)
+        return vectors.tolist()
+
+    def embed_documents(self, input: list[str]) -> list[list[float]]:
+        return self(input)
+
+    def embed_query(self, input: str | list[str]) -> list[float] | list[list[float]]:
+        if isinstance(input, str):
+            return self([input])[0]
+        return self(input)
+
+
 def split_text(text: str, chunk_size: int = 500, overlap: int = 80) -> list[str]:
     """按段落和句子切分文本，保留少量重叠上下文。"""
 
@@ -105,8 +141,23 @@ class ChromaRagStore:
         default_path = _project_root() / "backend" / "data" / "rag_chroma_db"
         self.persist_path = Path(os.getenv("RAG_CHROMA_DIR", str(default_path))).resolve()
         self.persist_path.mkdir(parents=True, exist_ok=True)
-        self.collection_name = os.getenv("RAG_CHROMA_COLLECTION", "water_project_knowledge")
-        self.embedding = LocalHashEmbedding()
+        base_collection_name = os.getenv("RAG_CHROMA_COLLECTION", "water_project_knowledge")
+        embedding_provider = os.getenv("RAG_EMBEDDING_PROVIDER", "hash").strip().lower()
+        if embedding_provider in {"hash", "local", "fallback"}:
+            self.embedding = LocalHashEmbedding()
+        elif embedding_provider in {"sentence-transformers", "sentence_transformers", "st"}:
+            model_name = os.getenv("RAG_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5").strip()
+            self.embedding = SentenceTransformerEmbedding(model_name)
+        else:
+            raise RuntimeError(
+                f"不支持的 RAG_EMBEDDING_PROVIDER：{embedding_provider}；"
+                "可选 hash 或 sentence-transformers"
+            )
+        # 不同模型的向量维度和语义空间不同，切换模型时使用独立集合，避免混写。
+        self.collection_name = base_collection_name
+        if not isinstance(self.embedding, LocalHashEmbedding):
+            suffix = hashlib.sha256(self.embedding.name().encode("utf-8")).hexdigest()[:10]
+            self.collection_name = f"{base_collection_name}_{suffix}"
         self.client = chromadb.PersistentClient(path=str(self.persist_path))
         self.collection = self.client.get_or_create_collection(
             name=self.collection_name,

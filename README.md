@@ -119,7 +119,8 @@ cd ..\backend
 - 文档导入：`POST /api/v1/knowledge/import`；
 - 文档检索：`GET /api/v1/knowledge/search?q=流量异常`；
 - 当前使用本地确定性测试 Embedding，不调用外部大模型；
-- 后续可以把该 Embedding 替换为 `chroma 文档管理` 项目中的 Chinese-CLIP 或 HuggingFace Embedding。
+- 可通过 `RAG_EMBEDDING_PROVIDER=sentence-transformers` 切换真实语义 Embedding，模型由 `RAG_EMBEDDING_MODEL` 指定（默认 `BAAI/bge-small-zh-v1.5`）；首次使用前需要安装 `sentence-transformers` 并准备模型；
+- 切换真实模型后会自动使用独立 Chroma 集合，需要重新导入测试资料，避免不同向量空间混写。
 
 该阶段的文档正文和元数据仍保存在进程内，Chroma 只负责切片向量和检索，因此适合联调验证，不作为生产持久化方案。
 
