@@ -12,7 +12,11 @@ def coordinate(answer: AgentAnswer, message: str = "") -> AgentPlan:
     """根据意图和问题用词生成一次最小专业协作计划。"""
 
     rule_plan = plan_for_question(answer.intent, message)
-    requested_names = [name for name in answer.planned_tools if name in READ_ONLY_TOOLS]
+    requested_names = [
+        name
+        for name in answer.planned_tools
+        if name in READ_ONLY_TOOLS and name != "apply_control_boundary"
+    ]
     if not requested_names or answer.intent == "control_rejected":
         return rule_plan
 
