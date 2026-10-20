@@ -1,9 +1,11 @@
 """轻量 Chroma RAG 存储层。
 
 对齐 chroma 文档管理项目里「只检索、不调用大模型」的用法：切块写入 Chroma，
-再用向量距离和关键词重合做混合打分。当前不加载句子向量模型，也不连接外部
-RAG 引擎或业务数据库。编码器仍保持 Chroma EmbeddingFunction 接口，以后替换
-真实 Embedding 时不必改路由。
+再用向量距离和关键词重合做混合打分。编码器保持 Chroma EmbeddingFunction 接口，
+默认加载本地 bge 中文语义模型，加载失败时回退哈希向量并在状态接口说明原因。
+
+配置统一由 `runtime_env` 读取（进程环境 → 根目录 .env → Windows 变量），
+避免不同模块各自读 os.getenv 导致 .env 是否生效取决于 import 顺序。
 """
 
 from __future__ import annotations
@@ -11,12 +13,24 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
+
+from .runtime_env import env_flag, windows_env
+
+# 预热结果：记录 Embedding 和重排模型是否已就绪，供状态接口展示。
+_WARMUP: dict[str, Any] = {
+    "attempted": False,
+    "ok": False,
+    "embedding_ready": False,
+    "rerank_ready": False,
+    "elapsed_seconds": None,
+    "error": None,
+    "finished_at": None,
+}
 
 
 def _project_root() -> Path:
@@ -45,6 +59,8 @@ class LocalHashEmbedding:
 
     def __init__(self, dimensions: int = 256) -> None:
         self.dimensions = dimensions
+        # 记录向量生成总次数，便于状态接口确认索引确实在调用编码器。
+        self.encode_calls = 0
 
     def name(self) -> str:
         return "local-hash-embedding-v1"
@@ -62,6 +78,7 @@ class LocalHashEmbedding:
         return self(input)
 
     def _encode(self, text: str) -> list[float]:
+        self.encode_calls += 1
         vector = [0.0] * self.dimensions
         for token in _tokenize(text):
             digest = hashlib.sha256(token.encode("utf-8")).digest()
@@ -73,9 +90,10 @@ class LocalHashEmbedding:
 
 
 class SentenceTransformerEmbedding:
-    """可选的真实语义 Embedding 适配器。
+    """真实语义 Embedding 适配器。
 
-    依赖和模型均采用延迟加载，默认测试模式不会触发下载或初始化大模型。
+    优先按本地路径加载（RAG_EMBEDDING_MODEL 可以是目录），其次按 HuggingFace
+    模型名加载；两者都用 local_files_only 先试，避免离线环境卡在联网校验上。
     """
 
     def __init__(self, model_name: str) -> None:
@@ -87,10 +105,29 @@ class SentenceTransformerEmbedding:
                 "请安装后再设置 RAG_EMBEDDING_PROVIDER=sentence-transformers"
             ) from exc
         self.model_name = model_name
+        self.model = self._load(SentenceTransformer, model_name)
+
+    @staticmethod
+    def _load(factory, model_name: str):
+        """先按本地缓存离线加载，失败再允许联网，兼顾离线与首次下载。"""
+
+        candidate = Path(model_name)
+        # 配置成目录时直接按目录加载，跳过 HF 的名字解析。
+        if candidate.is_dir():
+            try:
+                return factory(str(candidate), local_files_only=True)
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(f"Embedding 模型加载失败：{model_name}；{exc}") from exc
         try:
-            self.model = SentenceTransformer(model_name)
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"Embedding 模型加载失败：{model_name}；{exc}") from exc
+            return factory(model_name, local_files_only=True)
+        except Exception as offline_error:  # noqa: BLE001
+            try:
+                return factory(model_name)
+            except Exception as exc:  # noqa: BLE001
+                # 两次都失败时把离线错误一并带出，便于判断是缺缓存还是缺网络。
+                raise RuntimeError(
+                    f"Embedding 模型加载失败：{model_name}；离线尝试：{offline_error}；联网尝试：{exc}"
+                ) from exc
 
     def name(self) -> str:
         return f"sentence-transformers:{self.model_name}"
@@ -139,16 +176,18 @@ class ChromaRagStore:
             raise RuntimeError("未安装 chromadb，请先安装 RAG 依赖") from exc
 
         default_path = _project_root() / "backend" / "data" / "rag_chroma_db"
-        self.persist_path = Path(os.getenv("RAG_CHROMA_DIR", str(default_path))).resolve()
+        self.persist_path = Path(windows_env("RAG_CHROMA_DIR") or str(default_path)).resolve()
         self.persist_path.mkdir(parents=True, exist_ok=True)
-        base_collection_name = os.getenv("RAG_CHROMA_COLLECTION", "water_project_knowledge")
+        base_collection_name = windows_env("RAG_CHROMA_COLLECTION") or "water_project_knowledge"
         # 默认使用中文语义向量。模型或依赖不可用时回退哈希，避免检索接口整体不可用。
-        embedding_provider = os.getenv("RAG_EMBEDDING_PROVIDER", "sentence-transformers").strip().lower()
+        embedding_provider = (windows_env("RAG_EMBEDDING_PROVIDER") or "sentence-transformers").strip().lower()
         self.embedding_fallback: str | None = None
+        self.embedding_provider = embedding_provider
         if embedding_provider in {"hash", "local", "fallback"}:
             self.embedding = LocalHashEmbedding()
         elif embedding_provider in {"sentence-transformers", "sentence_transformers", "st"}:
-            model_name = os.getenv("RAG_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5").strip()
+            model_name = (windows_env("RAG_EMBEDDING_MODEL") or "BAAI/bge-small-zh-v1.5").strip()
+            self.embedding_model_name = model_name
             try:
                 self.embedding = SentenceTransformerEmbedding(model_name)
             except RuntimeError as exc:
@@ -512,10 +551,13 @@ class ChromaRagStore:
             "collection": self.collection_name,
             "chunks": self.collection.count(),
             "embedding": self.embedding.name(),
+            "embedding_provider": self.embedding_provider,
+            "embedding_model": getattr(self, "embedding_model_name", None),
             "embedding_fallback": self.embedding_fallback,
             "engine_mode": "local-hash" if isinstance(self.embedding, LocalHashEmbedding) else "sentence-transformers",
             "retrieval": "vector+bm25",
             "rerank": _RERANKER_NAME or ("disabled" if _RERANKER_ERROR else "pending"),
+            "rerank_enabled": env_flag("RAG_RERANK_ENABLED", True),
             "rerank_error": None if _RERANKER is not None else _RERANKER_ERROR,
             "generation": "disabled",
         }
@@ -534,11 +576,11 @@ def get_reranker() -> Any | None:
     global _RERANKER, _RERANKER_ERROR, _RERANKER_NAME
     if _RERANKER is not None or _RERANKER_ERROR is not None:
         return _RERANKER
-    enabled = os.getenv("RAG_RERANK_ENABLED", "1").strip().lower()
-    if enabled in {"0", "false", "off", "none"}:
+    # 开关统一走 runtime_env，保证 .env 里的 RAG_RERANK_ENABLED 一定生效。
+    if not env_flag("RAG_RERANK_ENABLED", True):
         _RERANKER_ERROR = "重排已关闭"
         return None
-    model_path = Path(os.getenv("RAG_RERANK_MODEL", r"H:\二阶段\bge-reranker-base"))
+    model_path = Path(windows_env("RAG_RERANK_MODEL") or r"H:\二阶段\bge-reranker-base")
     if not model_path.is_dir():
         _RERANKER_ERROR = f"本地重排模型不存在：{model_path}"
         return None
@@ -575,8 +617,58 @@ def get_rag_store() -> ChromaRagStore | None:
     return _STORE
 
 
+def warmup_rag() -> dict[str, Any]:
+    """启动时预加载向量和重排模型，避免第一个检索请求等模型初始化。
+
+    Embedding 加载由 ChromaRagStore 构造函数完成；重排模型单独延迟加载，
+    这里一并触发。任何一步失败都不抛出，结果写入 `_WARMUP` 供状态接口查看，
+    服务仍可启动（检索会退化为关键词或跳过精排）。
+    """
+
+    global _WARMUP
+    if _WARMUP["attempted"]:
+        return dict(_WARMUP)
+    started = datetime.now(timezone.utc)
+    monotonic_start = _monotonic()
+    errors: list[str] = []
+    store = get_rag_store()
+    embedding_ready = store is not None and store.embedding_fallback is None
+    if store is None:
+        errors.append(f"Chroma 初始化失败：{_STORE_ERROR}")
+    elif store.embedding_fallback:
+        errors.append(f"Embedding 回退哈希：{store.embedding_fallback}")
+    reranker = get_reranker()
+    rerank_ready = reranker is not None
+    if reranker is None and _RERANKER_ERROR and _RERANKER_ERROR != "重排已关闭":
+        errors.append(f"重排不可用：{_RERANKER_ERROR}")
+    _WARMUP = {
+        "attempted": True,
+        "ok": embedding_ready,
+        "embedding_ready": embedding_ready,
+        "rerank_ready": rerank_ready,
+        "elapsed_seconds": round(_monotonic() - monotonic_start, 2),
+        "error": "；".join(errors) if errors else None,
+        "finished_at": started.isoformat(),
+    }
+    return dict(_WARMUP)
+
+
+def _monotonic() -> float:
+    """读取单调时钟，避免系统时间跳变导致预热耗时出现负数。"""
+
+    import time
+
+    return time.monotonic()
+
+
+def warmup_status() -> dict[str, Any]:
+    """返回预热结果；未执行过预热时 attempted 为 False。"""
+
+    return dict(_WARMUP)
+
+
 def rag_store_status() -> dict[str, Any]:
     store = get_rag_store()
     if store is None:
-        return {"available": False, "error": _STORE_ERROR or "Chroma 未初始化"}
-    return store.stats()
+        return {"available": False, "error": _STORE_ERROR or "Chroma 未初始化", "warmup": warmup_status()}
+    return {**store.stats(), "warmup": warmup_status()}

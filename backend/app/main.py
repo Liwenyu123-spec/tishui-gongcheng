@@ -74,10 +74,18 @@ app.include_router(agent_router)
 
 @app.on_event("startup")
 def refresh_knowledge_index_on_startup() -> None:
-    """启动时用当前内存文档重刷 Chroma，避免重启后命中已经不存在的资料。"""
+    """启动时预加载 RAG 引擎并从磁盘重建知识索引。
+
+    顺序很关键：先预热模型（首次加载 bge 约 10~30 秒），再重建索引。
+    如果放在第一个用户请求里加载，接口会超时；放在重建索引之后，
+    重建过程本身会触发编码器加载，异常信息也更难定位。
+    """
 
     from .routers.knowledge import rebuild_knowledge_index
+    from .services.rag_chroma import warmup_rag
 
+    # 预热失败只写状态，不阻止服务启动：检索会退化为关键词或跳过精排。
+    warmup_rag()
     rebuild_knowledge_index()
 
 

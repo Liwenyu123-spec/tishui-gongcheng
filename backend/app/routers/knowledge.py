@@ -15,6 +15,7 @@ from ..services.document_extract import extract_text, suggested_title
 from ..services.knowledge_generate import ask_with_retrieval, generation_status
 from ..services.knowledge_search import search_rules
 from ..services.rag_chroma import ChromaRagStore, get_rag_store, rag_store_status
+from ..services.runtime_env import env_summary
 
 # 知识库接口管理文档生命周期；检索只返回正文摘要，不提供全文读取。
 router = APIRouter(prefix="/api/v1", tags=["知识库"])
@@ -206,16 +207,19 @@ def search_knowledge(
 def knowledge_rag_status(user: dict = Depends(get_current_user)) -> dict:
     """返回 Chroma 检索状态、文档落盘情况和索引对账结果。
 
-    除原有引擎信息外，新增 `documents`（落盘层）和 `index`（索引一致性）两块，
-    用于快速判断「资料是否还在磁盘」「索引是否和资料一致」。
+    除原有引擎信息外，新增 `documents`（落盘层）、`index`（索引一致性）、
+    `warmup`（模型预热结果）和 `config`（.env 生效情况）四块，
+    用于快速判断「资料在不在磁盘」「索引对不对」「模型有没有真正加载」。
     """
 
     store = get_rag_store()
+    config = env_summary()
     if store is None:
         return {
             **rag_store_status(),
             **generation_status(),
             "documents": knowledge_store.store_status(),
+            "config": config,
             "index": {
                 "indexed_documents": 0,
                 "consistent": not _eligible_ids(),
@@ -230,6 +234,7 @@ def knowledge_rag_status(user: dict = Depends(get_current_user)) -> dict:
         **rag_store_status(),
         **generation_status(),
         "documents": knowledge_store.store_status(),
+        "config": config,
         "index": _index_snapshot(store),
     }
 

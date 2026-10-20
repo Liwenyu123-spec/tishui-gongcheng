@@ -17,6 +17,7 @@ from threading import Lock
 from uuid import uuid4
 
 from .knowledge_search import KnowledgeHit, _terms, search_rules
+from .runtime_env import load_env_file, windows_env
 
 _STATION_ALIASES = ("集泉", "一泵站", "二泵站", "三泵站", "四泵站", "平定入口")
 _METRIC_WORDS = ("流量", "压力", "水位", "液位", "电流", "下降", "异常", "核查", "规程")
@@ -38,47 +39,15 @@ _FOLLOW_MARKERS = ("那", "呢", "还", "再", "同上", "继续", "另外", "�
 
 
 def _load_env_file() -> None:
-    """读取项目根目录 .env。进程里已有的变量不覆盖。"""
+    """读取项目根目录 .env。实际逻辑在 runtime_env，这里保留旧名兼容调用方。"""
 
-    env_path = Path(__file__).resolve().parents[3] / ".env"
-    if not env_path.is_file():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
+    load_env_file()
 
 
 def _windows_env(name: str) -> str:
     """对照 chroma 文档管理：进程环境、.env、用户变量、系统变量。"""
 
-    value = os.getenv(name, "").strip()
-    if value:
-        return value
-    if sys.platform != "win32":
-        return ""
-    try:
-        import winreg
-    except ImportError:
-        return ""
-    for root, path in (
-        (winreg.HKEY_CURRENT_USER, r"Environment"),
-        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
-    ):
-        try:
-            with winreg.OpenKey(root, path) as key:
-                found, _ = winreg.QueryValueEx(key, name)
-        except OSError:
-            continue
-        text = str(found or "").strip()
-        if text:
-            return text
-    return ""
+    return windows_env(name)
 
 
 def _deepseek_api_key() -> str:
