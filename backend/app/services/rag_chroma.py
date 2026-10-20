@@ -530,6 +530,8 @@ class ChromaRagStore:
                 probabilities = [_as_probability(float(value)) for value in raw_scores]
                 for item, probability in zip(hits, probabilities):
                     item["score"] = int(item["score"]) + round(probability * 4)
+                    # 保留连续概率，供门控调参和调试面板使用；confidence 只是它的二分标注。
+                    item["rerank"] = round(probability, 4)
                     # 低于阈值只标记，仍返回给页面，诊断引用会跳过。
                     item["confidence"] = "low" if probability < 0.35 else "normal"
                 hits.sort(key=lambda item: (-int(item["score"]), str(item["document_id"])))
