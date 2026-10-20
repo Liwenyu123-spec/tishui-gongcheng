@@ -180,19 +180,31 @@ _HEADING_PATTERNS: tuple[tuple[int, re.Pattern[str]], ...] = (
 _MARKDOWN_HEADING = re.compile(r"^(#{1,6})\s+(.+)$")
 
 
-def _heading_of(line: str) -> tuple[int, str] | None:
-    """判断一行是否为标题，返回 (层级, 标题文本)。"""
+def _heading_of(line: str) -> tuple[int, str, str] | None:
+    """判断一行是否为标题，返回 (层级, 标题, 同行剩余正文)。
+
+    关键点：像「第三条 出口流量低于计划值时……」这样的行，整行往往就是一条完整
+    规程。早期版本用「行长不超过 60 字」来区分标题和正文，结果所有带内容的条款
+    都被判成正文，章节路径退化成只剩「第二章」，引用也就无法定位到条款。
+    现在改为按序号前缀判定：章/节取其短名，条及以下只把序号当标题，其余作为正文。
+    """
 
     stripped = line.strip()
     if not stripped:
         return None
     markdown = _MARKDOWN_HEADING.match(stripped)
     if markdown:
-        return len(markdown.group(1)), stripped
+        return len(markdown.group(1)), stripped, ""
     for level, pattern in _HEADING_PATTERNS:
-        if pattern.match(stripped):
-            # 标题行通常很短；过长的行更像正文里引用了条款编号，不当作标题。
-            return (level, stripped) if len(stripped) <= 60 else None
+        match = pattern.match(stripped)
+        if not match:
+            continue
+        rest = stripped[match.end():].strip()
+        # 章、节通常是短名（「第一章 总则」），整行都能当标题。
+        if level <= 2 and len(stripped) <= 30:
+            return level, stripped, ""
+        # 条、项、点：序号进标题，后续内容仍属于正文。
+        return level, match.group(0).strip(), rest
     return None
 
 
@@ -211,46 +223,69 @@ def split_structured(text: str, chunk_size: int = 500, overlap: int = 80) -> lis
     if not normalized:
         return []
 
-    blocks: list[dict[str, object]] = []
+    blocks: list[dict[str, str]] = []
     # 用栈维护「当前所处的章节路径」，遇到同级或更高级标题时弹栈。
     stack: list[tuple[int, str]] = []
-    current_lines: list[str] = []
+    body_lines: list[str] = []
+    # 区分「这一节有正文」和「只有标题」：只有标题的章节不单独成片，
+    # 否则每份资料都会多出一堆 6 个字的碎片，白白占用检索名额。
+    has_content = False
+    seen_heading = False
+    preamble = ""
 
     def flush() -> None:
-        if not current_lines:
+        nonlocal has_content
+        body = "\n".join(body_lines).strip()
+        body_lines.clear()
+        had_content = has_content
+        has_content = False
+        # 只有标题、没有正文的章节不成片：路径里已经保留了它，单独存一条
+        # 除了占检索名额没有任何作用。
+        if not body or not had_content:
             return
-        body = "\n".join(current_lines).strip()
-        if not body:
-            current_lines.clear()
-            return
-        path = " > ".join(title for _, title in stack)
-        blocks.append({"text": body, "section_path": path})
-        current_lines.clear()
+        blocks.append({"text": body, "section_path": " > ".join(title for _, title in stack)})
 
-    has_heading = False
     for line in normalized.split("\n"):
         heading = _heading_of(line)
         if heading is None:
-            current_lines.append(line)
+            body_lines.append(line)
+            if line.strip():
+                has_content = True
             continue
-        has_heading = True
-        flush()
-        level, title = heading
-        # 弹出同级的旧标题，保留更高层级，形成完整路径。
+        if not seen_heading:
+            # 第一个标题之前的内容是前言（常见为文档标题），先暂存。
+            preamble = "\n".join(body_lines).strip()
+            body_lines.clear()
+            has_content = False
+            seen_heading = True
+        else:
+            flush()
+        level, title, rest = heading
+        # 弹出同级或更深的旧标题，保留更高层级，形成完整路径。
         while stack and stack[-1][0] >= level:
             stack.pop()
         stack.append((level, title))
         # 标题本身写进分片正文，这样「第二条」这类词也能被关键词和 BM25 命中。
-        current_lines.append(title)
+        body_lines.append(title)
+        if rest:
+            body_lines.append(rest)
+            has_content = True
     flush()
 
-    if not has_heading:
+    # 短前言（多半就是文档标题）并入第一片；长前言单独成片，避免丢失实际内容。
+    if preamble:
+        if len(preamble) < 60 and blocks:
+            blocks[0]["text"] = f"{preamble}\n{blocks[0]['text']}"
+        elif len(preamble) >= 60:
+            blocks.insert(0, {"text": preamble, "section_path": ""})
+
+    if not blocks:
         return [{"text": chunk, "section_path": ""} for chunk in split_text(text, chunk_size, overlap)]
 
     pieces: list[dict[str, str]] = []
     for block in blocks:
-        body = str(block["text"])
-        path = str(block["section_path"])
+        body = block["text"]
+        path = block["section_path"]
         if len(body) <= chunk_size:
             pieces.append({"text": body, "section_path": path})
             continue
