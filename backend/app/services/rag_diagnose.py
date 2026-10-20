@@ -16,14 +16,10 @@ from typing import Any
 
 from .knowledge_generate import ask_min_rerank, ask_min_score, select_strong_hits
 from .knowledge_search import KnowledgeHit
-from .rag_chroma import (
-    _RERANKER,
-    _RERANKER_ERROR,
-    _RERANKER_NAME,
-    get_rag_store,
-    rag_store_status,
-    warmup_status,
-)
+# 必须导入模块而不是导入模块级变量：`_RERANKER` 等是在 get_reranker() 执行后
+# 才被赋值的，`from ... import _RERANKER` 拿到的是 import 那一刻的 None 快照，
+# 会导致重排明明加载成功却报告「未加载」。
+from . import rag_chroma
 
 # 结论代码 → 中文说明。文案集中在这里，避免前后端两处措辞不一致。
 REASON_TEXT = {
@@ -67,9 +63,9 @@ def diagnose(
     """对一条问句跑完整检索链路并解释结果。"""
 
     started = time.monotonic()
-    store = get_rag_store()
-    status = rag_store_status()
-    warmup = warmup_status()
+    store = rag_chroma.get_rag_store()
+    status = rag_chroma.rag_store_status()
+    warmup = rag_chroma.warmup_status()
 
     def elapsed() -> int:
         return int((time.monotonic() - started) * 1000)
@@ -94,8 +90,8 @@ def diagnose(
         environment_notes.append(f"向量模型回退为哈希：{store.embedding_fallback}")
     if not warmup.get("attempted"):
         environment_notes.append("启动预热未执行，首次检索会明显变慢。")
-    if _RERANKER is None:
-        environment_notes.append(f"重排未加载：{_RERANKER_ERROR or '尚未初始化'}")
+    if rag_chroma._RERANKER is None:
+        environment_notes.append(f"重排未加载：{rag_chroma._RERANKER_ERROR or '尚未初始化'}")
 
     if store.collection.count() == 0:
         return {
@@ -210,10 +206,10 @@ def diagnose(
         "environment": {
             **status,
             "warmup": warmup,
-            "rerank_model": _RERANKER_NAME,
-            "rerank_error": None if _RERANKER is not None else _RERANKER_ERROR,
+            "rerank_model": rag_chroma._RERANKER_NAME,
+            "rerank_error": None if rag_chroma._RERANKER is not None else rag_chroma._RERANKER_ERROR,
             # 在环境块里直接给结论，前端不必自己判断是否退化。
-            "degraded": bool(store.embedding_fallback) or _RERANKER is None,
+            "degraded": bool(store.embedding_fallback) or rag_chroma._RERANKER is None,
         },
         "environment_notes": environment_notes,
         "gate": gate,
