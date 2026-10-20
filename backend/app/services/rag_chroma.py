@@ -166,6 +166,100 @@ def split_text(text: str, chunk_size: int = 500, overlap: int = 80) -> list[str]
     return chunks
 
 
+# 章节标题识别：命中后即可把「一条规程」作为独立分片，引用能精确到条款。
+# 顺序代表嵌套深度，越靠前层级越高。
+_HEADING_PATTERNS: tuple[tuple[int, re.Pattern[str]], ...] = (
+    (1, re.compile(r"^第[〇零一二三四五六七八九十百千万0-9]+[章篇]")),
+    (2, re.compile(r"^第[〇零一二三四五六七八九十百千万0-9]+节")),
+    (3, re.compile(r"^第[〇零一二三四五六七八九十百千万0-9]+条")),
+    (4, re.compile(r"^[一二三四五六七八九十]+、")),
+    (5, re.compile(r"^（[一二三四五六七八九十]+）")),
+    (6, re.compile(r"^\d+(?:\.\d+)+\s")),
+)
+# Markdown 标题单独处理，避免和上面的中文序号混在一起判断层级。
+_MARKDOWN_HEADING = re.compile(r"^(#{1,6})\s+(.+)$")
+
+
+def _heading_of(line: str) -> tuple[int, str] | None:
+    """判断一行是否为标题，返回 (层级, 标题文本)。"""
+
+    stripped = line.strip()
+    if not stripped:
+        return None
+    markdown = _MARKDOWN_HEADING.match(stripped)
+    if markdown:
+        return len(markdown.group(1)), stripped
+    for level, pattern in _HEADING_PATTERNS:
+        if pattern.match(stripped):
+            # 标题行通常很短；过长的行更像正文里引用了条款编号，不当作标题。
+            return (level, stripped) if len(stripped) <= 60 else None
+    return None
+
+
+def split_structured(text: str, chunk_size: int = 500, overlap: int = 80) -> list[dict[str, str]]:
+    """按章节标题切分，返回带章节路径的分片。
+
+    相比定长切片，按「第X章 / 第X条」切开有三个好处：
+    1. 引用可以精确到条款，用户能直接翻到对应位置核对；
+    2. 一条规程通常只讲一件事，向量主题更集中，不容易被无关内容稀释；
+    3. 检索命中后送进模型的片段更短，压缩率和忠实度都更好。
+
+    没有识别到任何标题时退回 `split_text`，行为与旧版一致。
+    """
+
+    normalized = re.sub(r"\r\n?", "\n", text or "").strip()
+    if not normalized:
+        return []
+
+    blocks: list[dict[str, object]] = []
+    # 用栈维护「当前所处的章节路径」，遇到同级或更高级标题时弹栈。
+    stack: list[tuple[int, str]] = []
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        if not current_lines:
+            return
+        body = "\n".join(current_lines).strip()
+        if not body:
+            current_lines.clear()
+            return
+        path = " > ".join(title for _, title in stack)
+        blocks.append({"text": body, "section_path": path})
+        current_lines.clear()
+
+    has_heading = False
+    for line in normalized.split("\n"):
+        heading = _heading_of(line)
+        if heading is None:
+            current_lines.append(line)
+            continue
+        has_heading = True
+        flush()
+        level, title = heading
+        # 弹出同级的旧标题，保留更高层级，形成完整路径。
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        stack.append((level, title))
+        # 标题本身写进分片正文，这样「第二条」这类词也能被关键词和 BM25 命中。
+        current_lines.append(title)
+    flush()
+
+    if not has_heading:
+        return [{"text": chunk, "section_path": ""} for chunk in split_text(text, chunk_size, overlap)]
+
+    pieces: list[dict[str, str]] = []
+    for block in blocks:
+        body = str(block["text"])
+        path = str(block["section_path"])
+        if len(body) <= chunk_size:
+            pieces.append({"text": body, "section_path": path})
+            continue
+        # 单条过长（例如一整节正文）时继续按句子切，章节路径保持不变。
+        for part in split_text(body, chunk_size, overlap):
+            pieces.append({"text": part, "section_path": path})
+    return pieces
+
+
 class ChromaRagStore:
     """当前项目的 Chroma 存储适配器。"""
 
@@ -224,6 +318,7 @@ class ChromaRagStore:
         effective_from: datetime | None,
         effective_to: datetime | None,
         chunk_index: int,
+        section_path: str = "",
     ) -> dict[str, str | int]:
         return {
             "document_id": document_id,
@@ -236,6 +331,8 @@ class ChromaRagStore:
             "effective_from": effective_from.isoformat() if effective_from else "",
             "effective_to": effective_to.isoformat() if effective_to else "",
             "chunk_index": chunk_index,
+            # 章节路径用于引用定位（如「第二章 > 第三条」）；旧索引没有这个字段，读取时回退到分片序号。
+            "section_path": section_path,
         }
 
     @staticmethod
@@ -309,10 +406,10 @@ class ChromaRagStore:
         effective_from: datetime | None = None,
         effective_to: datetime | None = None,
     ) -> int:
-        chunks = split_text(content)
-        if not chunks:
+        pieces = split_structured(content)
+        if not pieces:
             return 0
-        ids = [f"{document_id}:chunk:{index}" for index in range(len(chunks))]
+        ids = [f"{document_id}:chunk:{index}" for index in range(len(pieces))]
         metadatas = [
             self._metadata(
                 document_id=document_id,
@@ -325,13 +422,14 @@ class ChromaRagStore:
                 effective_from=effective_from,
                 effective_to=effective_to,
                 chunk_index=index,
+                section_path=piece["section_path"],
             )
-            for index in range(len(chunks))
+            for index, piece in enumerate(pieces)
         ]
         with self._lock:
             self.collection.delete(where={"document_id": document_id})
-            self.collection.add(ids=ids, documents=chunks, metadatas=metadatas)
-        return len(chunks)
+            self.collection.add(ids=ids, documents=[piece["text"] for piece in pieces], metadatas=metadatas)
+        return len(pieces)
 
     def reindex_documents(self, documents: list[dict[str, Any]]) -> dict[str, Any]:
         """按当前内存文档重建检索集合，并删掉已不在文档列表中的分片。"""

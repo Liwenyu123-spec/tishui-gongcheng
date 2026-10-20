@@ -143,7 +143,7 @@ def diagnose(
             source="chroma-document",
             filename=str(item["metadata"].get("filename") or ""),
             chunk_index=item["metadata"].get("chunk_index"),
-            location=str(item["metadata"].get("location") or "正文"),
+            location=str(item["metadata"].get("section_path") or "正文"),
             category=str(item["metadata"].get("category") or ""),
             confidence=str(item.get("confidence") or "normal"),
             rerank=item.get("rerank"),
