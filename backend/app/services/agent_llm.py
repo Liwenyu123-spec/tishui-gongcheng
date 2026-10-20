@@ -11,7 +11,7 @@ import json
 import re
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from ..schemas.agent import AgentIntent
 from .runtime_env import env_flag, windows_env

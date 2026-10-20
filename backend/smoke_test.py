@@ -24,6 +24,8 @@ if str(BACKEND_DIR) not in sys.path:
 os.environ["RAG_EMBEDDING_PROVIDER"] = "hash"
 os.environ["RAG_RERANK_ENABLED"] = "0"
 os.environ["RAG_GENERATION_ENABLED"] = "0"
+# 冒烟测试必须固定在离线规则模式，不调用外部大模型或消耗 API 配额。
+os.environ["AGENT_LLM_ENABLED"] = "0"
 
 
 def smoke_temp_root() -> str:

@@ -249,7 +249,14 @@ def _diagnosis_checks(alarm: dict) -> list[str]:
     return checks.get(alarm["metric"], ["核对关联测点、运行记录和现场状态"])
 
 
-def _answer_for_status(message: str, user: dict, request_id: str, now: datetime, requested_station_id: str | None) -> AgentAnswer:
+def _answer_for_status(
+    message: str,
+    user: dict,
+    request_id: str,
+    now: datetime,
+    requested_station_id: str | None,
+    metric_override: str | None = None,
+) -> AgentAnswer:
     station = _find_station(message, requested_station_id, user)
     if station is None:
         return AgentAnswer(
@@ -259,7 +266,9 @@ def _answer_for_status(message: str, user: dict, request_id: str, now: datetime,
             pending_items=["请由管理员为当前账号配置可见站点"],
             generated_at=now,
         )
-    metric = "pressure" if "压力" in message else "level" if "水位" in message else "energy" if "能耗" in message else "flow"
+    metric = metric_override or (
+        "pressure" if "压力" in message else "level" if "水位" in message else "energy" if "能耗" in message else "flow"
+    )
     sample = latest_telemetry(station, metric)
     if sample is None:
         return AgentAnswer(
@@ -291,14 +300,23 @@ def _answer_for_status(message: str, user: dict, request_id: str, now: datetime,
     )
 
 
-def _answer_for_trend(message: str, user: dict, request_id: str, now: datetime, requested_station_id: str | None) -> AgentAnswer:
+def _answer_for_trend(
+    message: str,
+    user: dict,
+    request_id: str,
+    now: datetime,
+    requested_station_id: str | None,
+    metric_override: str | None = None,
+) -> AgentAnswer:
     # 选择站点时只分析该站点；未选择时比较当前账号可见的全部站点。
     if requested_station_id is not None:
         selected_station = _find_station(message, requested_station_id, user)
         stations = [selected_station] if selected_station is not None else []
     else:
         stations = _visible_stations(user)
-    metric = "flow" if "流量" in message else "level" if "水位" in message else "energy" if "能耗" in message else "pressure"
+    metric = metric_override or (
+        "flow" if "流量" in message else "level" if "水位" in message else "energy" if "能耗" in message else "pressure"
+    )
     comparisons = compare_variation(stations, metric)
     if not comparisons:
         return AgentAnswer(
@@ -455,6 +473,7 @@ def build_answer(payload: AgentChatRequest, user: dict) -> AgentAnswer:
             intent = model_route.intent
             if model_route.station_id is not None:
                 payload = payload.model_copy(update={"station_id": model_route.station_id})
+    metric_override = None if model_route is None or model_route.metric == "unknown" else model_route.metric
     if intent == "control_rejected":
         answer = AgentAnswer(
             request_id=request_id,
@@ -469,9 +488,9 @@ def build_answer(payload: AgentChatRequest, user: dict) -> AgentAnswer:
             generated_at=now,
         )
     elif intent == "status":
-        answer = _answer_for_status(payload.message, user, request_id, now, payload.station_id)
+        answer = _answer_for_status(payload.message, user, request_id, now, payload.station_id, metric_override)
     elif intent == "trend":
-        answer = _answer_for_trend(payload.message, user, request_id, now, payload.station_id)
+        answer = _answer_for_trend(payload.message, user, request_id, now, payload.station_id, metric_override)
     elif intent == "diagnosis":
         answer = _answer_for_diagnosis(payload.message, user, request_id, now, payload.station_id)
     elif intent == "supply":
@@ -492,6 +511,7 @@ def build_answer(payload: AgentChatRequest, user: dict) -> AgentAnswer:
         answer = answer.model_copy(
             update={
                 "source": "llm-router+mock",
+                "time_range": model_route.time_range or answer.time_range,
                 "facts": [
                     *answer.facts,
                     f"大模型路由：意图={model_route.intent}；指标={model_route.metric}；时间范围={model_route.time_range}",
