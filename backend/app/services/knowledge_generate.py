@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,7 @@ from .knowledge_search import KnowledgeHit, search_rules
 
 
 def _load_env_file() -> None:
-    """读取项目根目录 .env，便于使用 DEEPSEEK_API_KEY。已有环境变量不覆盖。"""
+    """读取项目根目录 .env。进程里已有的变量不覆盖。"""
 
     env_path = Path(__file__).resolve().parents[3] / ".env"
     if not env_path.is_file():
@@ -30,6 +31,39 @@ def _load_env_file() -> None:
             os.environ[key] = value
 
 
+def _windows_env(name: str) -> str:
+    """对照 chroma 文档管理：进程环境、.env、用户变量、系统变量。"""
+
+    value = os.getenv(name, "").strip()
+    if value:
+        return value
+    if sys.platform != "win32":
+        return ""
+    try:
+        import winreg
+    except ImportError:
+        return ""
+    for root, path in (
+        (winreg.HKEY_CURRENT_USER, r"Environment"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+    ):
+        try:
+            with winreg.OpenKey(root, path) as key:
+                found, _ = winreg.QueryValueEx(key, name)
+        except OSError:
+            continue
+        text = str(found or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _deepseek_api_key() -> str:
+    """优先读 DEEPSEEK_API_KEY，其次兼容 DEEPSEEKAPIKEY。"""
+
+    return _windows_env("DEEPSEEK_API_KEY") or _windows_env("DEEPSEEKAPIKEY")
+
+
 _load_env_file()
 
 SYSTEM_PROMPT = (
@@ -43,8 +77,8 @@ SYSTEM_PROMPT = (
 
 def generation_status() -> dict[str, Any]:
     enabled = os.getenv("RAG_GENERATION_ENABLED", "1").strip().lower() not in {"0", "false", "off", "none"}
-    key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat").strip() or "deepseek-chat"
+    key = _deepseek_api_key()
+    model = _windows_env("DEEPSEEK_MODEL") or "deepseek-chat"
     return {
         "generation": "deepseek" if enabled and key else "disabled",
         "generation_model": model if enabled else None,
@@ -113,9 +147,9 @@ def _complete(question: str, hits: list[KnowledgeHit]) -> str:
         from openai import OpenAI
     except ImportError as exc:
         raise RuntimeError("未安装 openai，无法调用 DeepSeek") from exc
-    key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
-    model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat").strip() or "deepseek-chat"
+    key = _deepseek_api_key()
+    base_url = _windows_env("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+    model = _windows_env("DEEPSEEK_MODEL") or "deepseek-chat"
     context = "\n\n".join(
         f"[{index}] {hit.title}（{hit.location}）\n{hit.detail}" for index, hit in enumerate(hits, start=1)
     )
