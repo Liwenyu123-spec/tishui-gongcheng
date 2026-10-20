@@ -98,3 +98,11 @@ class KnowledgeRagAskRequest(BaseModel):
     station_id: str | None = Field(default=None, max_length=64)
     # 多轮会话编号；补问泵站时带上，服务端合并上一轮待补全问题。
     session_id: str | None = Field(default=None, max_length=64)
+
+
+class KnowledgeRagDebugRequest(BaseModel):
+    """检索诊断请求：只跑检索与门控，不调用生成模型。"""
+
+    question: str = Field(min_length=1, max_length=2000)
+    k: int = Field(default=5, ge=1, le=10)
+    station_id: str | None = Field(default=None, max_length=64)

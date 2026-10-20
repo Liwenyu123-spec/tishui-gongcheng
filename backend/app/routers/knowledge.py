@@ -9,12 +9,13 @@ from ..data import knowledge_store
 from ..data.knowledge import _KNOWLEDGE, _KNOWLEDGE_CONTENT, reload_from_store
 from ..data.monitoring import _STATIONS
 from ..dependencies import get_current_user, require_roles, user_has_station_access
-from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeRagAskRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
+from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeRagAskRequest, KnowledgeRagDebugRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
 from ..services.audit import record_audit
 from ..services.document_extract import extract_text, suggested_title
 from ..services.knowledge_generate import ask_with_retrieval, generation_status
 from ..services.knowledge_search import search_rules
 from ..services.rag_chroma import ChromaRagStore, get_rag_store, rag_store_status
+from ..services.rag_diagnose import diagnose
 from ..services.runtime_env import env_summary
 
 # 知识库接口管理文档生命周期；检索只返回正文摘要，不提供全文读取。
@@ -270,6 +271,29 @@ def knowledge_rag_ask(
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+@router.post("/knowledge/rag/debug")
+def knowledge_rag_debug(
+    payload: KnowledgeRagDebugRequest,
+    user: dict = Depends(require_roles("admin")),
+) -> dict:
+    """检索诊断：返回分项得分、门控判定和可执行结论，不调用生成模型。
+
+    只给管理员：响应里包含分片正文摘要和各路召回细节，属于内部排障信息。
+    """
+
+    visible_station_ids = {
+        station["id"] for station in _STATIONS if user_has_station_access(user, station["id"])
+    }
+    if payload.station_id is not None and payload.station_id not in visible_station_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权检索该站点资料")
+    return diagnose(
+        payload.question,
+        limit=payload.k,
+        station_id=payload.station_id,
+        visible_station_ids=visible_station_ids,
+    )
 
 
 @router.get("/knowledge/{document_id}", response_model=KnowledgeDocument)

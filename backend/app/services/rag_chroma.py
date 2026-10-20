@@ -472,7 +472,15 @@ class ChromaRagStore:
         limit: int = 5,
         station_id: str | None = None,
         visible_station_ids: set[str] | None = None,
+        debug: bool = False,
     ) -> list[dict[str, Any]]:
+        """混合检索。
+
+        `debug=True` 时每个命中会附带 `components`，记录关键词分、向量相似度、
+        BM25 原始值、各自换算后的加分数和重排概率。调权重或排查「为什么没命中」
+        时需要这些分项，正常业务调用不产生这笔开销。
+        """
+
         total = self.collection.count()
         if not query.strip() or total == 0:
             return []
@@ -514,13 +522,26 @@ class ChromaRagStore:
             score = int(lexical + vector_bonus + sparse_bonus)
             if score <= 0:
                 continue
-            best[document_id] = {
+            entry: dict[str, Any] = {
                 "document_id": document_id,
                 "metadata": metadata,
                 "text": text,
                 "score": score,
                 "confidence": "normal",
             }
+            if debug:
+                entry["components"] = {
+                    "lexical": lexical,
+                    "vector_similarity": round(similarity, 4),
+                    "vector_bonus": vector_bonus,
+                    "bm25_raw": round(sparse_score, 4),
+                    "bm25_bonus": sparse_bonus,
+                    "score_before_rerank": score,
+                    # 记录候选来源，便于判断是「向量召回」还是「关键词召回」。
+                    "candidate_from": "both" if document_id in vector_best and sparse_score > 0
+                    else ("vector" if document_id in vector_best else "lexical"),
+                }
+            best[document_id] = entry
         hits = sorted(best.values(), key=lambda item: (-int(item["score"]), str(item["document_id"])))
         reranker = get_reranker()
         if reranker is not None and hits:
@@ -532,6 +553,9 @@ class ChromaRagStore:
                     item["score"] = int(item["score"]) + round(probability * 4)
                     # 保留连续概率，供门控调参和调试面板使用；confidence 只是它的二分标注。
                     item["rerank"] = round(probability, 4)
+                    if debug and "components" in item:
+                        item["components"]["rerank_probability"] = round(probability, 4)
+                        item["components"]["rerank_bonus"] = round(probability * 4)
                     # 低于阈值只标记，仍返回给页面，诊断引用会跳过。
                     item["confidence"] = "low" if probability < 0.35 else "normal"
                 hits.sort(key=lambda item: (-int(item["score"]), str(item["document_id"])))
