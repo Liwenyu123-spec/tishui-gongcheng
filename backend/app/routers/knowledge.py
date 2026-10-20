@@ -17,6 +17,27 @@ from ..services.rag_chroma import get_rag_store, rag_store_status
 router = APIRouter(prefix="/api/v1", tags=["知识库"])
 
 
+def _sync_knowledge_index(document: KnowledgeDocument) -> None:
+    """把内存中的文档生命周期同步到 Chroma；未安装向量库时保持内存检索。"""
+
+    store = get_rag_store()
+    if store is None:
+        document.source = "mock"
+        return
+    chunks = store.sync_document(
+        document_id=document.id,
+        filename=document.filename,
+        title=document.title,
+        version=document.version,
+        content=_KNOWLEDGE_CONTENT.get(document.id, ""),
+        station_ids=document.station_ids,
+        status=document.status,
+        effective_from=document.effective_from,
+        effective_to=document.effective_to,
+    )
+    document.source = "chroma" if chunks else "mock"
+
+
 @router.get("/knowledge", response_model=list[KnowledgeDocument])
 def knowledge(user: dict = Depends(get_current_user)) -> list[KnowledgeDocument]:
     """返回已导入知识文档的元数据。"""
@@ -70,7 +91,7 @@ def knowledge_rag_ask(
     payload: KnowledgeRagAskRequest,
     _: dict = Depends(require_roles("admin", "operator", "reviewer")),
 ) -> dict:
-    """调用目标项目的完整 RAG 编排；缺少模型依赖时返回明确的 503。"""
+    """生成式问答尚未启用；接口保留，调用时返回 503。"""
 
     store = get_rag_store()
     if store is None:
@@ -105,7 +126,7 @@ def import_knowledge(
     payload: KnowledgeImportRequest,
     _: dict = Depends(require_roles("admin")),
 ) -> KnowledgeDocument:
-    """保存知识文档元数据并记录正文长度。"""
+    """保存知识文档元数据和正文。待审资料只留在内存，批准为现行后才写入 Chroma。"""
 
     # 使用短 UUID 生成文档编号，避免依赖上传文件名的唯一性。
     unknown_stations = sorted({station_id for station_id in payload.station_ids if station_id not in {item["id"] for item in _STATIONS}})
@@ -130,20 +151,8 @@ def import_knowledge(
     # 保存元数据和正文；正文只通过检索命中摘要间接返回，不作为全文接口返回。
     _KNOWLEDGE[document.id] = document
     _KNOWLEDGE_CONTENT[document.id] = payload.content
-    store = get_rag_store()
-    if store is not None:
-        store.upsert_document(
-            document_id=document.id,
-            filename=document.filename,
-            title=document.title,
-            version=document.version,
-            content=payload.content,
-            station_ids=document.station_ids,
-            status=document.status,
-            effective_from=document.effective_from,
-            effective_to=document.effective_to,
-        )
-        document.source = "chroma"
+    # 新文档默认待审，sync 会拒绝写入检索集合。
+    _sync_knowledge_index(document)
     record_audit("import", "knowledge", document.id, f"导入文档 {document.filename}，状态为待审")
     return document
 
@@ -163,8 +172,6 @@ def update_knowledge_status(
     # Literal 已限制状态取值；进入现行状态时记录批准时间。
     document.status = payload.status
     document.approved_at = datetime.now(timezone.utc) if payload.status == "valid" else None
-    store = get_rag_store()
-    if store is not None:
-        store.update_status(document_id, payload.status)
+    _sync_knowledge_index(document)
     record_audit("status_update", "knowledge", document_id, f"知识文档 {document.title} 状态更新为 {payload.status}")
     return document

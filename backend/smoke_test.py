@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +32,71 @@ def expect(label: str, response: Any, status_code: int) -> Any:
     return response.json()
 
 
+def check_chroma_index_policy() -> None:
+    """用临时目录确认待审不入库、现行可检索、废止后删除。"""
+
+    try:
+        import chromadb  # noqa: F401
+    except ImportError:
+        return
+    from app.services.rag_chroma import ChromaRagStore
+
+    previous = {
+        key: os.environ.get(key)
+        for key in ("RAG_CHROMA_DIR", "RAG_CHROMA_COLLECTION", "RAG_EMBEDDING_PROVIDER")
+    }
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+        os.environ["RAG_CHROMA_DIR"] = directory
+        os.environ["RAG_CHROMA_COLLECTION"] = "smoke_knowledge"
+        os.environ["RAG_EMBEDDING_PROVIDER"] = "hash"
+        store = ChromaRagStore()
+        now = datetime.now(timezone.utc)
+        pending = store.sync_document(
+            document_id="doc-pending",
+            filename="pending.md",
+            title="待审规程",
+            version="1.0",
+            content="待审正文不应被检索。",
+            station_ids=["pump-02"],
+            status="pending",
+        )
+        assert pending == 0 and store.collection.count() == 0
+        chunks = store.sync_document(
+            document_id="doc-valid",
+            filename="valid.md",
+            title="通知重试规程",
+            version="1.0",
+            content="通知失败后核对失败原因并执行重试。",
+            station_ids=["pump-02"],
+            status="valid",
+            effective_from=now - timedelta(days=1),
+            effective_to=now + timedelta(days=1),
+        )
+        assert chunks >= 1
+        hits = store.search("通知重试规程", station_id="pump-02")
+        assert hits and hits[0]["document_id"] == "doc-valid"
+        assert hits[0]["score"] < 40
+        removed = store.sync_document(
+            document_id="doc-valid",
+            filename="valid.md",
+            title="通知重试规程",
+            version="1.0",
+            content="通知失败后核对失败原因并执行重试。",
+            station_ids=["pump-02"],
+            status="revoked",
+        )
+        assert removed == 0 and store.collection.count() == 0
+        store.client.clear_system_cache()
+        del store
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
 def run_smoke_checks() -> None:
+    check_chroma_index_policy()
     """按业务链路执行认证、权限、监控、事件和审计检查。"""
 
     client = TestClient(app)
@@ -108,6 +175,8 @@ def run_smoke_checks() -> None:
         200,
     )
     assert valid_knowledge["status"] == "valid"
+    assert imported_knowledge["source"] == "mock"
+    assert valid_knowledge["source"] in {"mock", "chroma"}
     approved_search = expect(
         "现行知识可检索",
         client.get("/api/v1/knowledge/search", headers=station_headers, params={"q": "通知重试规程", "station_id": "pump-02"}),

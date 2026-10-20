@@ -1,8 +1,9 @@
 """轻量 Chroma RAG 存储层。
 
-第一阶段不依赖 DeepSeek 或在线模型，使用确定性的本地向量编码完成检索闭环。
-编码器保持 Chroma ``EmbeddingFunction`` 接口，后续可以替换成目标项目里的
-Chinese-CLIP / HuggingFace Embedding，而不需要改动路由和 Agent 层。
+对齐 chroma 文档管理项目里「只检索、不调用大模型」的用法：切块写入 Chroma，
+再用向量距离和关键词重合做混合打分。当前不加载句子向量模型，也不连接外部
+RAG 引擎或业务数据库。编码器仍保持 Chroma EmbeddingFunction 接口，以后替换
+真实 Embedding 时不必改路由。
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ import json
 import math
 import os
 import re
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -165,39 +165,6 @@ class ChromaRagStore:
             embedding_function=self.embedding,
         )
         self._lock = Lock()
-        self.target_engine = self._init_target_engine()
-        self.target_sources: dict[str, tuple[str, dict[str, Any]]] = {}
-
-    def _init_target_engine(self) -> Any | None:
-        """按目标项目的 SemanticSearchEngine 尝试启用真实 Embedding/Rerank。"""
-
-        mode = os.getenv("RAG_ENGINE_MODE", "auto").strip().lower()
-        if mode in {"local", "hash", "fallback"}:
-            return None
-        root = Path(
-            os.getenv("RAG_TARGET_ROOT", r"H:\Python工程\rag\chroma文档管理")
-        ).resolve()
-        if not root.is_dir():
-            self.target_error = f"目标 RAG 项目目录不存在：{root}"
-            if mode == "target":
-                raise RuntimeError(self.target_error)
-            return None
-        try:
-            if str(root) not in sys.path:
-                sys.path.insert(0, str(root))
-            # 目标项目读取自己的 CHROMA_PERSIST_DIR。给它独立目录，避免与本地
-            # 测试集合混用；正式部署时可通过环境变量覆盖。
-            os.environ.setdefault("CHROMA_PERSIST_DIR", str(self.persist_path / "target_engine"))
-            from semantic_search.app.engine import SemanticSearchEngine
-
-            engine = SemanticSearchEngine()
-            self.target_error = None
-            return engine
-        except Exception as exc:  # noqa: BLE001
-            self.target_error = str(exc)
-            if mode == "target":
-                raise RuntimeError(f"目标 RAG 引擎初始化失败：{exc}") from exc
-            return None
 
     @staticmethod
     def _metadata(
@@ -223,6 +190,61 @@ class ChromaRagStore:
             "effective_to": effective_to.isoformat() if effective_to else "",
             "chunk_index": chunk_index,
         }
+
+    @staticmethod
+    def _eligible(status: str, effective_from: datetime | None, effective_to: datetime | None) -> bool:
+        """只有现行且处于有效期内的资料才允许进入检索集合。"""
+
+        if status != "valid":
+            return False
+        now = datetime.now(timezone.utc)
+        start = effective_from if effective_from is None or effective_from.tzinfo else effective_from.replace(tzinfo=timezone.utc)
+        end = effective_to if effective_to is None or effective_to.tzinfo else effective_to.replace(tzinfo=timezone.utc)
+        if start and now < start:
+            return False
+        if end and now >= end:
+            return False
+        return True
+
+    def delete_document(self, document_id: str) -> int:
+        """按文档编号删除全部分片，废止或撤回时调用。"""
+
+        with self._lock:
+            existing = self.collection.get(where={"document_id": document_id})
+            count = len(existing.get("ids") or [])
+            if count:
+                self.collection.delete(where={"document_id": document_id})
+            return count
+
+    def sync_document(
+        self,
+        *,
+        document_id: str,
+        filename: str,
+        title: str,
+        version: str,
+        content: str,
+        station_ids: list[str],
+        status: str,
+        effective_from: datetime | None = None,
+        effective_to: datetime | None = None,
+    ) -> int:
+        """按生命周期同步索引：不可检索时删除，现行有效时重建分片。"""
+
+        if not self._eligible(status, effective_from, effective_to):
+            self.delete_document(document_id)
+            return 0
+        return self.upsert_document(
+            document_id=document_id,
+            filename=filename,
+            title=title,
+            version=version,
+            content=content,
+            station_ids=station_ids,
+            status=status,
+            effective_from=effective_from,
+            effective_to=effective_to,
+        )
 
     def upsert_document(
         self,
@@ -258,27 +280,7 @@ class ChromaRagStore:
         with self._lock:
             self.collection.delete(where={"document_id": document_id})
             self.collection.add(ids=ids, documents=chunks, metadatas=metadatas)
-        if self.target_engine is not None:
-            target_name = f"text-{hashlib.sha256(content.encode('utf-8')).hexdigest()[:12]}"
-            try:
-                self.target_engine.delete_by_file_name(target_name)
-                self.target_engine.add_documents([content])
-                self.target_sources[target_name] = (document_id, metadatas[0])
-            except Exception as exc:  # noqa: BLE001
-                self.target_error = str(exc)
-                self.target_engine = None
         return len(chunks)
-
-    def update_status(self, document_id: str, status: str) -> int:
-        with self._lock:
-            result = self.collection.get(where={"document_id": document_id}, include=["metadatas"])
-            metadatas = result.get("metadatas") or []
-            ids = result.get("ids") or []
-            for metadata in metadatas:
-                metadata["status"] = status
-            if ids and metadatas:
-                self.collection.update(ids=ids, metadatas=metadatas)
-            return len(ids)
 
     @staticmethod
     def _parse_time(value: Any) -> datetime | None:
@@ -311,6 +313,23 @@ class ChromaRagStore:
             return False
         return True
 
+    @staticmethod
+    def _lexical_score(query: str, text: str, title: str) -> int:
+        """用与内存规程相同量级的关键词分，避免向量分把弱相关结果排到前面。"""
+
+        normalized = query.strip().lower()
+        terms = tuple(dict.fromkeys(re.findall(r"[\u4e00-\u9fff]{2,}|[a-zA-Z][a-zA-Z0-9_-]*|\d+", normalized)))
+        searchable = f"{title} {text}".lower()
+        score = 0
+        for term in terms:
+            if term in searchable:
+                score += 2
+            if term in title.lower():
+                score += 2
+        if normalized and normalized in searchable:
+            score += 3
+        return score
+
     def search(
         self,
         query: str,
@@ -319,73 +338,49 @@ class ChromaRagStore:
         station_id: str | None = None,
         visible_station_ids: set[str] | None = None,
     ) -> list[dict[str, Any]]:
-        if not query.strip() or self.collection.count() == 0:
+        total = self.collection.count()
+        if not query.strip() or total == 0:
             return []
-        if self.target_engine is not None:
-            try:
-                target_hits = self.target_engine.search(query, k=max(limit * 2, limit))
-                hits: list[dict[str, Any]] = []
-                seen: set[str] = set()
-                for item in target_hits:
-                    target_name = str(item.get("file_name") or "")
-                    source = self.target_sources.get(target_name)
-                    if source is None:
-                        continue
-                    document_id, metadata = source
-                    if document_id in seen or not self._visible(metadata, station_id, visible_station_ids):
-                        continue
-                    seen.add(document_id)
-                    similarity = float(item.get("similarity") or 0.0)
-                    hits.append(
-                        {
-                            "document_id": document_id,
-                            "metadata": metadata,
-                            "text": str(item.get("snippet") or item.get("document") or ""),
-                            "score": max(1, min(100, round(similarity * 100))),
-                        }
-                    )
-                    if len(hits) >= limit:
-                        return hits
-            except Exception as exc:  # noqa: BLE001
-                self.target_error = str(exc)
-                self.target_engine = None
+        # 多取候选再按状态过滤，避免待审或废止残留分片占满前几名。
         result = self.collection.query(
             query_texts=[query],
-            n_results=min(max(limit * 4, limit), max(1, self.collection.count())),
+            n_results=min(max(limit * 8, 24), total),
             include=["documents", "metadatas", "distances"],
         )
         documents = (result.get("documents") or [[]])[0]
         metadatas = (result.get("metadatas") or [[]])[0]
         distances = (result.get("distances") or [[]])[0]
-        hits: list[dict[str, Any]] = []
-        seen: set[str] = set()
+        best: dict[str, dict[str, Any]] = {}
         for document, metadata, distance in zip(documents, metadatas, distances):
             if not self._visible(metadata, station_id, visible_station_ids):
                 continue
             document_id = str(metadata.get("document_id"))
-            if document_id in seen:
+            similarity = 1.0 - float(distance)
+            lexical = self._lexical_score(query, str(document), str(metadata.get("title") or ""))
+            # 哈希向量只作小幅加分；没有关键词重合且相似度偏低时丢弃。
+            if lexical == 0 and similarity < 0.35:
                 continue
-            seen.add(document_id)
-            score = max(1, min(100, round((1.0 - float(distance)) * 100)))
-            hits.append({"document_id": document_id, "metadata": metadata, "text": document, "score": score})
-            if len(hits) >= limit:
-                break
-        return hits
+            vector_bonus = round(max(0.0, similarity) * 6) if similarity >= 0.2 else 0
+            score = int(lexical + vector_bonus)
+            if score <= 0:
+                continue
+            current = best.get(document_id)
+            if current is not None and int(current["score"]) >= score:
+                continue
+            best[document_id] = {
+                "document_id": document_id,
+                "metadata": metadata,
+                "text": document,
+                "score": score,
+            }
+        hits = sorted(best.values(), key=lambda item: (-int(item["score"]), str(item["document_id"])))
+        return hits[:limit]
 
     def ask(self, question: str, *, k: int = 5, preset: str | None = None) -> dict[str, Any]:
-        """调用目标项目的 RagAskService，提供完整的检索优化和生成编排。"""
+        """生成式问答暂不启用，避免在未接模型时调用外部 RAG 项目。"""
 
-        if self.target_engine is None:
-            reason = getattr(self, "target_error", None) or "目标 RAG 引擎未启用"
-            raise RuntimeError(f"完整 RAG 问答暂不可用：{reason}")
-        from semantic_search.app.service.rag_service import RagAskService
-
-        return RagAskService(self.target_engine).ask(
-            question,
-            k=k,
-            preset=preset or "custom",
-            doc_scope="business",
-        )
+        del question, k, preset
+        raise RuntimeError("当前阶段只提供 Chroma 检索，不调用大模型生成回答")
 
     def stats(self) -> dict[str, Any]:
         return {
@@ -394,8 +389,8 @@ class ChromaRagStore:
             "collection": self.collection_name,
             "chunks": self.collection.count(),
             "embedding": self.embedding.name(),
-            "engine_mode": "target" if self.target_engine is not None else "local-fallback",
-            "target_engine_error": getattr(self, "target_error", None),
+            "engine_mode": "local-hash",
+            "generation": "disabled",
         }
 
 
