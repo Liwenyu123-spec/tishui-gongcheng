@@ -110,6 +110,19 @@ cd ..\backend
 - 分析结果不能作为真实生产调度结论；
 - 真实数据接入前，需要重新确认拓扑、测点、单位、阈值和权限。
 
+### 第一阶段本地 RAG 测试
+
+当前项目已支持一个不依赖 MySQL 和 DeepSeek 的本地 Chroma RAG 测试链路。资料导入后先保持“待审”，管理员将状态改为“现行”后才会参与检索。
+
+- Chroma 数据目录：`backend/data/rag_chroma_db/`；
+- RAG 状态：`GET /api/v1/knowledge/rag/status`；
+- 文档导入：`POST /api/v1/knowledge/import`；
+- 文档检索：`GET /api/v1/knowledge/search?q=流量异常`；
+- 当前使用本地确定性测试 Embedding，不调用外部大模型；
+- 后续可以把该 Embedding 替换为 `chroma 文档管理` 项目中的 Chinese-CLIP 或 HuggingFace Embedding。
+
+该阶段的文档正文和元数据仍保存在进程内，Chroma 只负责切片向量和检索，因此适合联调验证，不作为生产持久化方案。
+
 ## 开发文档
 
 - [项目需求](./提水工程供水调度平台项目需求.md)
