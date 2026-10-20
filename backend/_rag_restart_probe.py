@@ -1,6 +1,7 @@
 """检查重启后 Chroma 不再命中已消失的内存文档。"""
 
 import json
+import urllib.parse
 import urllib.request
 
 BASE = "http://127.0.0.1:8000"
@@ -12,7 +13,8 @@ def request(method: str, path: str, body: dict | None = None, token: str | None 
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=120) as response:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=120) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -32,7 +34,7 @@ def main() -> None:
         token,
     )
     request("PATCH", f"/api/v1/knowledge/{imported['id']}/status", {"status": "valid"}, token)
-    before = request("GET", "/api/v1/knowledge/search?q=重启残留探针", token=token)
+    before = request("GET", "/api/v1/knowledge/search?q=" + urllib.parse.quote("重启残留探针"), token=token)
     hit_ids = [item["source_id"] for item in before["results"]]
     print("before", imported["id"], hit_ids)
     if imported["id"] not in hit_ids:
