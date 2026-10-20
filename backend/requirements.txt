@@ -2,3 +2,6 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 # 第一阶段本地 RAG：持久化向量库；DeepSeek 和 HuggingFace 模型后续再接入。
 chromadb>=1.0,<2.0
+# 目标 chroma 文档管理引擎的可选增强依赖。部署时启用 RAG_ENGINE_MODE=target
+# 前请补齐：llama-index-embeddings-huggingface、llama-index-vector-stores-chroma、
+# sentence-transformers、torch、llama-index-readers-file、jieba、rank-bm25。
