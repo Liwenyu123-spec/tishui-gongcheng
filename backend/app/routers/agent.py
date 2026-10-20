@@ -9,8 +9,7 @@ from collections.abc import Iterator
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from ..agent.executor import ToolContext, execute_plan
-from ..agent.orchestrator import coordinate
+from ..agent.orchestrator import run_plan
 from ..dependencies import require_roles
 from ..schemas.agent import AgentAnswer, AgentChatRequest
 from ..services.audit import record_audit
@@ -30,10 +29,10 @@ def _sse_event(event: str, data: object) -> str:
 def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("admin", "operator", "reviewer"))) -> StreamingResponse:
     """以 SSE 返回规则分析的开始、结果和结束事件。"""
 
-    answer = build_answer(payload, user)
-    plan = coordinate(answer, payload.message)
-    # 工具层按账号和站点范围直接读取 Mock 数据，不再只从最终答案倒推引用。
-    executions = execute_plan(plan, ToolContext(user=user, request=payload, answer=answer))
+    # 先得到确定性的初始分析，再按 Plan & Execute 执行只读工具，最后用工具
+    # 实际返回的来源和状态校正答案，避免工具调用只成为展示日志。
+    initial_answer = build_answer(payload, user)
+    plan, executions, answer = run_plan(initial_answer, payload, user)
     # 记录一次 Agent 查询的摘要，便于管理员在审计页面追踪请求编号和分析分支。
     # 当前只保存意图、来源和站点编号，不保存完整问题正文，避免审计日志膨胀。
     record_audit(

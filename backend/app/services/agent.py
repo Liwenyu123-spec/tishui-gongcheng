@@ -474,3 +474,65 @@ def build_answer(payload: AgentChatRequest, user: dict) -> AgentAnswer:
         generated_at=now,
     )
 
+
+def reconcile_answer_with_tools(answer: AgentAnswer, executions: tuple[object, ...]) -> AgentAnswer:
+    """用实际执行过的只读工具结果校正答案和引用。
+
+    当前规则分支仍负责生成业务答案，但工具执行不再只是前端展示轨迹：
+    这里会根据工具实际返回的来源编号过滤答案引用，并在知识工具没有有效
+    命中时撤掉规程说明，避免把未检索到的默认规则误当成检索依据。
+
+    ``object`` 是为了避免服务层和 agent 执行层形成循环导入；执行对象只需
+    提供 ``tool.name``、``source_ids`` 和 ``summary`` 属性。
+    """
+
+    executed_source_ids = {
+        source_id
+        for execution in executions
+        for source_id in getattr(execution, "source_ids", ())
+    }
+    executed_tool_names = {
+        getattr(getattr(execution, "tool", None), "name", "")
+        for execution in executions
+    }
+
+    # 只保留本轮工具真正返回或明确允许的引用。策略引用不属于数据检索，
+    # 必须始终保留，用来说明只读边界。
+    filtered_citations = [
+        citation
+        for citation in answer.citations
+        if citation.source_type == "policy" or citation.source_id in executed_source_ids
+    ]
+
+    updates: dict[str, object] = {
+        "citations": filtered_citations,
+        "facts": [
+            *answer.facts,
+            *[
+                f"工具证据：{getattr(execution, 'summary', '')}"
+                for execution in executions
+                if getattr(execution, "summary", "")
+            ],
+        ],
+    }
+
+    # 诊断必须经过知识检索；没有有效知识来源时不能继续保留规程说明。
+    knowledge_tools_used = {"search_knowledge", "explain_protocol"}.intersection(executed_tool_names)
+    has_knowledge_evidence = any(
+        citation.source_type == "knowledge" and citation.source_id in executed_source_ids
+        for citation in filtered_citations
+    )
+    if answer.intent == "diagnosis" and knowledge_tools_used and not has_knowledge_evidence:
+        updates["protocol_explanation"] = None
+        updates["confidence"] = "low"
+        updates["pending_items"] = [
+            *answer.pending_items,
+            "当前工具链没有返回足够的现行规程依据，请补充资料或由人工复核",
+        ]
+        updates["limitations"] = [
+            *answer.limitations,
+            "本次诊断未使用有效知识库命中，不能将通用建议视为规程结论",
+        ]
+
+    return answer.model_copy(update=updates)
+
