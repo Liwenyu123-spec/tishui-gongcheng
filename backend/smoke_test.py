@@ -707,6 +707,7 @@ def run_smoke_checks() -> None:
         assert '"coordinator": "dispatch_coordinator"' in agent_response.text
         assert '"allowed_tools":' in agent_response.text
         assert '"read_only": true' in agent_response.text
+        assert "工具证据" in agent_response.text
         assert '"summary":' in agent_response.text
         assert '"source_ids":' in agent_response.text
         assert "start_pump" not in agent_response.text
