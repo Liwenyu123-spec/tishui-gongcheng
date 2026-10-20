@@ -457,7 +457,7 @@ class ChromaRagStore:
             if current is None or similarity > current[0]:
                 vector_best[document_id] = (similarity, str(document), metadata)
         candidate_ids = set(vector_best) | {key for key in sparse if ":" not in key and sparse[key] > 0}
-        max_sparse = max((sparse[key] for key in candidate_ids), default=0.0)
+        max_sparse = max((float(sparse.get(key) or 0.0) for key in candidate_ids), default=0.0)
         best: dict[str, dict[str, Any]] = {}
         for document_id in candidate_ids:
             similarity, vector_text, vector_meta = vector_best.get(document_id, (0.0, "", {}))
