@@ -294,10 +294,19 @@ def ask_with_retrieval(
         with _SESSION_LOCK:
             session = _SESSIONS.setdefault(sid, _AskSession())
             session.pending_question = effective
-        message = (
-            f"检索相关度偏低（最高 {gate['top_score']}，门槛 {gate['min_score']}）。"
-            "请补充泵站、指标或规程关键词后再问，勿依据弱相关片段作答。"
-        )
+        # 分数够但重排判弱，说明片段只是「同领域」而非「答得上」，两者要分开提示，
+        # 否则用户会看到「最高 16 分、门槛 8 分却答不上来」这种自相矛盾的说法。
+        if gate["min_rerank"] is not None and gate["top_score"] >= gate["min_score"]:
+            message = (
+                f"检索到的片段与问题关联较弱（重排置信度最高 {gate['top_rerank']}，"
+                f"下限 {gate['min_rerank']}），资料中可能没有对应答案。"
+                "请补充更具体的设备、指标或规程名称后再问，勿依据弱相关片段作答。"
+            )
+        else:
+            message = (
+                f"检索相关度偏低（最高 {gate['top_score']}，门槛 {gate['min_score']}）。"
+                "请补充泵站、指标或规程关键词后再问，勿依据弱相关片段作答。"
+            )
         return {
             **status,
             "session_id": sid,
