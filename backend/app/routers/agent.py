@@ -49,7 +49,7 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
             "start",
             {
                 "request_id": answer.request_id,
-                "mode": "rule-mock",
+                "mode": "llm-router+rule-tools" if answer.source == "llm-router+mock" else "rule-mock",
                 "coordinator": "dispatch_coordinator",
                 "primary_agent": plan.primary_agent,
                 "collaborating_agents": list(plan.collaborating_agents),

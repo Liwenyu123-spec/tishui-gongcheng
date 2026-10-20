@@ -70,8 +70,8 @@ const messages = ref<AgentMessage[]>([
   {
     id: 'welcome',
     role: 'ai',
-    text: '您好，我是调度辅助 Agent。当前使用规则驱动的 Mock 数据，只提供只读分析和建议草稿。请描述您要查询的运行问题。',
-    evidence: '当前模式：rule-mock · 不调用大模型 · 不生成现场控制指令',
+    text: '您好，我是调度辅助 Agent。当前使用 Mock 数据和只读工具；如已启用模型，将由模型辅助理解问题，但不会直接访问现场或执行控制。请描述您要查询的运行问题。',
+    evidence: '当前模式：规则工具 + 可选大模型路由 · 不生成现场控制指令',
   },
 ])
 const agentLoading = ref(false)
@@ -141,7 +141,7 @@ const ask = async (q = input.value) => {
   const aiMessage = reactive<AgentMessage>({
     id: `ai-${Date.now()}`,
     role: 'ai',
-    text: '正在读取 Mock 数据并进行规则分析…',
+    text: '正在读取授权数据并进行 Agent 分析…',
     pending: true,
   })
   messages.value.push(userMessage, aiMessage)

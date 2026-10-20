@@ -437,13 +437,26 @@ def _answer_for_supply(user: dict, request_id: str, now: datetime) -> AgentAnswe
 
 
 def build_answer(payload: AgentChatRequest, user: dict) -> AgentAnswer:
-    """构建一次确定性 Agent 答案，不调用模型或外部服务。"""
+    """构建 Agent 答案；可选使用大模型路由，数据仍由确定性工具提供。"""
 
     request_id = f"agent-{uuid4().hex[:12]}"
     now = _now()
     intent = _intent(payload.message)
+    model_route = None
+    if intent != "control_rejected":
+        from .agent_llm import route_question
+
+        model_route = route_question(
+            payload.message,
+            visible_stations=_visible_stations(user),
+            requested_station_id=payload.station_id,
+        )
+        if model_route is not None:
+            intent = model_route.intent
+            if model_route.station_id is not None:
+                payload = payload.model_copy(update={"station_id": model_route.station_id})
     if intent == "control_rejected":
-        return AgentAnswer(
+        answer = AgentAnswer(
             request_id=request_id,
             intent=intent,
             answer="该请求涉及现场控制操作，当前 Agent 只允许只读分析，已拒绝生成控制指令。",
@@ -455,24 +468,41 @@ def build_answer(payload: AgentChatRequest, user: dict) -> AgentAnswer:
             time_range="未执行控制查询",
             generated_at=now,
         )
-    if intent == "status":
-        return _answer_for_status(payload.message, user, request_id, now, payload.station_id)
-    if intent == "trend":
-        return _answer_for_trend(payload.message, user, request_id, now, payload.station_id)
-    if intent == "diagnosis":
-        return _answer_for_diagnosis(payload.message, user, request_id, now, payload.station_id)
-    if intent == "supply":
-        return _answer_for_supply(user, request_id, now)
-    return AgentAnswer(
-        request_id=request_id,
-        intent="unknown",
-        answer="我目前支持运行状态、趋势异常、供需缺口和规程核查问题。请补充站点或时间范围。",
-        recommendations=["例如：现在二泵站的压力是多少？", "例如：过去两小时哪个泵站波动最大？"],
-        confidence="low",
-        pending_items=["补充站点、指标或时间范围"],
-        time_range="未指定",
-        generated_at=now,
-    )
+    elif intent == "status":
+        answer = _answer_for_status(payload.message, user, request_id, now, payload.station_id)
+    elif intent == "trend":
+        answer = _answer_for_trend(payload.message, user, request_id, now, payload.station_id)
+    elif intent == "diagnosis":
+        answer = _answer_for_diagnosis(payload.message, user, request_id, now, payload.station_id)
+    elif intent == "supply":
+        answer = _answer_for_supply(user, request_id, now)
+    else:
+        answer = AgentAnswer(
+            request_id=request_id,
+            intent="unknown",
+            answer="我目前支持运行状态、趋势异常、供需缺口和规程核查问题。请补充站点或时间范围。",
+            recommendations=["例如：现在二泵站的压力是多少？", "例如：过去两小时哪个泵站波动最大？"],
+            confidence="low",
+            pending_items=["补充站点、指标或时间范围"],
+            time_range="未指定",
+            generated_at=now,
+        )
+
+    if model_route is not None:
+        answer = answer.model_copy(
+            update={
+                "source": "llm-router+mock",
+                "facts": [
+                    *answer.facts,
+                    f"大模型路由：意图={model_route.intent}；指标={model_route.metric}；时间范围={model_route.time_range}",
+                ],
+                "limitations": [
+                    *answer.limitations,
+                    "大模型仅用于问题路由，数值和引用仍由后端只读工具计算",
+                ],
+            }
+        )
+    return answer
 
 
 def reconcile_answer_with_tools(answer: AgentAnswer, executions: tuple[object, ...]) -> AgentAnswer:

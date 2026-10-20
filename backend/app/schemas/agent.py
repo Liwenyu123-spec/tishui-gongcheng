@@ -71,6 +71,6 @@ class AgentAnswer(BaseModel):
     observed_at: datetime | None = None
     # 观测数据的新鲜度与数据质量分开表示；没有观测时间时使用 unknown。
     freshness: Literal["fresh", "stale", "unknown"] = "unknown"
-    source: Literal["mock-rule"] = "mock-rule"
+    source: Literal["mock-rule", "llm-router+mock"] = "mock-rule"
     generated_at: datetime
 
