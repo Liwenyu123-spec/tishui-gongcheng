@@ -232,13 +232,17 @@ def store_status() -> dict[str, Any]:
             "last_saved_at": None,
             "errors": [f"读取 documents.json 失败：{exc}"],
         }
+    last_saved = _LAST_SAVED_AT
+    if last_saved is None and path.is_file():
+        # 进程刚启动时内存里没有写入记录，用文件修改时间代替，重启后仍有可读的时间。
+        last_saved = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
     return {
         "dir": str(directory),
         "documents_file": str(path),
         "file_exists": path.is_file(),
         "persisted": persisted,
         "with_content": with_content,
-        "last_saved_at": _LAST_SAVED_AT.isoformat() if _LAST_SAVED_AT else None,
+        "last_saved_at": last_saved.isoformat() if last_saved else None,
         "errors": list(_LOAD_ERRORS),
     }
 
