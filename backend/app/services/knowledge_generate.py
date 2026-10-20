@@ -226,7 +226,8 @@ def ask_with_retrieval(
     status = generation_status()
     turn = resolve_follow_up(question, session_id=session_id, station_id=station_id)
     if turn.get("needs_clarification"):
-        return {**turn, **status}
+        # 补问阶段不调用模型；保留 clarify，同时带回密钥是否可用。
+        return {**status, **turn}
     sid = str(turn["session_id"])
     effective = str(turn["effective_question"])
     cleaned = clean_query(effective)
