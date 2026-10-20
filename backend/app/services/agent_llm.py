@@ -99,7 +99,7 @@ def route_question(message: str, *, visible_stations: list[dict], requested_stat
         )
         raw = response.choices[0].message.content or ""
         route = AgentModelRoute.model_validate(_extract_json(raw))
-    except (ImportError, ValueError, TypeError, KeyError, ValidationError, json.JSONDecodeError, Exception):
+    except Exception:
         # 模型只是增强路由，任何外部调用或解析问题都必须安全降级。
         return None
 
