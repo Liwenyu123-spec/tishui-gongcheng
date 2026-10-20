@@ -100,10 +100,15 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
     reciprocal_sum = 0.0
     answerable = 0
     abstain_total = 0
-    # 两套门控同时统计，用于对比「只看分数」和「分数 + 重排置信度」。
-    abstain_correct = {"score": 0, "rerank": 0}
-    false_reject = {"score": 0, "rerank": 0}
+    # 同时统计「只看分数」和「线上真实门控（分数 + 重排下限）」，
+    # 前者用来解释阈值调整的影响方向，后者才是产品实际行为。
+    abstain_correct = {"score": 0, "live": 0}
+    false_reject = {"score": 0, "live": 0}
     rows: list[dict[str, Any]] = []
+    min_rerank_value: float | None = None
+
+    from app.services.knowledge_generate import select_strong_hits
+    from app.services.knowledge_search import KnowledgeHit
 
     for case in cases:
         query = case["query"]
@@ -111,11 +116,26 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
         hits = store.search(query, limit=max(k, 5))
         ids = [hit["document_id"] for hit in hits]
         top_score = hits[0]["score"] if hits else 0
-        # 与线上门控保持一致：最高分不足阈值即视为「资料不足」。
+        # 与线上门控保持一致：直接复用生产函数，避免脚本和实现两套逻辑漂移。
+        strong, gate_info = select_strong_hits(
+            [
+                KnowledgeHit(
+                    source_id=hit["document_id"],
+                    title=str(hit["metadata"].get("title") or ""),
+                    version=str(hit["metadata"].get("version") or ""),
+                    detail=str(hit.get("text") or ""),
+                    score=int(hit["score"]),
+                    confidence=str(hit.get("confidence") or "normal"),
+                    rerank=hit.get("rerank"),
+                )
+                for hit in hits
+            ],
+            min_score=min_score,
+        )
         gated = top_score < min_score
-        # 重排把弱相关片段的 confidence 标成 low，这是比分数更直接的「资料里没有」信号。
-        rerank_weak = bool(hits) and hits[0].get("confidence") == "low"
-        gated_rerank = gated or rerank_weak
+        gated_live = not gate_info["passed"]
+        if gate_info["min_rerank"] is not None:
+            min_rerank_value = gate_info["min_rerank"]
 
         row: dict[str, Any] = {
             "id": case.get("id"),
@@ -123,8 +143,8 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
             "expected": expected,
             "rank": None,
             "top_score": top_score,
-            "gated": gated,
-            "gated_rerank": gated_rerank,
+            "top_rerank": gate_info["top_rerank"],
+            "gated": gated_live,
             "top_ids": ids[:k],
             "note": case.get("note"),
         }
@@ -133,8 +153,8 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
             abstain_total += 1
             # 无答案问句：被门控拦住才算正确；返回了高相关片段就是误答。
             abstain_correct["score"] += 1 if gated else 0
-            abstain_correct["rerank"] += 1 if gated_rerank else 0
-            row["result"] = "abstain_ok" if gated_rerank else f"abstain_fail(top={ids[0] if ids else None})"
+            abstain_correct["live"] += 1 if gated_live else 0
+            row["result"] = "abstain_ok" if gated_live else f"abstain_fail(top={ids[0] if ids else None})"
         else:
             answerable += 1
             rank = ids.index(expected) + 1 if expected in ids else None
@@ -143,8 +163,8 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
                 row["result"] = "miss"
             else:
                 false_reject["score"] += 1 if gated else 0
-                false_reject["rerank"] += 1 if gated_rerank else 0
-                if gated_rerank:
+                false_reject["live"] += 1 if gated_live else 0
+                if gated_live:
                     # 排对了但被门控拦住：召回够、门控过严，会直接表现为「答不上来」。
                     row["result"] = f"false_reject(rank={rank})"
                 else:
@@ -167,11 +187,12 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
         "recall_at_3": ratio(rank_hits[3], answerable),
         "recall_at_5": ratio(rank_hits[5], answerable),
         "mrr_at_5": round(reciprocal_sum / answerable, 4) if answerable else 0.0,
-        "abstain_accuracy": ratio(abstain_correct["score"], abstain_total),
-        "false_reject_rate": ratio(false_reject["score"], answerable),
-        "abstain_accuracy_rerank_gate": ratio(abstain_correct["rerank"], abstain_total),
-        "false_reject_rate_rerank_gate": ratio(false_reject["rerank"], answerable),
+        "abstain_accuracy": ratio(abstain_correct["live"], abstain_total),
+        "false_reject_rate": ratio(false_reject["live"], answerable),
+        "abstain_accuracy_score_only": ratio(abstain_correct["score"], abstain_total),
+        "false_reject_rate_score_only": ratio(false_reject["score"], answerable),
         "min_score": min_score,
+        "min_rerank": min_rerank_value,
         "k": k,
         "rows": rows,
     }
@@ -182,10 +203,11 @@ def print_report(summary: dict[str, Any], *, verbose: bool) -> None:
     print(f"问句总数 {summary['cases']}｜可回答 {summary['answerable']}｜无答案 {summary['abstain_cases']}")
     print(f"Recall@1 {summary['recall_at_1']:.2%}   Recall@3 {summary['recall_at_3']:.2%}   "
           f"Recall@5 {summary['recall_at_5']:.2%}   MRR@5 {summary['mrr_at_5']:.4f}")
-    print(f"门控阈值 {summary['min_score']}")
-    print(f"  只看分数：无答案正确弃答 {summary['abstain_accuracy']:.2%}，可回答误拒 {summary['false_reject_rate']:.2%}")
-    print(f"  分数+重排置信度：无答案正确弃答 {summary['abstain_accuracy_rerank_gate']:.2%}，"
-          f"可回答误拒 {summary['false_reject_rate_rerank_gate']:.2%}")
+    print(f"门控阈值 score>={summary['min_score']}"
+          f"｜rerank>={summary['min_rerank'] if summary['min_rerank'] is not None else '未启用'}")
+    print(f"  线上门控：无答案正确弃答 {summary['abstain_accuracy']:.2%}，可回答误拒 {summary['false_reject_rate']:.2%}")
+    print(f"  只看分数：无答案正确弃答 {summary['abstain_accuracy_score_only']:.2%}，"
+          f"可回答误拒 {summary['false_reject_rate_score_only']:.2%}")
 
     def is_success(row: dict[str, Any]) -> bool:
         """命中或正确弃答都算达标；误拒、漏检、误答才算未达标。"""
@@ -261,8 +283,13 @@ def main() -> int:
         else:
             print(f"重排：{rerank_label}")
             print_report(summary, verbose=args.verbose)
-        # 返回码便于 CI 判断基线是否退化。
-        return 0 if summary["recall_at_3"] >= 0.8 and summary["abstain_accuracy"] >= 0.75 else 1
+        # 成功标准：召回和「不乱答」都要达标。误拒会被用户感知为「明明有资料却说不知道」，
+        # 所以和弃答准确率一起卡，避免用降低阈值的方式刷高召回。
+        return 0 if (
+            summary["recall_at_3"] >= 0.9
+            and summary["abstain_accuracy"] >= 0.75
+            and summary["false_reject_rate"] <= 0.1
+        ) else 1
     finally:
         if cleanup_dir:
             shutil.rmtree(cleanup_dir, ignore_errors=True)

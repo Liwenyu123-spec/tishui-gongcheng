@@ -358,16 +358,45 @@ def ask_min_score() -> int:
         return 8
 
 
+def ask_min_rerank() -> float:
+    """重排概率下限，低于此值视为「资料里没有答案」。
+
+    分数门槛只能判断「片段和问句有多相关」，无法区分「同领域但没有答案」
+    这类问题（例如问某个泵的采购价格，泵站规程里虽然有大量「泵站」「水泵」）。
+    评测集上无答案问句的重排概率最高 0.013，可回答问句最低 0.112，
+    因此默认 0.05 可在不误拒的情况下拦住所有无答案问句。
+    """
+
+    raw = (windows_env("RAG_ASK_MIN_RERANK") or "0.05").strip()
+    try:
+        return min(1.0, max(0.0, float(raw)))
+    except ValueError:
+        return 0.05
+
+
 def select_strong_hits(hits: list[KnowledgeHit], *, min_score: int | None = None) -> tuple[list[KnowledgeHit], dict[str, Any]]:
-    """按相关度门槛筛出可送给模型的命中。"""
+    """按相关度门槛筛出可送给模型的命中。
+
+    两道门槛：相关性分数（覆盖关键词/向量/重排的综合分）和重排概率下限。
+    重排未启用时 hits 不带 rerank，此时只用分数门槛，行为与之前一致。
+    """
 
     threshold = ask_min_score() if min_score is None else max(0, min_score)
+    rerank_floor = ask_min_rerank()
     top_score = max((hit.score for hit in hits), default=0)
-    strong = [hit for hit in hits if hit.score >= threshold]
+    # 只在有重排概率时才启用第二道门槛，避免关闭重排后把所有结果都拦掉。
+    has_rerank = any(hit.rerank is not None for hit in hits)
+    strong = [
+        hit
+        for hit in hits
+        if hit.score >= threshold and (not has_rerank or (hit.rerank or 0.0) >= rerank_floor)
+    ]
     return strong, {
         "passed": bool(strong),
         "min_score": threshold,
+        "min_rerank": rerank_floor if has_rerank else None,
         "top_score": top_score,
+        "top_rerank": next((hit.rerank for hit in hits if hit.rerank is not None), None),
         "kept": len(strong),
         "total": len(hits),
     }

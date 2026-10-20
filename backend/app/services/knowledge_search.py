@@ -41,6 +41,8 @@ class KnowledgeHit:
     location: str = "内置规程"
     category: str = "规程"
     confidence: str = "normal"
+    # 重排概率（0~1）。未启用重排时为 None，门控据此决定是否使用该信号。
+    rerank: float | None = None
 
 
 # 规则目录与 Agent 诊断分支共用稳定编号，便于回答、审计和回放相互追踪。
@@ -206,6 +208,7 @@ def search_rules(
                     location=f"分片 {chunk_number + 1}" if chunk_number is not None else "正文",
                     category=str(metadata.get("category") or "规程"),
                     confidence=str(item.get("confidence") or "normal"),
+                    rerank=(float(item["rerank"]) if item.get("rerank") is not None else None),
                 )
             )
 
