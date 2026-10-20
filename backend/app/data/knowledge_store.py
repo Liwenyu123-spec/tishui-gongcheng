@@ -235,7 +235,10 @@ def store_status() -> dict[str, Any]:
     last_saved = _LAST_SAVED_AT
     if last_saved is None and path.is_file():
         # 进程刚启动时内存里没有写入记录，用文件修改时间代替，重启后仍有可读的时间。
-        last_saved = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        try:
+            last_saved = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        except OSError:
+            last_saved = None
     return {
         "dir": str(directory),
         "documents_file": str(path),
