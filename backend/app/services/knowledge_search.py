@@ -6,6 +6,7 @@
 
 from datetime import datetime, timezone
 from dataclasses import dataclass
+import json
 import re
 
 from ..data.knowledge import _KNOWLEDGE, _KNOWLEDGE_CONTENT
@@ -34,6 +35,10 @@ class KnowledgeHit:
     detail: str
     score: int
     source: str = "mock-rule"
+    filename: str = ""
+    station_ids: tuple[str, ...] = ()
+    chunk_index: int | None = None
+    location: str = "内置规程"
 
 
 # 规则目录与 Agent 诊断分支共用稳定编号，便于回答、审计和回放相互追踪。
@@ -143,6 +148,7 @@ def search_rules(
                     version=rule.version,
                     detail=rule.detail,
                     score=score,
+                    location="内置规程",
                 )
             )
     metric_terms = {
@@ -165,6 +171,12 @@ def search_rules(
             metadata = item["metadata"]
             document_id = str(item["document_id"])
             indexed_ids.add(document_id)
+            try:
+                station_ids = tuple(json.loads(str(metadata.get("station_ids") or "[]")))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                station_ids = ()
+            chunk_index = metadata.get("chunk_index")
+            chunk_number = int(chunk_index) if chunk_index is not None and str(chunk_index) != "" else None
             hits.append(
                 KnowledgeHit(
                     source_id=document_id,
@@ -173,6 +185,10 @@ def search_rules(
                     detail=str(item["text"]).replace("\r", " ").replace("\n", " ")[:500],
                     score=int(item["score"]),
                     source="chroma-document",
+                    filename=str(metadata.get("filename") or ""),
+                    station_ids=station_ids,
+                    chunk_index=chunk_number,
+                    location=f"分片 {chunk_number + 1}" if chunk_number is not None else "正文",
                 )
             )
 
@@ -210,6 +226,9 @@ def search_rules(
                     detail=detail or "已批准文档，正文未提供可展示摘要",
                     score=score,
                     source="mock-document",
+                    filename=document.filename,
+                    station_ids=tuple(document.station_ids),
+                    location="正文摘要",
                 )
             )
     hits.sort(key=lambda hit: (-hit.score, hit.source_id))

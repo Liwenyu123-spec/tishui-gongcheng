@@ -27,6 +27,19 @@ interface CsvImportResponse {
   errors: string[]
 }
 
+interface SearchHit {
+  source_id: string
+  title: string
+  version: string
+  detail: string
+  score: number
+  source: string
+  filename: string
+  station_ids: string[]
+  chunk_index: number | null
+  location: string
+}
+
 interface KnowledgeRow {
   id: string
   title: string
@@ -50,6 +63,8 @@ const rows = ref<KnowledgeRow[]>(localDocuments.map(document => ({ ...document }
 const query = ref('')
 const statusFilter = ref('')
 const loading = ref(false)
+const searchHits = ref<SearchHit[]>([])
+const searchMessage = ref('')
 const sourceLabel = ref('本地示例')
 const importVisible = ref(false)
 const importing = ref(false)
@@ -84,6 +99,28 @@ const formatDocument = (document: ApiKnowledgeDocument): KnowledgeRow => ({
   applicability: document.station_ids?.length ? document.station_ids.join('、') : '全局',
   source: document.source === 'mock' ? '后端 Mock' : document.source,
 })
+
+const searchKnowledge = async () => {
+  const keyword = query.value.trim()
+  if (!keyword) {
+    searchHits.value = []
+    searchMessage.value = ''
+    await loadKnowledge()
+    return
+  }
+  loading.value = true
+  try {
+    const result = await api<{ results: SearchHit[] }>(`/api/v1/knowledge/search?q=${encodeURIComponent(keyword)}`)
+    searchHits.value = result.results
+    searchMessage.value = result.results.length ? `检索到 ${result.results.length} 条来源` : '没有命中现行资料或内置规程'
+  } catch {
+    searchHits.value = []
+    searchMessage.value = '检索接口暂不可用'
+    ElMessage.warning('检索接口暂不可用')
+  } finally {
+    loading.value = false
+  }
+}
 
 const loadKnowledge = async () => {
   loading.value = true
@@ -210,8 +247,15 @@ onMounted(loadKnowledge)
         <el-option label="待审" value="待审" />
         <el-option label="废止" value="废止" />
       </el-select>
-      <!-- 检索按钮重新读取后端文档；关键词和状态筛选仍由 filteredRows 即时过滤。 -->
-      <el-button class="button-stable button-stable--sm" type="primary" :loading="loading" @click="loadKnowledge">检索</el-button>
+      <el-button class="button-stable button-stable--sm" type="primary" :loading="loading" @click="searchKnowledge">检索</el-button>
+    </div>
+    <div v-if="searchMessage" style="padding:12px 18px 0">
+      <p class="muted">{{ searchMessage }}</p>
+      <div v-for="hit in searchHits" :key="`${hit.source_id}-${hit.chunk_index}`" class="panel" style="margin-top:8px;padding:12px 14px">
+        <strong>{{ hit.title }}</strong>
+        <p class="muted">{{ hit.filename || '无文件名' }} · {{ hit.version }} · {{ hit.location }} · {{ hit.station_ids.length ? hit.station_ids.join('、') : '全局' }} · 相关度 {{ hit.score }}</p>
+        <p>{{ hit.detail }}</p>
+      </div>
     </div>
     <div class="table-wrap">
       <el-table :data="filteredRows">

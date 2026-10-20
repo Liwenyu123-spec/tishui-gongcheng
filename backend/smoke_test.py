@@ -145,6 +145,7 @@ def run_smoke_checks() -> None:
     )
     assert knowledge_search["data_quality"] == "mock"
     assert knowledge_search["results"] and knowledge_search["results"][0]["source_id"] == "mock-knowledge-flow-v1.2"
+    assert knowledge_search["results"][0]["location"] == "内置规程"
 
     # 知识文档生命周期：新导入文档先待审，设为现行后才允许检索。
     imported_knowledge = expect(

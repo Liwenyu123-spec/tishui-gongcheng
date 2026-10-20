@@ -76,7 +76,12 @@ def search_knowledge(
         visible_station_ids=visible_station_ids,
     )
     # 服务层使用不可变数据类，路由边界显式转换为 API 响应模型，避免隐式序列化失败。
-    return KnowledgeSearchResponse(query=q, results=[KnowledgeSearchHit(**hit.__dict__) for hit in hits])
+    results = []
+    for hit in hits:
+        payload = hit.__dict__.copy()
+        payload["station_ids"] = list(hit.station_ids)
+        results.append(KnowledgeSearchHit(**payload))
+    return KnowledgeSearchResponse(query=q, results=results)
 
 
 @router.get("/knowledge/rag/status")

@@ -68,6 +68,10 @@ class KnowledgeSearchHit(BaseModel):
     detail: str
     score: int
     source: Literal["mock-rule", "mock-document", "chroma-document"] = "mock-rule"
+    filename: str = ""
+    station_ids: list[str] = Field(default_factory=list)
+    chunk_index: int | None = None
+    location: str = ""
 
 
 class KnowledgeSearchResponse(BaseModel):
