@@ -81,6 +81,7 @@ const askSources = ref<SearchHit[]>([])
 const askSessionId = ref(localStorage.getItem('knowledge_ask_session') || '')
 const askTurns = ref<{ role: string; text: string }[]>([])
 const askNeedsClarification = ref(false)
+const askGroundedness = ref('')
 const asking = ref(false)
 const importForm = reactive({ filename: '', title: '', version: '1.0', category: '规程', content: '', stationIds: '', effectiveFrom: '', effectiveTo: '' })
 const csvVisible = ref(false)
@@ -177,6 +178,7 @@ const clearAskSession = () => {
   askCompression.value = ''
   askSources.value = []
   askNeedsClarification.value = false
+  askGroundedness.value = ''
   askQuestion.value = ''
 }
 
@@ -199,6 +201,7 @@ const askKnowledge = async () => {
       merged?: boolean
       sources: SearchHit[]
       compression?: { chars_before?: number; chars_after?: number; reduced?: number }
+      groundedness?: { grounded?: boolean; overlap?: number; status?: string; warnings?: string[] }
     }>('/api/v1/knowledge/rag/ask', {
       method: 'POST',
       body: JSON.stringify({ question, k: 5, session_id: askSessionId.value || null }),
@@ -215,6 +218,15 @@ const askKnowledge = async () => {
     askCompression.value = compression && compression.chars_before
       ? `上下文压缩：${compression.chars_before || 0} → ${compression.chars_after || 0} 字（减少 ${compression.reduced || 0}）`
       : ''
+    const groundedness = result.groundedness
+    if (groundedness && !result.needs_clarification) {
+      const overlapPct = Math.round((groundedness.overlap || 0) * 100)
+      askGroundedness.value = groundedness.grounded
+        ? `忠实度：通过（重合 ${overlapPct}%）`
+        : `忠实度：未通过（重合 ${overlapPct}%）${groundedness.warnings?.length ? `；${groundedness.warnings.join('；')}` : ''}`
+    } else {
+      askGroundedness.value = ''
+    }
     askSources.value = result.sources || []
     askTurns.value = [...askTurns.value, { role: '助手', text: result.answer }]
     askQuestion.value = ''
@@ -224,6 +236,7 @@ const askKnowledge = async () => {
     askCompression.value = ''
     askSources.value = []
     askNeedsClarification.value = false
+    askGroundedness.value = ''
     ElMessage.error(error instanceof Error ? error.message : '规程说明生成失败')
   } finally {
     asking.value = false
@@ -367,6 +380,7 @@ onMounted(loadKnowledge)
     <div v-if="askAnswer && !askNeedsClarification" style="margin-top:12px">
       <p v-if="askRewritten" class="muted">检索问法：{{ askRewritten }}</p>
       <p v-if="askCompression" class="muted">{{ askCompression }}</p>
+      <p v-if="askGroundedness" class="muted">{{ askGroundedness }}</p>
       <p v-for="source in askSources" :key="source.source_id" class="muted">引用：{{ source.title }} · {{ source.location }}</p>
     </div>
   </div>

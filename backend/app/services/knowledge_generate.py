@@ -322,6 +322,12 @@ def ask_with_retrieval(
     # 对照参考项目的句级压缩：只把和问句相关的句子送给模型。
     compressed_hits, compress_stats = compress_hits(hits, rewritten or cleaned or effective)
     answer = _complete(effective, compressed_hits)
+    groundedness = check_groundedness(answer, compressed_hits)
+    if not groundedness["grounded"]:
+        answer = (
+            f"{answer}\n\n【忠实度提示】本轮说明与检索资料重合偏低或含资料外数字/操作用语，"
+            "请以引用原文为准，勿直接作为操作依据。"
+        )
     with _SESSION_LOCK:
         session = _SESSIONS.setdefault(sid, _AskSession())
         session.pending_question = None
@@ -339,8 +345,63 @@ def ask_with_retrieval(
         "answer": answer,
         "sources": [_hit_payload(hit) for hit in compressed_hits],
         "compression": compress_stats,
+        "groundedness": groundedness,
         "generation": "deepseek",
         **status,
+    }
+
+
+def check_groundedness(answer: str, hits: list[KnowledgeHit]) -> dict[str, Any]:
+    """本地校验：回答是否主要落在检索资料上，并拦截资料外数字与操作用语。"""
+
+    text = (answer or "").strip()
+    if not text:
+        return {
+            "grounded": False,
+            "overlap": 0.0,
+            "cited_titles": [],
+            "warnings": ["空回答"],
+            "status": "ungrounded",
+        }
+    if "资料不足" in text:
+        return {
+            "grounded": True,
+            "overlap": 1.0,
+            "cited_titles": [],
+            "warnings": [],
+            "status": "abstain",
+        }
+
+    evidence = "\n".join(f"{hit.title}\n{hit.detail}" for hit in hits)
+    evidence_terms = set(_terms(evidence))
+    answer_terms = set(_terms(text))
+    overlap = (len(answer_terms & evidence_terms) / len(answer_terms)) if answer_terms else 0.0
+
+    cited_titles: list[str] = []
+    for hit in hits:
+        title_core = re.sub(r"\s+\d+(?:\.\d+)*\s*$", "", hit.title or "").strip() or (hit.title or "")
+        if title_core and title_core in text:
+            cited_titles.append(hit.title)
+
+    warnings: list[str] = []
+    evidence_nums = set(re.findall(r"\d+(?:\.\d+)?", evidence))
+    answer_nums = set(re.findall(r"\d+(?:\.\d+)?", text))
+    invented = sorted(num for num in answer_nums if num not in evidence_nums and len(num) >= 2)
+    if invented:
+        warnings.append(f"回答中出现资料未给出的数字：{', '.join(invented[:5])}")
+    for word in ("启动泵", "停泵", "开阀", "关阀", "下发指令"):
+        if word in text:
+            warnings.append(f"回答含操作指令用语：{word}")
+
+    grounded = overlap >= 0.2 or (bool(cited_titles) and overlap >= 0.12)
+    if invented or any("操作指令" in item for item in warnings):
+        grounded = False
+    return {
+        "grounded": grounded,
+        "overlap": round(overlap, 3),
+        "cited_titles": cited_titles,
+        "warnings": warnings,
+        "status": "grounded" if grounded else "ungrounded",
     }
 
 

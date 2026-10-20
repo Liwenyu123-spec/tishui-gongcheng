@@ -160,7 +160,8 @@ def run_smoke_checks() -> None:
     assert duplicate_review["id"] == review["id"]
     expect("审核员查询人工复核", client.get("/api/v1/reviews", headers=reviewer_headers), 200)
 
-    from app.services.knowledge_generate import clean_query, compress_detail, resolve_follow_up
+    from app.services.knowledge_generate import check_groundedness, clean_query, compress_detail, resolve_follow_up
+    from app.services.knowledge_search import KnowledgeHit
 
     assert "泵站" in clean_query("帮我看看水泵流量掉下去先看啥")
     assert "下降" in clean_query("帮我看看水泵流量掉下去先看啥")
@@ -181,6 +182,23 @@ def run_smoke_checks() -> None:
     assert "电流" in follow["effective_question"] and "二泵站" in follow["effective_question"]
     reuse = resolve_follow_up("压力异常怎么查", session_id="smoke-ask-ellip")
     assert "二泵站" in reuse["effective_question"] and "压力" in reuse["effective_question"]
+    grounded_hit = KnowledgeHit(
+        source_id="smoke-ground-1",
+        title="泵站流量异常核查规程 1.2",
+        version="1.2",
+        detail="先核对入口压力、泵组运行电流和下游压力，再决定是否升级人工处置。",
+        score=80,
+    )
+    grounded_ok = check_groundedness(
+        "根据泵站流量异常核查规程，先核对入口压力和泵组运行电流。",
+        [grounded_hit],
+    )
+    assert grounded_ok["grounded"] is True and grounded_ok["status"] == "grounded"
+    grounded_bad = check_groundedness(
+        "建议立即启动泵，把流量调到 9999。",
+        [grounded_hit],
+    )
+    assert grounded_bad["grounded"] is False and grounded_bad["warnings"]
 
     markdown_extract = expect(
         "解析 Markdown 规程",
