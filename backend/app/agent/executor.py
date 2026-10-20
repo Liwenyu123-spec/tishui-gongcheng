@@ -251,10 +251,11 @@ def _execute_search_knowledge(tool: ReadOnlyTool, context: ToolContext) -> ToolE
             station_id=station["id"] if station else None,
             visible_station_ids=visible,
         )
-    source_ids = tuple(hit.source_id for hit in hits)
-    if not hits:
-        return ToolExecution(tool=tool, status="completed", summary="本地规程目录未匹配到适用规则", source_ids=())
-    top = hits[0]
+    usable = [hit for hit in hits if hit.confidence != "low"]
+    source_ids = tuple(hit.source_id for hit in usable)
+    if not usable:
+        return ToolExecution(tool=tool, status="completed", summary="检索到的资料置信度不足，未写入诊断依据", source_ids=())
+    top = usable[0]
     summary = f"已检索规程 {top.source_id}（{top.title}），共 {len(hits)} 条候选"
     return ToolExecution(tool=tool, status="completed", summary=summary, source_ids=source_ids)
 

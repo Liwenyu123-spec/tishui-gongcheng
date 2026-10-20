@@ -40,6 +40,7 @@ class KnowledgeHit:
     chunk_index: int | None = None
     location: str = "内置规程"
     category: str = "规程"
+    confidence: str = "normal"
 
 
 # 规则目录与 Agent 诊断分支共用稳定编号，便于回答、审计和回放相互追踪。
@@ -192,6 +193,7 @@ def search_rules(
                     chunk_index=chunk_number,
                     location=f"分片 {chunk_number + 1}" if chunk_number is not None else "正文",
                     category=str(metadata.get("category") or "规程"),
+                    confidence=str(item.get("confidence") or "normal"),
                 )
             )
 

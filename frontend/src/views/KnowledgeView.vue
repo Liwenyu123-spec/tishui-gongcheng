@@ -40,6 +40,7 @@ interface SearchHit {
   chunk_index: number | null
   location: string
   category: string
+  confidence: string
 }
 
 interface KnowledgeRow {
@@ -259,7 +260,7 @@ onMounted(loadKnowledge)
       <p class="muted">{{ searchMessage }}</p>
       <div v-for="hit in searchHits" :key="`${hit.source_id}-${hit.chunk_index}`" class="panel" style="margin-top:8px;padding:12px 14px">
         <strong>{{ hit.title }}</strong>
-        <p class="muted">{{ hit.category || '规程' }} · {{ hit.filename || '无文件名' }} · {{ hit.version }} · {{ hit.location }} · {{ hit.station_ids.length ? hit.station_ids.join('、') : '全局' }} · 相关度 {{ hit.score }}</p>
+        <p class="muted">{{ hit.category || '规程' }} · {{ hit.filename || '无文件名' }} · {{ hit.version }} · {{ hit.location }} · {{ hit.station_ids.length ? hit.station_ids.join('、') : '全局' }} · 相关度 {{ hit.score }} · {{ hit.confidence === 'low' ? '低置信' : '可引用' }}</p>
         <p>{{ hit.detail }}</p>
       </div>
     </div>

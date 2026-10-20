@@ -16,7 +16,7 @@ from ..data.supply import _SUPPLY_AREAS
 from ..dependencies import user_has_station_access
 from ..schemas.agent import AgentAnswer, AgentCitation, AgentChatRequest, AgentIntent, AgentWorkOrderSuggestion
 from .analysis import compare_variation, latest_telemetry, metric_label
-from .knowledge_search import search_rules
+from .knowledge_search import KNOWLEDGE_RULES, KnowledgeHit, search_rules
 
 
 _CONTROL_WORDS = ("启动", "停止", "开阀", "关阀", "切换阀", "修改压力", "下发", "控制指令")
@@ -145,13 +145,28 @@ def _event_context(station_id: str, user: dict) -> tuple[list[str], list[str], l
 def _knowledge_context(alarm: dict) -> AgentCitation:
     """根据告警测点检索一条版本化的只读规程引用。"""
 
-    hits = search_rules(
-        f"{alarm['metric']} 异常核查",
-        metric=alarm["metric"],
-        limit=1,
-        station_id=alarm["station_id"],
-    )
-    rule = hits[0] if hits else search_rules("泵站 异常", limit=1)[0]
+    hits = [
+        hit
+        for hit in search_rules(
+            f"{alarm['metric']} 异常核查",
+            metric=alarm["metric"],
+            limit=3,
+            station_id=alarm["station_id"],
+        )
+        if hit.confidence != "low"
+    ]
+    if not hits:
+        hits = [hit for hit in search_rules("泵站 异常", limit=3) if hit.confidence != "low"]
+    rule = hits[0] if hits else KNOWLEDGE_RULES[0]
+    if not isinstance(rule, KnowledgeHit):
+        builtin = KNOWLEDGE_RULES[0]
+        rule = KnowledgeHit(
+            source_id=builtin.source_id,
+            title=f"{builtin.title} {builtin.version}",
+            version=builtin.version,
+            detail=builtin.detail,
+            score=1,
+        )
     return AgentCitation(
         source_type="knowledge",
         source_id=rule.source_id,

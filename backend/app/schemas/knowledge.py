@@ -79,6 +79,7 @@ class KnowledgeSearchHit(BaseModel):
     chunk_index: int | None = None
     location: str = ""
     category: str = ""
+    confidence: Literal["normal", "low"] = "normal"
 
 
 class KnowledgeSearchResponse(BaseModel):

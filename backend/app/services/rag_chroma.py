@@ -478,8 +478,23 @@ class ChromaRagStore:
                 "metadata": metadata,
                 "text": text,
                 "score": score,
+                "confidence": "normal",
             }
         hits = sorted(best.values(), key=lambda item: (-int(item["score"]), str(item["document_id"])))
+        reranker = get_reranker()
+        if reranker is not None and hits:
+            pairs = [(query, f"{item['metadata'].get('title') or ''} {item['text']}") for item in hits]
+            try:
+                raw_scores = reranker.predict(pairs)
+                probabilities = [_as_probability(float(value)) for value in raw_scores]
+                for item, probability in zip(hits, probabilities):
+                    item["score"] = int(item["score"]) + round(probability * 4)
+                    # 低于阈值只标记，仍返回给页面，诊断引用会跳过。
+                    item["confidence"] = "low" if probability < 0.35 else "normal"
+                hits.sort(key=lambda item: (-int(item["score"]), str(item["document_id"])))
+            except Exception as exc:  # noqa: BLE001
+                global _RERANKER_ERROR
+                _RERANKER_ERROR = str(exc)
         return hits[:limit]
 
     def ask(self, question: str, *, k: int = 5, preset: str | None = None) -> dict[str, Any]:
@@ -498,12 +513,50 @@ class ChromaRagStore:
             "embedding_fallback": self.embedding_fallback,
             "engine_mode": "local-hash" if isinstance(self.embedding, LocalHashEmbedding) else "sentence-transformers",
             "retrieval": "vector+bm25",
+            "rerank": _RERANKER_NAME or ("disabled" if _RERANKER_ERROR else "pending"),
+            "rerank_error": None if _RERANKER is not None else _RERANKER_ERROR,
             "generation": "disabled",
         }
 
 
 _STORE: ChromaRagStore | None = None
 _STORE_ERROR: str | None = None
+_RERANKER: Any | None = None
+_RERANKER_ERROR: str | None = None
+_RERANKER_NAME: str | None = None
+
+
+def get_reranker() -> Any | None:
+    """延迟加载本地 bge-reranker。模型不存在或关闭开关时跳过精排。"""
+
+    global _RERANKER, _RERANKER_ERROR, _RERANKER_NAME
+    if _RERANKER is not None or _RERANKER_ERROR is not None:
+        return _RERANKER
+    enabled = os.getenv("RAG_RERANK_ENABLED", "1").strip().lower()
+    if enabled in {"0", "false", "off", "none"}:
+        _RERANKER_ERROR = "重排已关闭"
+        return None
+    model_path = Path(os.getenv("RAG_RERANK_MODEL", r"H:\二阶段\bge-reranker-base"))
+    if not model_path.is_dir():
+        _RERANKER_ERROR = f"本地重排模型不存在：{model_path}"
+        return None
+    try:
+        from sentence_transformers import CrossEncoder
+
+        _RERANKER = CrossEncoder(str(model_path), local_files_only=True)
+        _RERANKER_NAME = model_path.name
+        return _RERANKER
+    except Exception as exc:  # noqa: BLE001
+        _RERANKER_ERROR = str(exc)
+        return None
+
+
+def _as_probability(value: float) -> float:
+    """把重排输出压到 0 到 1。已经是概率时保持原值。"""
+
+    if 0.0 <= value <= 1.0:
+        return value
+    return 1.0 / (1.0 + math.exp(-value))
 
 
 def get_rag_store() -> ChromaRagStore | None:
