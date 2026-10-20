@@ -208,7 +208,8 @@ const askKnowledge = async () => {
       localStorage.setItem('knowledge_ask_session', result.session_id)
     }
     askAnswer.value = result.answer
-    askRewritten.value = result.rewritten_query || (result.merged && result.effective_question ? result.effective_question : '')
+    askRewritten.value = result.rewritten_query
+      || (result.merged && result.effective_question ? `合并问法：${result.effective_question}` : '')
     askNeedsClarification.value = Boolean(result.needs_clarification)
     const compression = result.compression
     askCompression.value = compression && compression.chars_before
@@ -352,7 +353,7 @@ onMounted(loadKnowledge)
     <div class="filterbar" style="padding:0">
       <el-input
         v-model="askQuestion"
-        :placeholder="askNeedsClarification ? '例如直接回复：二泵站' : '例如：流量下降后按规程先核查什么'"
+        :placeholder="askNeedsClarification ? '例如直接回复：二泵站' : (askTurns.length ? '可继续追问，例如：那电流呢' : '例如：流量下降后按规程先核查什么')"
         style="max-width:520px"
         clearable
         @keyup.enter="askKnowledge"

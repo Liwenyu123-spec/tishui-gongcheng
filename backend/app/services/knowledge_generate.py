@@ -28,10 +28,13 @@ class _AskSession:
 
     pending_question: str | None = None
     last_answer: str | None = None
+    last_effective_question: str | None = None
+    last_station: str | None = None
 
 
 _SESSIONS: dict[str, _AskSession] = {}
 _SESSION_LOCK = Lock()
+_FOLLOW_MARKERS = ("那", "呢", "还", "再", "同上", "继续", "另外", "还有")
 
 
 def _load_env_file() -> None:
@@ -145,6 +148,13 @@ def _has_station(text: str, station_id: str | None = None) -> bool:
     return any(alias in (text or "") for alias in _STATION_ALIASES)
 
 
+def _extract_station(text: str) -> str | None:
+    for alias in _STATION_ALIASES:
+        if alias in (text or ""):
+            return alias
+    return None
+
+
 def _needs_station(text: str) -> bool:
     """提到测点或核查，但没写泵站时，先补问站点。"""
 
@@ -165,6 +175,35 @@ def _looks_like_station_reply(text: str) -> bool:
     return False
 
 
+def _is_elliptical_follow_up(text: str) -> bool:
+    """短句追问：缺主语站点，或带「那/呢」等省略标记。"""
+
+    cleaned = clean_query(text)
+    if not cleaned or _looks_like_station_reply(cleaned):
+        return False
+    if any(marker in cleaned for marker in _FOLLOW_MARKERS) and len(cleaned) <= 24:
+        return True
+    # 「电流呢」「压力怎么查」这类短追问
+    if len(cleaned) <= 16 and any(word in cleaned for word in _METRIC_WORDS) and not _has_station(cleaned):
+        return True
+    return False
+
+
+def _expand_follow_up(follow_up: str, *, last_question: str, last_station: str | None) -> str:
+    """把省略追问拼成可检索的完整问句，不依赖模型。"""
+
+    station = last_station or _extract_station(last_question) or ""
+    topic = clean_query(follow_up)
+    for marker in _FOLLOW_MARKERS:
+        topic = topic.replace(marker, " ")
+    topic = re.sub(r"\s+", " ", topic).strip(" ，,") or clean_query(follow_up)
+    if station and station not in topic:
+        return f"{station}{topic}按规程如何核查"
+    if last_question:
+        return f"{last_question}；补充追问：{topic}"
+    return topic
+
+
 def _get_session(session_id: str | None) -> tuple[str, _AskSession]:
     sid = (session_id or "").strip() or f"ask-{uuid4().hex[:12]}"
     with _SESSION_LOCK:
@@ -176,33 +215,53 @@ def _get_session(session_id: str | None) -> tuple[str, _AskSession]:
 
 
 def resolve_follow_up(question: str, *, session_id: str | None = None, station_id: str | None = None) -> dict[str, Any]:
-    """合并补问。返回有效问句，或 needs_clarification 提示。"""
+    """合并补问与省略追问。返回有效问句，或 needs_clarification 提示。"""
 
     sid, session = _get_session(session_id)
     raw = (question or "").strip()
     effective = raw
     merged = False
-    if session.pending_question and (_looks_like_station_reply(raw) or (session.pending_question and _has_station(raw) and len(raw) <= 20)):
+    if session.pending_question and (_looks_like_station_reply(raw) or (_has_station(raw) and len(raw) <= 20)):
         effective = f"{session.pending_question}（站点：{raw}）"
         session.pending_question = None
         merged = True
+    elif session.last_effective_question and _is_elliptical_follow_up(raw):
+        effective = _expand_follow_up(
+            raw,
+            last_question=session.last_effective_question,
+            last_station=session.last_station,
+        )
+        session.pending_question = None
+        merged = True
     elif _needs_station(raw) and not station_id:
-        session.pending_question = raw
-        return {
-            "session_id": sid,
-            "question": raw,
-            "effective_question": raw,
-            "needs_clarification": True,
-            "clarification": "请补充要核查的泵站，例如二泵站，或直接回复站点名称继续。",
-            "answer": "请补充要核查的泵站，例如二泵站，或直接回复站点名称继续。",
-            "merged": False,
-            "sources": [],
-            "compression": {"enabled": False, "chars_before": 0, "chars_after": 0, "reduced": 0},
-            "generation": "clarify",
-            "rewritten_query": "",
-        }
+        # 同会话已有泵站时，直接带上，避免重复补问。
+        known_station = session.last_station or _extract_station(session.last_effective_question or "")
+        if known_station:
+            effective = f"{known_station}{raw}"
+            session.pending_question = None
+            merged = True
+        else:
+            session.pending_question = raw
+            return {
+                "session_id": sid,
+                "question": raw,
+                "effective_question": raw,
+                "needs_clarification": True,
+                "clarification": "请补充要核查的泵站，例如二泵站，或直接回复站点名称继续。",
+                "answer": "请补充要核查的泵站，例如二泵站，或直接回复站点名称继续。",
+                "merged": False,
+                "sources": [],
+                "compression": {"enabled": False, "chars_before": 0, "chars_after": 0, "reduced": 0},
+                "generation": "clarify",
+                "rewritten_query": "",
+            }
     else:
         session.pending_question = None
+    station = _extract_station(effective) or session.last_station
+    if station:
+        session.last_station = station
+    # 成功进入检索前就记住本轮有效问句，便于下一轮省略追问。
+    session.last_effective_question = effective
     return {
         "session_id": sid,
         "question": raw,
@@ -267,6 +326,8 @@ def ask_with_retrieval(
         session = _SESSIONS.setdefault(sid, _AskSession())
         session.pending_question = None
         session.last_answer = answer
+        session.last_effective_question = effective
+        session.last_station = _extract_station(effective) or session.last_station
     return {
         "session_id": sid,
         "question": question,

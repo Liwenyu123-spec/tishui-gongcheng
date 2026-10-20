@@ -175,6 +175,12 @@ def run_smoke_checks() -> None:
     merged = resolve_follow_up("二泵站", session_id="smoke-ask-1")
     assert merged["needs_clarification"] is False
     assert "流量下降" in merged["effective_question"] and "二泵站" in merged["effective_question"]
+    resolve_follow_up("二泵站流量下降后先核查什么", session_id="smoke-ask-ellip")
+    follow = resolve_follow_up("那电流呢", session_id="smoke-ask-ellip")
+    assert follow["merged"] is True
+    assert "电流" in follow["effective_question"] and "二泵站" in follow["effective_question"]
+    reuse = resolve_follow_up("压力异常怎么查", session_id="smoke-ask-ellip")
+    assert "二泵站" in reuse["effective_question"] and "压力" in reuse["effective_question"]
 
     markdown_extract = expect(
         "解析 Markdown 规程",
