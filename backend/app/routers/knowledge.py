@@ -11,6 +11,7 @@ from ..dependencies import get_current_user, require_roles, user_has_station_acc
 from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
 from ..services.audit import record_audit
 from ..services.knowledge_search import search_rules
+from ..services.rag_chroma import get_rag_store, rag_store_status
 
 # 知识库接口管理文档生命周期；检索只返回正文摘要，不提供全文读取。
 router = APIRouter(prefix="/api/v1", tags=["知识库"])
@@ -55,6 +56,13 @@ def search_knowledge(
     )
     # 服务层使用不可变数据类，路由边界显式转换为 API 响应模型，避免隐式序列化失败。
     return KnowledgeSearchResponse(query=q, results=[KnowledgeSearchHit(**hit.__dict__) for hit in hits])
+
+
+@router.get("/knowledge/rag/status")
+def knowledge_rag_status(user: dict = Depends(get_current_user)) -> dict:
+    """返回第一阶段 Chroma RAG 的本地状态，便于联调和排查。"""
+
+    return rag_store_status()
 
 
 @router.get("/knowledge/{document_id}", response_model=KnowledgeDocument)
@@ -104,6 +112,20 @@ def import_knowledge(
     # 保存元数据和正文；正文只通过检索命中摘要间接返回，不作为全文接口返回。
     _KNOWLEDGE[document.id] = document
     _KNOWLEDGE_CONTENT[document.id] = payload.content
+    store = get_rag_store()
+    if store is not None:
+        store.upsert_document(
+            document_id=document.id,
+            filename=document.filename,
+            title=document.title,
+            version=document.version,
+            content=payload.content,
+            station_ids=document.station_ids,
+            status=document.status,
+            effective_from=document.effective_from,
+            effective_to=document.effective_to,
+        )
+        document.source = "chroma"
     record_audit("import", "knowledge", document.id, f"导入文档 {document.filename}，状态为待审")
     return document
 
@@ -123,5 +145,8 @@ def update_knowledge_status(
     # Literal 已限制状态取值；进入现行状态时记录批准时间。
     document.status = payload.status
     document.approved_at = datetime.now(timezone.utc) if payload.status == "valid" else None
+    store = get_rag_store()
+    if store is not None:
+        store.update_status(document_id, payload.status)
     record_audit("status_update", "knowledge", document_id, f"知识文档 {document.title} 状态更新为 {payload.status}")
     return document
