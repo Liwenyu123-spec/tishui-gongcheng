@@ -160,6 +160,11 @@ def run_smoke_checks() -> None:
     assert duplicate_review["id"] == review["id"]
     expect("审核员查询人工复核", client.get("/api/v1/reviews", headers=reviewer_headers), 200)
 
+    from app.services.knowledge_generate import clean_query
+
+    assert "泵站" in clean_query("帮我看看水泵流量掉下去先看啥")
+    assert "下降" in clean_query("帮我看看水泵流量掉下去先看啥")
+
     markdown_extract = expect(
         "解析 Markdown 规程",
         client.post(

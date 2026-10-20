@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,38 @@ def _deepseek_api_key() -> str:
 
 _load_env_file()
 
+REWRITE_PROMPT = (
+    "你是提水工程知识库的检索改写助手。"
+    "把用户问题改写成更适合检索调度规程的一句中文。"
+    "只输出改写后的问句，不要解释，不要引号。"
+    "保留泵站、流量、压力、水位、电流、核查等关键词，去掉客套话。"
+    "不要编造规程名称，不要写出实时数字或开关泵指令。"
+)
+
+_FILLERS = ("嗯", "啊", "那个", "这个", "帮我看看", "帮我查一下", "请问一下", "请问", "麻烦", "一下")
+_TERM_MAP = {
+    "水泵": "泵站",
+    "掉下去": "下降",
+    "掉了": "下降",
+    "怎么查": "如何核查",
+    "咋查": "如何核查",
+    "先看啥": "先核查什么",
+}
+
+
+def clean_query(text: str) -> str:
+    """去掉口语填充并把常见说法换成规程用词。"""
+
+    query = (text or "").strip()
+    for filler in _FILLERS:
+        query = query.replace(filler, " ")
+    for src, dst in _TERM_MAP.items():
+        query = query.replace(src, dst)
+    query = re.sub(r"[?？!！。.~～…]+", " ", query)
+    query = re.sub(r"\s+", " ", query).strip()
+    return query or (text or "").strip()
+
+
 SYSTEM_PROMPT = (
     "你是提水工程调度平台的规程助手。"
     "只能根据用户问题和给出的资料片段作答，用简体中文。"
@@ -97,20 +130,21 @@ def ask_with_retrieval(
     """检索现行有效资料后生成说明。没有密钥或没有可用片段时不调用模型。"""
 
     status = generation_status()
-    hits = [
-        hit
-        for hit in search_rules(
-            question,
-            limit=k,
-            station_id=station_id,
-            visible_station_ids=visible_station_ids,
-        )
-        if hit.confidence != "low"
-    ]
+    cleaned = clean_query(question)
+    rewritten = cleaned
+    if status["generation_ready"]:
+        rewritten = _rewrite_query(cleaned) or cleaned
+    hits = _search_queries(
+        [question, cleaned, rewritten],
+        k=k,
+        station_id=station_id,
+        visible_station_ids=visible_station_ids,
+    )
     sources = [_hit_payload(hit) for hit in hits]
     if not hits:
         return {
             "question": question,
+            "rewritten_query": rewritten,
             "answer": "当前没有可引用的现行资料，无法生成说明。请先导入并批准相关规程。",
             "sources": [],
             "generation": "skipped",
@@ -121,11 +155,37 @@ def ask_with_retrieval(
     answer = _complete(question, hits)
     return {
         "question": question,
+        "rewritten_query": rewritten,
         "answer": answer,
         "sources": sources,
         "generation": "deepseek",
         **status,
     }
+
+
+def _search_queries(
+    queries: list[str],
+    *,
+    k: int,
+    station_id: str | None,
+    visible_station_ids: set[str] | None,
+) -> list[KnowledgeHit]:
+    """用原问句和改写问句各检索一次，按资料编号合并，保留更高分。"""
+
+    merged: dict[str, KnowledgeHit] = {}
+    for query in dict.fromkeys(item.strip() for item in queries if item and item.strip()):
+        for hit in search_rules(
+            query,
+            limit=k,
+            station_id=station_id,
+            visible_station_ids=visible_station_ids,
+        ):
+            if hit.confidence == "low":
+                continue
+            current = merged.get(hit.source_id)
+            if current is None or hit.score > current.score:
+                merged[hit.source_id] = hit
+    return sorted(merged.values(), key=lambda item: (-item.score, item.source_id))[:k]
 
 
 def _hit_payload(hit: KnowledgeHit) -> dict[str, Any]:
@@ -142,30 +202,40 @@ def _hit_payload(hit: KnowledgeHit) -> dict[str, Any]:
     }
 
 
+def _rewrite_query(query: str) -> str:
+    text = _chat(
+        [{"role": "system", "content": REWRITE_PROMPT}, {"role": "user", "content": f"用户问题：{query}\n改写："}],
+        temperature=0,
+    )
+    rewritten = (text or "").splitlines()[0].strip().strip("\"“”")
+    return rewritten if rewritten and rewritten != query else query
+
+
 def _complete(question: str, hits: list[KnowledgeHit]) -> str:
+    context = "\n\n".join(
+        f"[{index}] {hit.title}（{hit.location}）\n{hit.detail}" for index, hit in enumerate(hits, start=1)
+    )
+    content = _chat(
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"问题：{question}\n\n资料片段：\n{context}"},
+        ],
+        temperature=0.2,
+    )
+    if not content:
+        raise RuntimeError("DeepSeek 没有返回说明文本")
+    return content
+
+
+def _chat(messages: list[dict[str, str]], *, temperature: float) -> str:
     try:
         from openai import OpenAI
     except ImportError as exc:
         raise RuntimeError("未安装 openai，无法调用 DeepSeek") from exc
-    key = _deepseek_api_key()
-    base_url = _windows_env("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+    client = OpenAI(
+        api_key=_deepseek_api_key(),
+        base_url=_windows_env("DEEPSEEK_BASE_URL") or "https://api.deepseek.com",
+    )
     model = _windows_env("DEEPSEEK_MODEL") or "deepseek-chat"
-    context = "\n\n".join(
-        f"[{index}] {hit.title}（{hit.location}）\n{hit.detail}" for index, hit in enumerate(hits, start=1)
-    )
-    client = OpenAI(api_key=key, base_url=base_url)
-    response = client.chat.completions.create(
-        model=model,
-        temperature=0.2,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": f"问题：{question}\n\n资料片段：\n{context}",
-            },
-        ],
-    )
-    content = (response.choices[0].message.content or "").strip()
-    if not content:
-        raise RuntimeError("DeepSeek 没有返回说明文本")
-    return content
+    response = client.chat.completions.create(model=model, temperature=temperature, messages=messages)
+    return (response.choices[0].message.content or "").strip()

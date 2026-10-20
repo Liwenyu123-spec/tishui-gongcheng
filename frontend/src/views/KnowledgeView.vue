@@ -75,6 +75,7 @@ const importing = ref(false)
 const extracting = ref(false)
 const askQuestion = ref('')
 const askAnswer = ref('')
+const askRewritten = ref('')
 const askSources = ref<SearchHit[]>([])
 const asking = ref(false)
 const importForm = reactive({ filename: '', title: '', version: '1.0', category: '规程', content: '', stationIds: '', effectiveFrom: '', effectiveTo: '' })
@@ -171,14 +172,16 @@ const askKnowledge = async () => {
   }
   asking.value = true
   try {
-    const result = await api<{ answer: string; sources: SearchHit[]; generation_error?: string }>(
+    const result = await api<{ answer: string; rewritten_query?: string; sources: SearchHit[] }>(
       '/api/v1/knowledge/rag/ask',
       { method: 'POST', body: JSON.stringify({ question, k: 5 }) },
     )
     askAnswer.value = result.answer
+    askRewritten.value = result.rewritten_query || ''
     askSources.value = result.sources || []
   } catch (error) {
     askAnswer.value = ''
+    askRewritten.value = ''
     askSources.value = []
     ElMessage.error(error instanceof Error ? error.message : '规程说明生成失败')
   } finally {
@@ -311,6 +314,7 @@ onMounted(loadKnowledge)
       <el-button class="button-stable button-stable--sm" type="primary" :loading="asking" @click="askKnowledge">生成说明</el-button>
     </div>
     <div v-if="askAnswer" style="margin-top:12px">
+      <p v-if="askRewritten" class="muted">检索问法：{{ askRewritten }}</p>
       <p>{{ askAnswer }}</p>
       <p v-for="source in askSources" :key="source.source_id" class="muted">引用：{{ source.title }} · {{ source.location }}</p>
     </div>
