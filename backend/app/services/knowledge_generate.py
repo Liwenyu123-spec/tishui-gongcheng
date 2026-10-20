@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +16,7 @@ from threading import Lock
 from uuid import uuid4
 
 from .knowledge_search import KnowledgeHit, _terms, search_rules
-from .runtime_env import load_env_file, windows_env
+from .runtime_env import env_flag, load_env_file, windows_env
 
 _STATION_ALIASES = ("集泉", "一泵站", "二泵站", "三泵站", "四泵站", "平定入口")
 _METRIC_WORDS = ("流量", "压力", "水位", "液位", "电流", "下降", "异常", "核查", "规程")
@@ -100,7 +99,10 @@ SYSTEM_PROMPT = (
 
 
 def generation_status() -> dict[str, Any]:
-    enabled = os.getenv("RAG_GENERATION_ENABLED", "1").strip().lower() not in {"0", "false", "off", "none"}
+    """返回生成是否可用；开关和模型名都支持写在 .env 里。"""
+
+    # 统一走 runtime_env，避免 .env 里关闭生成后仍调用模型。
+    enabled = env_flag("RAG_GENERATION_ENABLED", True)
     key = _deepseek_api_key()
     model = _windows_env("DEEPSEEK_MODEL") or "deepseek-chat"
     return {
@@ -349,7 +351,7 @@ def ask_with_retrieval(
 def ask_min_score() -> int:
     """生成问答最低相关度；低于此分不调用模型。可用 RAG_ASK_MIN_SCORE 调整。"""
 
-    raw = os.getenv("RAG_ASK_MIN_SCORE", "8").strip()
+    raw = (windows_env("RAG_ASK_MIN_SCORE") or "8").strip()
     try:
         return max(0, int(raw))
     except ValueError:
