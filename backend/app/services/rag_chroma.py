@@ -321,6 +321,21 @@ class ChromaRagStore:
                 break
         return hits
 
+    def ask(self, question: str, *, k: int = 5, preset: str | None = None) -> dict[str, Any]:
+        """调用目标项目的 RagAskService，提供完整的检索优化和生成编排。"""
+
+        if self.target_engine is None:
+            reason = getattr(self, "target_error", None) or "目标 RAG 引擎未启用"
+            raise RuntimeError(f"完整 RAG 问答暂不可用：{reason}")
+        from semantic_search.app.service.rag_service import RagAskService
+
+        return RagAskService(self.target_engine).ask(
+            question,
+            k=k,
+            preset=preset or "custom",
+            doc_scope="business",
+        )
+
     def stats(self) -> dict[str, Any]:
         return {
             "available": True,

@@ -76,3 +76,11 @@ class KnowledgeSearchResponse(BaseModel):
     query: str
     results: list[KnowledgeSearchHit]
     data_quality: Literal["mock"] = "mock"
+
+
+class KnowledgeRagAskRequest(BaseModel):
+    """目标 RAG 编排入口的最小请求模型。"""
+
+    question: str = Field(min_length=1, max_length=2000)
+    k: int = Field(default=5, ge=1, le=10)
+    preset: str = Field(default="custom", max_length=32)

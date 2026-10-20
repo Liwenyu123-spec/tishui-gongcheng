@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from ..data.knowledge import _KNOWLEDGE, _KNOWLEDGE_CONTENT
 from ..data.monitoring import _STATIONS
 from ..dependencies import get_current_user, require_roles, user_has_station_access
-from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
+from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeRagAskRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
 from ..services.audit import record_audit
 from ..services.knowledge_search import search_rules
 from ..services.rag_chroma import get_rag_store, rag_store_status
@@ -63,6 +63,24 @@ def knowledge_rag_status(user: dict = Depends(get_current_user)) -> dict:
     """返回第一阶段 Chroma RAG 的本地状态，便于联调和排查。"""
 
     return rag_store_status()
+
+
+@router.post("/knowledge/rag/ask")
+def knowledge_rag_ask(
+    payload: KnowledgeRagAskRequest,
+    _: dict = Depends(require_roles("admin", "operator", "reviewer")),
+) -> dict:
+    """调用目标项目的完整 RAG 编排；缺少模型依赖时返回明确的 503。"""
+
+    store = get_rag_store()
+    if store is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=rag_store_status().get("error"))
+    try:
+        return store.ask(payload.question, k=payload.k, preset=payload.preset)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
 
 @router.get("/knowledge/{document_id}", response_model=KnowledgeDocument)
