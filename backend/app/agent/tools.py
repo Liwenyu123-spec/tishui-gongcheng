@@ -51,7 +51,7 @@ READ_ONLY_TOOLS: dict[ToolName, ReadOnlyTool] = {
 }
 
 
-def plan_for_intent(intent: AgentIntent) -> AgentPlan:
+def plan_for_question(intent: AgentIntent, message: str = "") -> AgentPlan:
     """按意图返回协调 Agent 的专业协作和工具白名单。"""
 
     common = (READ_ONLY_TOOLS["check_scope"],)
@@ -64,14 +64,28 @@ def plan_for_intent(intent: AgentIntent) -> AgentPlan:
             common + (READ_ONLY_TOOLS["read_telemetry"], READ_ONLY_TOOLS["read_event_context"]),
         )
     if intent == "diagnosis":
+        procedure_first = any(word in message for word in ("规程", "预案", "手册", "依据")) and not any(
+            word in message for word in ("告警", "下降", "压力", "流量", "水位", "电流")
+        )
+        diagnosis_tools = (
+            ("search_knowledge", "read_alarms", "read_event_context")
+            if procedure_first
+            else ("read_alarms", "search_knowledge", "read_event_context")
+        )
         return AgentPlan(
             "diagnosis_agent",
             ("diagnosis_agent", "safety_review_agent", "event_context_agent"),
-            common + (READ_ONLY_TOOLS["read_alarms"], READ_ONLY_TOOLS["search_knowledge"], READ_ONLY_TOOLS["read_event_context"]),
+            common + tuple(READ_ONLY_TOOLS[name] for name in diagnosis_tools),
         )
     if intent == "supply":
         return AgentPlan("supply_balance_agent", ("supply_balance_agent",), common + (READ_ONLY_TOOLS["calculate_supply_balance"],))
     if intent == "control_rejected":
         return AgentPlan("safety_review_agent", ("safety_review_agent",), common + (READ_ONLY_TOOLS["apply_control_boundary"],))
     return AgentPlan("clarification_agent", ("clarification_agent",), common)
+
+
+def plan_for_intent(intent: AgentIntent) -> AgentPlan:
+    """兼容只按意图编排的调用。诊断类问题请改用 plan_for_question。"""
+
+    return plan_for_question(intent)
 

@@ -31,7 +31,7 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
     """以 SSE 返回规则分析的开始、结果和结束事件。"""
 
     answer = build_answer(payload, user)
-    plan = coordinate(answer)
+    plan = coordinate(answer, payload.message)
     # 工具层按账号和站点范围直接读取 Mock 数据，不再只从最终答案倒推引用。
     executions = execute_plan(plan, ToolContext(user=user, request=payload, answer=answer))
     # 记录一次 Agent 查询的摘要，便于管理员在审计页面追踪请求编号和分析分支。

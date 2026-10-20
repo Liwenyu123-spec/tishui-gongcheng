@@ -87,7 +87,7 @@ def _intent(message: str) -> AgentIntent:
         return "supply"
     if any(word in message for word in ("过去", "最近", "趋势", "波动", "变化")):
         return "trend"
-    if any(word in message for word in ("检查", "原因", "怎么办", "建议", "下降", "告警")):
+    if any(word in message for word in ("检查", "核查", "原因", "怎么办", "建议", "下降", "告警", "规程")):
         return "diagnosis"
     if any(word in message for word in ("当前", "现在", "多少", "状态", "流量", "压力", "水位", "能耗")):
         return "status"
@@ -279,6 +279,16 @@ def _answer_for_trend(message: str, user: dict, request_id: str, now: datetime, 
 
 
 def _answer_for_diagnosis(message: str, user: dict, request_id: str, now: datetime, requested_station_id: str | None) -> AgentAnswer:
+    station_named = requested_station_id is not None or any(alias in message for alias in _STATION_ALIASES)
+    if not station_named:
+        return AgentAnswer(
+            request_id=request_id,
+            intent="diagnosis",
+            answer="诊断需要先确定泵站。请补充站点，例如二泵站，或在页面选择站点后再提问。",
+            confidence="low",
+            pending_items=["补充要核查的泵站"],
+            generated_at=now,
+        )
     station = _find_station(message, requested_station_id, user)
     alarm = next((item for item in _ALARMS if station and item["station_id"] == station["id"]), None)
     if alarm is None:

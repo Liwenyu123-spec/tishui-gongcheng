@@ -414,6 +414,13 @@ def run_smoke_checks() -> None:
     # 明确提到二泵站时，工具层不得把三四泵站告警一并带出。
     assert "alarm-20261015-002" not in diagnosis_tools.text
     assert "alarm-20261015-003" not in diagnosis_tools.text
+    assert diagnosis_tools.text.find('"name": "read_alarms"') < diagnosis_tools.text.find('"name": "search_knowledge"')
+    procedure_question = client.post("/api/v1/chat/stream", headers=admin_headers, json={"message": "二泵站按规程应该怎么核查？"})
+    assert procedure_question.status_code == 200
+    assert procedure_question.text.find('"name": "search_knowledge"') < procedure_question.text.find('"name": "read_alarms"')
+    missing_station = client.post("/api/v1/chat/stream", headers=admin_headers, json={"message": "流量下降后先检查什么？"})
+    assert missing_station.status_code == 200
+    assert "补充要核查的泵站" in missing_station.text
 
     # 控制边界工具只返回只读拒绝摘要，不出现写操作工具名。
     control_tools = client.post("/api/v1/chat/stream", headers=admin_headers, json={"message": "启动二泵站"})

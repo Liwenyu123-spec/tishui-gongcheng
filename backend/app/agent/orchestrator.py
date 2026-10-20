@@ -4,12 +4,12 @@
 和只读工具白名单。后续接入模型或 LangGraph 时，可以在此处替换计划生成逻辑。
 """
 
-from .tools import AgentPlan, plan_for_intent
+from .tools import AgentPlan, plan_for_question
 from ..schemas.agent import AgentAnswer
 
 
-def coordinate(answer: AgentAnswer) -> AgentPlan:
-    """根据已确定的意图生成一次最小专业协作计划。"""
+def coordinate(answer: AgentAnswer, message: str = "") -> AgentPlan:
+    """根据意图和问题用词生成一次最小专业协作计划。"""
 
-    return plan_for_intent(answer.intent)
+    return plan_for_question(answer.intent, message)
 
