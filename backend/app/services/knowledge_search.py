@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import re
 
 from ..data.knowledge import _KNOWLEDGE, _KNOWLEDGE_CONTENT
+from .rag_chroma import get_rag_store
 
 
 @dataclass(frozen=True)
@@ -151,7 +152,35 @@ def search_rules(
         "level": ("level", "水位", "液位"),
         "current": ("current", "电流"),
     }.get(metric or "", ())
+    # 第一阶段 RAG：优先从独立 Chroma 集合召回已导入资料。业务元数据仍由当前
+    # 文档模型和权限过滤负责，后续可以把这部分替换成 MySQL 查询。
+    indexed_ids: set[str] = set()
+    store = get_rag_store()
+    if store is not None:
+        for item in store.search(
+            normalized,
+            limit=max(1, min(limit, 10)),
+            station_id=station_id,
+            visible_station_ids=visible_station_ids,
+        ):
+            metadata = item["metadata"]
+            document_id = str(item["document_id"])
+            indexed_ids.add(document_id)
+            hits.append(
+                KnowledgeHit(
+                    source_id=document_id,
+                    title=f"{metadata.get('title') or metadata.get('filename') or document_id} {metadata.get('version', '')}".strip(),
+                    version=str(metadata.get("version") or "1.0"),
+                    detail=str(item["text"]).replace("\r", " ").replace("\n", " ")[:500],
+                    score=int(item["score"]),
+                    source="chroma-document",
+                )
+            )
+
+    # Chroma 不可用时保留原有内存检索作为回退；已进入 Chroma 的文档避免重复展示。
     for document_id, document in _KNOWLEDGE.items():
+        if document_id in indexed_ids:
+            continue
         if not _is_current(document, current_time) or not _document_applies(
             document,
             station_id=station_id,

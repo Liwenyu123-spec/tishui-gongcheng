@@ -67,7 +67,7 @@ class KnowledgeSearchHit(BaseModel):
     version: str
     detail: str
     score: int
-    source: Literal["mock-rule", "mock-document"] = "mock-rule"
+    source: Literal["mock-rule", "mock-document", "chroma-document"] = "mock-rule"
 
 
 class KnowledgeSearchResponse(BaseModel):
