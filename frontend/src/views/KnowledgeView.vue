@@ -56,6 +56,63 @@ interface KnowledgeRow {
   source: string
 }
 
+// 诊断接口返回的分项得分；字段可能缺失（例如未启用重排时没有 rerank_*）。
+interface DiagnoseComponents {
+  lexical?: number
+  vector_similarity?: number
+  vector_bonus?: number
+  bm25_raw?: number
+  bm25_bonus?: number
+  score_before_rerank?: number
+  rerank_probability?: number
+  rerank_bonus?: number
+  candidate_from?: string
+}
+
+interface DiagnoseHit {
+  document_id: string
+  title: string
+  version: string
+  category: string
+  location: string
+  chunk_index: number | null
+  score: number
+  rerank: number | null
+  confidence: string
+  passed: boolean
+  components: DiagnoseComponents
+  excerpt: string
+}
+
+interface DiagnoseResult {
+  question: string
+  reason: string
+  reason_text: string
+  verdict: string
+  notes: string[]
+  environment: {
+    engine_mode?: string
+    embedding?: string
+    rerank?: string
+    rerank_error?: string | null
+    degraded?: boolean
+    chunks?: number
+    warmup?: { ok?: boolean; elapsed_seconds?: number | null; error?: string | null }
+  }
+  environment_notes: string[]
+  gate: {
+    passed?: boolean
+    min_score?: number
+    min_rerank?: number | null
+    top_score?: number
+    top_rerank?: number | null
+    kept?: number
+    total?: number
+  } | null
+  hits: DiagnoseHit[]
+  elapsed_ms: number
+}
+
 const localDocuments: KnowledgeRow[] = [
   { id: 'local-1', title: '二泵站运行规程', filename: 'pump-02-operation.md', version: 'v1.2', category: '规程', status: '现行', date: '2026-08-12', contentLength: 1840, applicability: '二泵站', source: '本地示例' },
   { id: 'local-2', title: '泵组异常处理预案', filename: 'pump-alarm-plan.md', version: 'v0.9', category: '应急预案', status: '待审', date: '2026-10-01', contentLength: 1260, applicability: '全局', source: '本地示例' },
@@ -97,6 +154,83 @@ const isAdmin = computed(() => {
     return false
   }
 })
+
+// 引擎状态只取页面要用的字段，其余忽略，避免把后端结构整体搬进类型。
+interface EngineStatus {
+  engine_mode?: string
+  embedding?: string
+  rerank?: string
+  rerank_error?: string | null
+  chunks?: number
+  warmup?: { ok?: boolean; elapsed_seconds?: number | null; error?: string | null }
+  index?: { consistent?: boolean; indexed_documents?: number }
+}
+
+// 检索诊断面板：只在管理员下显示，用于定位「为什么没命中 / 为什么被拦」。
+const debugQuestion = ref('')
+const debugging = ref(false)
+const debugResult = ref<DiagnoseResult | null>(null)
+const engineStatus = ref<EngineStatus | null>(null)
+const engineError = ref('')
+
+// 引擎健康度是排查的第一步：退化时其余分数解释都不可信，所以单独给结论。
+const engineHealth = computed(() => {
+  const status = engineStatus.value
+  if (!status) return { level: 'unknown', text: '引擎状态未知' }
+  if (status.engine_mode === 'local-hash') {
+    return { level: 'bad', text: '哈希向量兜底，检索质量明显下降' }
+  }
+  if (status.warmup && status.warmup.ok === false) {
+    return { level: 'bad', text: `模型未就绪：${status.warmup.error || '未知原因'}` }
+  }
+  if (status.rerank === 'disabled' || status.rerank === 'pending') {
+    return { level: 'warn', text: `重排未生效（${status.rerank}）` }
+  }
+  if (status.index && status.index.consistent === false) {
+    return { level: 'warn', text: '索引与磁盘资料不一致，建议重建' }
+  }
+  return { level: 'good', text: '向量与重排均已就绪' }
+})
+
+// 结论代码决定颜色：ok 绿、门槛拦截琥珀、无候选和空库红。
+const reasonTag = (reason: string) => {
+  if (reason === 'ok') return 'tag-green'
+  if (reason === 'gate_score' || reason === 'gate_rerank' || reason === 'below_rerank') return 'tag-amber'
+  return 'tag-red'
+}
+
+const loadEngineStatus = async () => {
+  if (!isAdmin.value) return
+  try {
+    engineStatus.value = await api<EngineStatus>('/api/v1/knowledge/rag/status')
+    engineError.value = ''
+  } catch (error) {
+    engineStatus.value = null
+    engineError.value = error instanceof Error ? error.message : '引擎状态读取失败'
+  }
+}
+
+const runDiagnose = async () => {
+  const question = debugQuestion.value.trim()
+  if (!question) {
+    ElMessage.warning('请输入要诊断的问题')
+    return
+  }
+  debugging.value = true
+  try {
+    debugResult.value = await api<DiagnoseResult>('/api/v1/knowledge/rag/debug', {
+      method: 'POST',
+      body: JSON.stringify({ question, k: 5 }),
+    })
+  } catch (error) {
+    debugResult.value = null
+    ElMessage.error(error instanceof Error ? error.message : '诊断接口暂不可用')
+  } finally {
+    debugging.value = false
+    // 每次诊断顺带刷新引擎状态，避免看到过期的「已就绪」。
+    await loadEngineStatus()
+  }
+}
 
 const filteredRows = computed(() => rows.value.filter(row => {
   const matchesQuery = !query.value || `${row.title} ${row.filename}`.toLowerCase().includes(query.value.toLowerCase())
@@ -387,7 +521,11 @@ const validateCsv = async () => {
   }
 }
 
-onMounted(loadKnowledge)
+onMounted(() => {
+  loadKnowledge()
+  // 管理员额外拉一次引擎状态，进入页面即可看到是否退化。
+  loadEngineStatus()
+})
 </script>
 
 <template>
@@ -397,6 +535,92 @@ onMounted(loadKnowledge)
       <p>检索现行规程、设备台账、应急预案和维修记录 · {{ sourceLabel }}</p>
     </div>
     <div><el-button type="primary" plain @click="openImport">导入资料</el-button><el-button plain @click="csvVisible = true">校验遥测 CSV</el-button></div>
+  </div>
+
+  <!-- 检索诊断仅管理员可见：响应含分片摘要和召回细节，属于内部排障信息。 -->
+  <div v-if="isAdmin" class="panel" style="margin-bottom:16px;padding:16px 18px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <strong>检索诊断</strong>
+      <span :class="['tag', engineHealth.level === 'good' ? 'tag-green' : engineHealth.level === 'warn' ? 'tag-amber' : engineHealth.level === 'bad' ? 'tag-red' : '']">{{ engineHealth.text }}</span>
+      <span v-if="engineStatus" class="muted" style="font-size:12px">
+        引擎 {{ engineStatus.engine_mode || '未知' }} · 分片 {{ engineStatus.chunks ?? 0 }} ·
+        重排 {{ engineStatus.rerank || '未知' }} ·
+        预热 {{ engineStatus.warmup?.elapsed_seconds != null ? `${engineStatus.warmup.elapsed_seconds}s` : '未执行' }}
+      </span>
+      <el-button link type="primary" @click="loadEngineStatus">刷新状态</el-button>
+    </div>
+    <p v-if="engineError" class="muted">引擎状态读取失败：{{ engineError }}</p>
+    <div class="filterbar" style="padding:0">
+      <el-input
+        v-model="debugQuestion"
+        placeholder="输入一条问句，看它为什么命中或为什么被拦"
+        style="max-width:520px"
+        clearable
+        @keyup.enter="runDiagnose"
+      />
+      <el-button class="button-stable button-stable--sm" type="primary" :loading="debugging" @click="runDiagnose">诊断</el-button>
+    </div>
+
+    <div v-if="debugResult" style="margin-top:14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span :class="['tag', reasonTag(debugResult.reason)]">{{ debugResult.reason }}</span>
+        <strong>{{ debugResult.verdict }}</strong>
+        <span class="muted" style="font-size:12px">耗时 {{ debugResult.elapsed_ms }}ms</span>
+      </div>
+      <p class="muted" style="margin:6px 0">{{ debugResult.reason_text }}</p>
+
+      <div v-if="debugResult.gate" class="muted" style="font-size:12px">
+        门槛：分数 ≥ {{ debugResult.gate.min_score }}
+        <template v-if="debugResult.gate.min_rerank != null">、重排 ≥ {{ debugResult.gate.min_rerank }}</template>
+        ｜Top1 分数 {{ debugResult.gate.top_score }}、重排 {{ debugResult.gate.top_rerank ?? '未启用' }}
+        ｜{{ debugResult.gate.kept }}/{{ debugResult.gate.total }} 条可引用
+      </div>
+
+      <div v-if="debugResult.environment_notes.length" style="margin-top:8px">
+        <p v-for="note in debugResult.environment_notes" :key="note" class="muted" style="color:#f5c578">· {{ note }}</p>
+      </div>
+
+      <div v-if="debugResult.notes.length" style="margin-top:8px">
+        <p v-for="note in debugResult.notes" :key="note" class="muted">· {{ note }}</p>
+      </div>
+
+      <el-table v-if="debugResult.hits.length" :data="debugResult.hits" style="margin-top:12px" size="small">
+        <el-table-column label="结果" width="72">
+          <template #default="s">
+            <span :class="['tag', s.row.passed ? 'tag-green' : 'tag-red']">{{ s.row.passed ? '可引用' : '拦下' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="资料" min-width="180">
+          <template #default="s">
+            <div>{{ s.row.title }}</div>
+            <div class="muted" style="font-size:12px">{{ s.row.location }} · {{ s.row.category || '规程' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="总分" width="70" prop="score" />
+        <el-table-column label="关键词" width="80">
+          <template #default="s">{{ s.row.components.lexical ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column label="向量相似度" width="104">
+          <template #default="s">
+            {{ s.row.components.vector_similarity ?? '-' }}
+            <span class="muted" style="font-size:11px">+{{ s.row.components.vector_bonus ?? 0 }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="BM25" width="96">
+          <template #default="s">
+            {{ s.row.components.bm25_raw ?? '-' }}
+            <span class="muted" style="font-size:11px">+{{ s.row.components.bm25_bonus ?? 0 }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="重排概率" width="92">
+          <template #default="s">{{ s.row.rerank ?? '未启用' }}</template>
+        </el-table-column>
+        <el-table-column label="候选来源" width="90">
+          <template #default="s">{{ s.row.components.candidate_from || '-' }}</template>
+        </el-table-column>
+      </el-table>
+      <p v-else class="muted" style="margin-top:10px">没有候选片段，检索在这一步就没有拿到任何结果。</p>
+    </div>
   </div>
 
   <div class="panel" style="margin-bottom:16px;padding:16px 18px">
