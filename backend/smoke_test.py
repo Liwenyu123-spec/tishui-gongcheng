@@ -171,12 +171,17 @@ def run_smoke_checks() -> None:
     )
     from app.services.knowledge_search import KnowledgeHit
 
-    # 照片索引落盘在临时目录，避免污染正式 backend/data。
+    # 照片索引落盘在临时目录；模型加载耗时，冒烟只做注册/列表，不编码图片。
     with tempfile.TemporaryDirectory() as photo_dir:
         os.environ["PHOTO_STORE_DIR"] = photo_dir
+        from app.services import photo_store
         from app.services.photo_store import PhotoIndex
 
-        index = PhotoIndex()
+        class _SkipEmbedIndex(PhotoIndex):
+            def embed_photo(self, photo_id: str) -> bool:
+                return False
+
+        index = _SkipEmbedIndex()
         tiny_png = Path(r"C:\Users\lenovo\AppData\Local\Temp\smoke_photo.png").read_bytes()
         record = index.register(
             filename="smoke_test.png",
@@ -189,6 +194,7 @@ def run_smoke_checks() -> None:
         assert index.status()["photos"] == 1
         listed = index.list_photos()
         assert listed and listed[0].photo_id == record.photo_id
+        assert photo_store.get_photo_index is not None
 
     assert "泵站" in clean_query("帮我看看水泵流量掉下去先看啥")
     assert "下降" in clean_query("帮我看看水泵流量掉下去先看啥")
