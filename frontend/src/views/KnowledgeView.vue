@@ -76,6 +76,7 @@ const extracting = ref(false)
 const askQuestion = ref('')
 const askAnswer = ref('')
 const askRewritten = ref('')
+const askCompression = ref('')
 const askSources = ref<SearchHit[]>([])
 const asking = ref(false)
 const importForm = reactive({ filename: '', title: '', version: '1.0', category: '规程', content: '', stationIds: '', effectiveFrom: '', effectiveTo: '' })
@@ -172,16 +173,23 @@ const askKnowledge = async () => {
   }
   asking.value = true
   try {
-    const result = await api<{ answer: string; rewritten_query?: string; sources: SearchHit[] }>(
-      '/api/v1/knowledge/rag/ask',
-      { method: 'POST', body: JSON.stringify({ question, k: 5 }) },
-    )
+    const result = await api<{
+      answer: string
+      rewritten_query?: string
+      sources: SearchHit[]
+      compression?: { chars_before?: number; chars_after?: number; reduced?: number }
+    }>('/api/v1/knowledge/rag/ask', { method: 'POST', body: JSON.stringify({ question, k: 5 }) })
     askAnswer.value = result.answer
     askRewritten.value = result.rewritten_query || ''
+    const compression = result.compression
+    askCompression.value = compression
+      ? `上下文压缩：${compression.chars_before || 0} → ${compression.chars_after || 0} 字（减少 ${compression.reduced || 0}）`
+      : ''
     askSources.value = result.sources || []
   } catch (error) {
     askAnswer.value = ''
     askRewritten.value = ''
+    askCompression.value = ''
     askSources.value = []
     ElMessage.error(error instanceof Error ? error.message : '规程说明生成失败')
   } finally {
@@ -315,6 +323,7 @@ onMounted(loadKnowledge)
     </div>
     <div v-if="askAnswer" style="margin-top:12px">
       <p v-if="askRewritten" class="muted">检索问法：{{ askRewritten }}</p>
+      <p v-if="askCompression" class="muted">{{ askCompression }}</p>
       <p>{{ askAnswer }}</p>
       <p v-for="source in askSources" :key="source.source_id" class="muted">引用：{{ source.title }} · {{ source.location }}</p>
     </div>

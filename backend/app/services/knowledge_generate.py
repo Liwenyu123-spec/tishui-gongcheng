@@ -12,7 +12,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .knowledge_search import KnowledgeHit, search_rules
+from dataclasses import replace
+
+from .knowledge_search import KnowledgeHit, _terms, search_rules
 
 
 def _load_env_file() -> None:
@@ -140,24 +142,27 @@ def ask_with_retrieval(
         station_id=station_id,
         visible_station_ids=visible_station_ids,
     )
-    sources = [_hit_payload(hit) for hit in hits]
     if not hits:
         return {
             "question": question,
             "rewritten_query": rewritten,
             "answer": "当前没有可引用的现行资料，无法生成说明。请先导入并批准相关规程。",
             "sources": [],
+            "compression": {"enabled": False, "chars_before": 0, "chars_after": 0, "reduced": 0},
             "generation": "skipped",
             **status,
         }
     if not status["generation_ready"]:
         raise RuntimeError(status["generation_error"] or "生成问答不可用")
-    answer = _complete(question, hits)
+    # 对照参考项目的句级压缩：只把和问句相关的句子送给模型。
+    compressed_hits, compress_stats = compress_hits(hits, rewritten or cleaned or question)
+    answer = _complete(question, compressed_hits)
     return {
         "question": question,
         "rewritten_query": rewritten,
         "answer": answer,
-        "sources": sources,
+        "sources": [_hit_payload(hit) for hit in compressed_hits],
+        "compression": compress_stats,
         "generation": "deepseek",
         **status,
     }
@@ -199,6 +204,48 @@ def _hit_payload(hit: KnowledgeHit) -> dict[str, Any]:
         "detail": hit.detail,
         "score": hit.score,
         "confidence": hit.confidence,
+    }
+
+
+def _split_sentences(text: str) -> list[str]:
+    """按中英文句末标点和空行切句，对齐参考项目的中文切句。"""
+
+    parts = re.split(r"(?<=[。！？；.!?;])\s*|\n+", text or "")
+    return [item.strip() for item in parts if item.strip()]
+
+
+def compress_detail(query: str, detail: str, *, keep_ratio: float = 0.6) -> str:
+    """按与问句的词重合保留相关句子；短文本不压缩。"""
+
+    sentences = _split_sentences(detail)
+    if len(sentences) <= 1:
+        return (detail or "").strip()
+    query_terms = set(_terms(query))
+    if not query_terms:
+        return (detail or "").strip()
+    scored: list[tuple[int, int, str]] = []
+    for index, sentence in enumerate(sentences):
+        overlap = len(query_terms.intersection(_terms(sentence)))
+        scored.append((overlap, index, sentence))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    keep_count = max(1, min(len(sentences), round(len(sentences) * keep_ratio)))
+    # 至少保留有重合的句子；若全无重合则保留原文前几句，避免空上下文。
+    selected = [item for item in scored if item[0] > 0][:keep_count] or scored[:keep_count]
+    selected.sort(key=lambda item: item[1])
+    return "".join(item[2] if item[2].endswith(("。", "！", "？", "；", ".", "!", "?", ";")) else f"{item[2]}。" for item in selected)
+
+
+def compress_hits(hits: list[KnowledgeHit], query: str) -> tuple[list[KnowledgeHit], dict[str, Any]]:
+    """压缩命中摘要，返回压缩后的命中和前后字数统计。"""
+
+    before = sum(len(hit.detail or "") for hit in hits)
+    compressed = [replace(hit, detail=compress_detail(query, hit.detail)) for hit in hits]
+    after = sum(len(hit.detail or "") for hit in compressed)
+    return compressed, {
+        "enabled": True,
+        "chars_before": before,
+        "chars_after": after,
+        "reduced": max(0, before - after),
     }
 
 
