@@ -86,6 +86,38 @@ def knowledge_rag_status(user: dict = Depends(get_current_user)) -> dict:
     return rag_store_status()
 
 
+@router.post("/knowledge/rag/reindex")
+def knowledge_rag_reindex(_: dict = Depends(require_roles("admin"))) -> dict:
+    """用当前内存中的知识文档重建 Chroma 索引。切换 Embedding 后需要调用一次。"""
+
+    store = get_rag_store()
+    if store is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=rag_store_status().get("error"))
+    documents = [
+        {
+            "document_id": document.id,
+            "filename": document.filename,
+            "title": document.title,
+            "version": document.version,
+            "content": _KNOWLEDGE_CONTENT.get(document.id, ""),
+            "station_ids": document.station_ids,
+            "status": document.status,
+            "effective_from": document.effective_from,
+            "effective_to": document.effective_to,
+        }
+        for document in _KNOWLEDGE.values()
+    ]
+    result = store.reindex_documents(documents)
+    indexed_ids = {
+        str(metadata.get("document_id"))
+        for metadata in (store.collection.get(include=["metadatas"]).get("metadatas") or [])
+        if metadata
+    }
+    for document in _KNOWLEDGE.values():
+        document.source = "chroma" if document.id in indexed_ids else "mock"
+    return {**result, **store.stats()}
+
+
 @router.post("/knowledge/rag/ask")
 def knowledge_rag_ask(
     payload: KnowledgeRagAskRequest,

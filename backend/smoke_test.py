@@ -18,6 +18,9 @@ BACKEND_DIR = Path(__file__).resolve().parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+# 冒烟固定哈希向量，避免首次运行下载语义模型。
+os.environ["RAG_EMBEDDING_PROVIDER"] = "hash"
+
 from fastapi.testclient import TestClient
 
 from app.main import app

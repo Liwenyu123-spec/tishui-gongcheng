@@ -142,12 +142,18 @@ class ChromaRagStore:
         self.persist_path = Path(os.getenv("RAG_CHROMA_DIR", str(default_path))).resolve()
         self.persist_path.mkdir(parents=True, exist_ok=True)
         base_collection_name = os.getenv("RAG_CHROMA_COLLECTION", "water_project_knowledge")
-        embedding_provider = os.getenv("RAG_EMBEDDING_PROVIDER", "hash").strip().lower()
+        # 默认使用中文语义向量。模型或依赖不可用时回退哈希，避免检索接口整体不可用。
+        embedding_provider = os.getenv("RAG_EMBEDDING_PROVIDER", "sentence-transformers").strip().lower()
+        self.embedding_fallback: str | None = None
         if embedding_provider in {"hash", "local", "fallback"}:
             self.embedding = LocalHashEmbedding()
         elif embedding_provider in {"sentence-transformers", "sentence_transformers", "st"}:
             model_name = os.getenv("RAG_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5").strip()
-            self.embedding = SentenceTransformerEmbedding(model_name)
+            try:
+                self.embedding = SentenceTransformerEmbedding(model_name)
+            except RuntimeError as exc:
+                self.embedding = LocalHashEmbedding()
+                self.embedding_fallback = str(exc)
         else:
             raise RuntimeError(
                 f"不支持的 RAG_EMBEDDING_PROVIDER：{embedding_provider}；"
@@ -282,6 +288,40 @@ class ChromaRagStore:
             self.collection.add(ids=ids, documents=chunks, metadatas=metadatas)
         return len(chunks)
 
+    def reindex_documents(self, documents: list[dict[str, Any]]) -> dict[str, Any]:
+        """按当前内存文档重建检索集合，并删掉已不在文档列表中的分片。"""
+
+        known_ids = {str(item["document_id"]) for item in documents}
+        indexed = 0
+        for item in documents:
+            chunks = self.sync_document(
+                document_id=str(item["document_id"]),
+                filename=str(item["filename"]),
+                title=str(item["title"]),
+                version=str(item["version"]),
+                content=str(item.get("content") or ""),
+                station_ids=list(item.get("station_ids") or []),
+                status=str(item["status"]),
+                effective_from=item.get("effective_from"),
+                effective_to=item.get("effective_to"),
+            )
+            if chunks:
+                indexed += 1
+        existing = self.collection.get(include=["metadatas"])
+        orphan_ids = {
+            str(metadata.get("document_id"))
+            for metadata in (existing.get("metadatas") or [])
+            if metadata and str(metadata.get("document_id") or "") not in known_ids
+        }
+        for document_id in orphan_ids:
+            self.delete_document(document_id)
+        return {
+            "indexed_documents": indexed,
+            "skipped_documents": len(documents) - indexed,
+            "removed_orphans": len(orphan_ids),
+            "chunks": self.collection.count(),
+        }
+
     @staticmethod
     def _parse_time(value: Any) -> datetime | None:
         if not value:
@@ -389,7 +429,8 @@ class ChromaRagStore:
             "collection": self.collection_name,
             "chunks": self.collection.count(),
             "embedding": self.embedding.name(),
-            "engine_mode": "local-hash",
+            "embedding_fallback": self.embedding_fallback,
+            "engine_mode": "local-hash" if isinstance(self.embedding, LocalHashEmbedding) else "sentence-transformers",
             "generation": "disabled",
         }
 
