@@ -12,9 +12,26 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from threading import Lock
+from uuid import uuid4
 
 from .knowledge_search import KnowledgeHit, _terms, search_rules
+
+_STATION_ALIASES = ("集泉", "一泵站", "二泵站", "三泵站", "四泵站", "平定入口")
+_METRIC_WORDS = ("流量", "压力", "水位", "液位", "电流", "下降", "异常", "核查", "规程")
+
+
+@dataclass
+class _AskSession:
+    """进程内多轮补问状态；重启后清空。"""
+
+    pending_question: str | None = None
+    last_answer: str | None = None
+
+
+_SESSIONS: dict[str, _AskSession] = {}
+_SESSION_LOCK = Lock()
 
 
 def _load_env_file() -> None:
