@@ -39,6 +39,7 @@ class KnowledgeHit:
     station_ids: tuple[str, ...] = ()
     chunk_index: int | None = None
     location: str = "内置规程"
+    category: str = "规程"
 
 
 # 规则目录与 Agent 诊断分支共用稳定编号，便于回答、审计和回放相互追踪。
@@ -149,6 +150,7 @@ def search_rules(
                     detail=rule.detail,
                     score=score,
                     location="内置规程",
+                    category="规程",
                 )
             )
     metric_terms = {
@@ -189,6 +191,7 @@ def search_rules(
                     station_ids=station_ids,
                     chunk_index=chunk_number,
                     location=f"分片 {chunk_number + 1}" if chunk_number is not None else "正文",
+                    category=str(metadata.get("category") or "规程"),
                 )
             )
 
@@ -229,6 +232,7 @@ def search_rules(
                     filename=document.filename,
                     station_ids=tuple(document.station_ids),
                     location="正文摘要",
+                    category=document.category,
                 )
             )
     hits.sort(key=lambda hit: (-hit.score, hit.source_id))

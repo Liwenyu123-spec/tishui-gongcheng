@@ -29,6 +29,7 @@ def _sync_knowledge_index(document: KnowledgeDocument) -> None:
         filename=document.filename,
         title=document.title,
         version=document.version,
+        category=document.category,
         content=_KNOWLEDGE_CONTENT.get(document.id, ""),
         station_ids=document.station_ids,
         status=document.status,
@@ -104,6 +105,7 @@ def knowledge_rag_reindex(_: dict = Depends(require_roles("admin"))) -> dict:
             "filename": document.filename,
             "title": document.title,
             "version": document.version,
+            "category": document.category,
             "content": _KNOWLEDGE_CONTENT.get(document.id, ""),
             "station_ids": document.station_ids,
             "status": document.status,
@@ -178,6 +180,7 @@ def import_knowledge(
         filename=payload.filename,
         title=payload.title,
         version=payload.version,
+        category=payload.category,
         status="pending",
         content_length=len(payload.content),
         imported_at=now,
@@ -209,6 +212,17 @@ def update_knowledge_status(
     # Literal 已限制状态取值；进入现行状态时记录批准时间。
     document.status = payload.status
     document.approved_at = datetime.now(timezone.utc) if payload.status == "valid" else None
+    if payload.status == "valid":
+        # 同一标题和类别只保留这份现行版本，旧现行版本退出检索。
+        for previous in list(_KNOWLEDGE.values()):
+            if previous.id == document.id or previous.status != "valid":
+                continue
+            if previous.title != document.title or previous.category != document.category:
+                continue
+            previous.status = "revoked"
+            previous.approved_at = None
+            _sync_knowledge_index(previous)
+            record_audit("status_update", "knowledge", previous.id, f"知识文档 {previous.title} {previous.version} 因新版本生效而废止")
     _sync_knowledge_index(document)
     record_audit("status_update", "knowledge", document_id, f"知识文档 {document.title} 状态更新为 {payload.status}")
     return document

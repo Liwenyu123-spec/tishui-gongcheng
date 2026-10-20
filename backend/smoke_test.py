@@ -187,6 +187,38 @@ def run_smoke_checks() -> None:
         200,
     )
     assert any(hit["source_id"] == imported_knowledge["id"] for hit in approved_search["results"])
+    newer_knowledge = expect(
+        "导入同一规程新版本",
+        client.post(
+            "/api/v1/knowledge/import",
+            headers=admin_headers,
+            json={
+                "filename": "smoke-retry-procedure-v2.md",
+                "title": "Smoke 通知重试规程",
+                "version": "2.0",
+                "category": "规程",
+                "content": "通知失败后先核对失败原因，再由管理员执行重试。",
+                "station_ids": ["pump-02"],
+            },
+        ),
+        200,
+    )
+    expect(
+        "批准新版本并废止旧版",
+        client.patch(
+            f"/api/v1/knowledge/{newer_knowledge['id']}/status",
+            headers=admin_headers,
+            json={"status": "valid"},
+        ),
+        200,
+    )
+    version_search = expect(
+        "旧版本不再检索",
+        client.get("/api/v1/knowledge/search", headers=station_headers, params={"q": "通知重试规程", "station_id": "pump-02"}),
+        200,
+    )
+    assert any(hit["source_id"] == newer_knowledge["id"] for hit in version_search["results"])
+    assert not any(hit["source_id"] == imported_knowledge["id"] for hit in version_search["results"])
 
     # 方案比较：检查目标需求、约束违反项和确定性推荐结果。
     comparison = expect(

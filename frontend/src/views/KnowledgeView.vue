@@ -8,6 +8,7 @@ interface ApiKnowledgeDocument {
   filename: string
   title: string
   version: string
+  category: string
   status: string
   content_length: number
   imported_at: string
@@ -38,6 +39,7 @@ interface SearchHit {
   station_ids: string[]
   chunk_index: number | null
   location: string
+  category: string
 }
 
 interface KnowledgeRow {
@@ -45,6 +47,7 @@ interface KnowledgeRow {
   title: string
   filename: string
   version: string
+  category: string
   status: string
   date: string
   contentLength: number
@@ -53,9 +56,9 @@ interface KnowledgeRow {
 }
 
 const localDocuments: KnowledgeRow[] = [
-  { id: 'local-1', title: '二泵站运行规程', filename: 'pump-02-operation.md', version: 'v1.2', status: '现行', date: '2026-08-12', contentLength: 1840, applicability: '二泵站', source: '本地示例' },
-  { id: 'local-2', title: '泵组异常处理预案', filename: 'pump-alarm-plan.md', version: 'v0.9', status: '待审', date: '2026-10-01', contentLength: 1260, applicability: '全局', source: '本地示例' },
-  { id: 'local-3', title: '四泵站 2 号泵维修手册', filename: 'pump-04-maintenance.pdf', version: 'v2.1', status: '废止', date: '2025-12-18', contentLength: 3520, applicability: '四泵站', source: '本地示例' },
+  { id: 'local-1', title: '二泵站运行规程', filename: 'pump-02-operation.md', version: 'v1.2', category: '规程', status: '现行', date: '2026-08-12', contentLength: 1840, applicability: '二泵站', source: '本地示例' },
+  { id: 'local-2', title: '泵组异常处理预案', filename: 'pump-alarm-plan.md', version: 'v0.9', category: '应急预案', status: '待审', date: '2026-10-01', contentLength: 1260, applicability: '全局', source: '本地示例' },
+  { id: 'local-3', title: '四泵站 2 号泵维修手册', filename: 'pump-04-maintenance.pdf', version: 'v2.1', category: '手册', status: '废止', date: '2025-12-18', contentLength: 3520, applicability: '四泵站', source: '本地示例' },
 ]
 const statusNames: Record<string, string> = { valid: '现行', pending: '待审', revoked: '废止' }
 const statusCodes: Record<string, string> = { 现行: 'valid', 待审: 'pending', 废止: 'revoked' }
@@ -68,7 +71,7 @@ const searchMessage = ref('')
 const sourceLabel = ref('本地示例')
 const importVisible = ref(false)
 const importing = ref(false)
-const importForm = reactive({ filename: '', title: '', version: '1.0', content: '', stationIds: '', effectiveFrom: '', effectiveTo: '' })
+const importForm = reactive({ filename: '', title: '', version: '1.0', category: '规程', content: '', stationIds: '', effectiveFrom: '', effectiveTo: '' })
 const csvVisible = ref(false)
 const csvLoading = ref(false)
 const csvResult = ref<CsvImportResponse | null>(null)
@@ -93,6 +96,7 @@ const formatDocument = (document: ApiKnowledgeDocument): KnowledgeRow => ({
   title: document.title,
   filename: document.filename,
   version: document.version,
+  category: document.category || '规程',
   status: statusNames[document.status] || document.status,
   date: document.imported_at.slice(0, 10),
   contentLength: document.content_length,
@@ -145,6 +149,7 @@ const openImport = () => {
   importForm.filename = ''
   importForm.title = ''
   importForm.version = '1.0'
+  importForm.category = '规程'
   importForm.content = ''
   importForm.stationIds = ''
   importForm.effectiveFrom = ''
@@ -165,6 +170,7 @@ const importDocument = async () => {
         filename: importForm.filename,
         title: importForm.title,
         version: importForm.version,
+        category: importForm.category,
         content: importForm.content,
         station_ids: importForm.stationIds.split(/[,，\s]+/).map(item => item.trim()).filter(Boolean),
         effective_from: importForm.effectiveFrom ? new Date(importForm.effectiveFrom).toISOString() : null,
@@ -253,7 +259,7 @@ onMounted(loadKnowledge)
       <p class="muted">{{ searchMessage }}</p>
       <div v-for="hit in searchHits" :key="`${hit.source_id}-${hit.chunk_index}`" class="panel" style="margin-top:8px;padding:12px 14px">
         <strong>{{ hit.title }}</strong>
-        <p class="muted">{{ hit.filename || '无文件名' }} · {{ hit.version }} · {{ hit.location }} · {{ hit.station_ids.length ? hit.station_ids.join('、') : '全局' }} · 相关度 {{ hit.score }}</p>
+        <p class="muted">{{ hit.category || '规程' }} · {{ hit.filename || '无文件名' }} · {{ hit.version }} · {{ hit.location }} · {{ hit.station_ids.length ? hit.station_ids.join('、') : '全局' }} · 相关度 {{ hit.score }}</p>
         <p>{{ hit.detail }}</p>
       </div>
     </div>
@@ -261,6 +267,7 @@ onMounted(loadKnowledge)
       <el-table :data="filteredRows">
         <el-table-column prop="title" label="资料名称" min-width="190" />
         <el-table-column prop="filename" label="文件名" min-width="190" />
+        <el-table-column prop="category" label="类别" width="110" />
         <el-table-column prop="version" label="版本" width="90" />
         <el-table-column prop="applicability" label="适用范围" width="120" />
         <el-table-column prop="contentLength" label="正文长度" width="100" />
@@ -287,6 +294,15 @@ onMounted(loadKnowledge)
       <el-form-item label="文件名"><el-input v-model="importForm.filename" placeholder="例如 pump-02-operation.md" /></el-form-item>
       <el-form-item label="资料名称"><el-input v-model="importForm.title" placeholder="例如二泵站运行规程" /></el-form-item>
       <el-form-item label="版本"><el-input v-model="importForm.version" /></el-form-item>
+      <el-form-item label="类别">
+        <el-select v-model="importForm.category" style="width:100%">
+          <el-option label="规程" value="规程" />
+          <el-option label="手册" value="手册" />
+          <el-option label="台账" value="台账" />
+          <el-option label="维修记录" value="维修记录" />
+          <el-option label="应急预案" value="应急预案" />
+        </el-select>
+      </el-form-item>
       <el-form-item label="适用站点"><el-input v-model="importForm.stationIds" placeholder="例如 pump-02；留空表示全局" /></el-form-item>
       <el-form-item label="生效时间"><el-input v-model="importForm.effectiveFrom" type="datetime-local" /></el-form-item>
       <el-form-item label="失效时间"><el-input v-model="importForm.effectiveTo" type="datetime-local" /></el-form-item>

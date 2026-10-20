@@ -3,6 +3,8 @@
 from datetime import datetime
 from typing import Literal
 
+KnowledgeCategory = Literal["规程", "手册", "台账", "维修记录", "应急预案"]
+
 from pydantic import BaseModel, Field
 
 
@@ -15,6 +17,8 @@ class KnowledgeImportRequest(BaseModel):
     title: str
     # 文档版本号，未填写时使用 1.0。
     version: str = "1.0"
+    # 资料类别。同一标题和类别只允许一个现行版本。
+    category: KnowledgeCategory = "规程"
     # 导入的正文内容，Mock 阶段直接保存在内存中。
     content: str
     # 适用站点；为空表示全局规程。
@@ -42,6 +46,8 @@ class KnowledgeDocument(BaseModel):
     title: str
     # 当前文档版本。
     version: str
+    # 规程、手册、台账、维修记录或应急预案。
+    category: KnowledgeCategory = "规程"
     # 文档状态：pending 待审、valid 现行、revoked 废止。
     status: Literal["valid", "pending", "revoked"] = "pending"
     # 正文字符长度，列表接口不直接返回正文。
@@ -72,6 +78,7 @@ class KnowledgeSearchHit(BaseModel):
     station_ids: list[str] = Field(default_factory=list)
     chunk_index: int | None = None
     location: str = ""
+    category: str = ""
 
 
 class KnowledgeSearchResponse(BaseModel):
