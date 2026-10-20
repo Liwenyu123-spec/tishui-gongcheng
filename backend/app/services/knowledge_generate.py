@@ -432,7 +432,9 @@ def check_groundedness(answer: str, hits: list[KnowledgeHit]) -> dict[str, Any]:
             "status": "abstain",
         }
 
-    evidence = "\n".join(f"{hit.title}\n{hit.detail}" for hit in hits)
+    # 忠实度比对用邻域上下文：模型看到的证据如果比 detail 更长，
+    # 只拿 detail 比对会把正常引用判成「资料外」。
+    evidence = "\n".join(f"{hit.title}\n{_evidence_text(hit)}" for hit in hits)
     evidence_terms = set(_terms(evidence))
     answer_terms = set(_terms(text))
     overlap = (len(answer_terms & evidence_terms) / len(answer_terms)) if answer_terms else 0.0
@@ -501,6 +503,8 @@ def _hit_payload(hit: KnowledgeHit) -> dict[str, Any]:
         "detail": hit.detail,
         "score": hit.score,
         "confidence": hit.confidence,
+        # 供排查用：模型实际看到的文本比 detail 多出相邻条款。
+        "context": hit.context,
     }
 
 
@@ -533,17 +537,31 @@ def compress_detail(query: str, detail: str, *, keep_ratio: float = 0.6) -> str:
 
 
 def compress_hits(hits: list[KnowledgeHit], query: str) -> tuple[list[KnowledgeHit], dict[str, Any]]:
-    """压缩命中摘要，返回压缩后的命中和前后字数统计。"""
+    """压缩命中摘要，返回压缩后的命中和前后字数统计。
 
-    before = sum(len(hit.detail or "") for hit in hits)
-    compressed = [replace(hit, detail=compress_detail(query, hit.detail)) for hit in hits]
-    after = sum(len(hit.detail or "") for hit in compressed)
+    压缩作用在 context 上：邻域上下文里也常有一半句子和问题无关，
+    逐句筛掉能明显缩短提示词，同时保留跨条款的完整依据。
+    """
+
+    before = sum(len(hit.context or hit.detail or "") for hit in hits)
+    # 主文本统一写进 context，detail 保持原样供引用展示。
+    compressed = [
+        replace(hit, context=compress_detail(query, hit.context or hit.detail))
+        for hit in hits
+    ]
+    after = sum(len(hit.context or hit.detail or "") for hit in compressed)
     return compressed, {
         "enabled": True,
         "chars_before": before,
         "chars_after": after,
         "reduced": max(0, before - after),
     }
+
+
+def _evidence_text(hit: KnowledgeHit) -> str:
+    """模型与校验应看到的文本：优先邻域上下文，回退精确分片。"""
+
+    return hit.context or hit.detail
 
 
 def _rewrite_query(query: str) -> str:
@@ -557,7 +575,8 @@ def _rewrite_query(query: str) -> str:
 
 def _complete(question: str, hits: list[KnowledgeHit]) -> str:
     context = "\n\n".join(
-        f"[{index}] {hit.title}（{hit.location}）\n{hit.detail}" for index, hit in enumerate(hits, start=1)
+        f"[{index}] {hit.title}（{hit.location}）\n{_evidence_text(hit)}"
+        for index, hit in enumerate(hits, start=1)
     )
     content = _chat(
         [

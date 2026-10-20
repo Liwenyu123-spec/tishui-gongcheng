@@ -147,6 +147,7 @@ def diagnose(
             category=str(item["metadata"].get("category") or ""),
             confidence=str(item.get("confidence") or "normal"),
             rerank=item.get("rerank"),
+            context=str(item.get("context") or ""),
         )
         for item in raw_hits
     ]

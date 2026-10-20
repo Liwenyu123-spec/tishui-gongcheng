@@ -43,6 +43,9 @@ class KnowledgeHit:
     confidence: str = "normal"
     # 重排概率（0~1）。未启用重排时为 None，门控据此决定是否使用该信号。
     rerank: float | None = None
+    # 邻域上下文（当前分片 + 前后条款）。结构化切片后单条可能很短，
+    # 生成与忠实度校验用这份更完整的文本，detail 仍保留精确分片用于引用展示。
+    context: str = ""
 
 
 # 规则目录与 Agent 诊断分支共用稳定编号，便于回答、审计和回放相互追踪。
@@ -211,6 +214,7 @@ def search_rules(
                     category=str(metadata.get("category") or "规程"),
                     confidence=str(item.get("confidence") or "normal"),
                     rerank=(float(item["rerank"]) if item.get("rerank") is not None else None),
+                    context=str(item.get("context") or ""),
                 )
             )
 

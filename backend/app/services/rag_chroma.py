@@ -620,6 +620,34 @@ class ChromaRagStore:
         rows = self._visible_rows(station_id, visible_station_ids)
         if not rows:
             return []
+        # 按文档整理分片正文，用于给每条命中补上相邻条款。
+        # 结构化切片后单条可能只有一行，答案常落在隔壁条款里（问「能不能一个人下井」，
+        # 命中的是「下井前要通风」，而「必须两人以上」在相邻的第二条）。
+        # 这里不额外查 Chroma：rows 已经把可见分片全取出来了。
+        fragments: dict[str, dict[int, str]] = {}
+        for text, metadata in rows:
+            fragment_index = metadata.get("chunk_index")
+            if fragment_index is None or str(fragment_index) == "":
+                continue
+            fragments.setdefault(str(metadata.get("document_id")), {})[int(fragment_index)] = text
+
+        def context_of(document_id: str, chunk_index: Any) -> str:
+            """取当前分片 + 前后各一片，邻近分片各截断 300 字控制长度。"""
+
+            if chunk_index is None or str(chunk_index) == "":
+                return ""
+            siblings = fragments.get(document_id) or {}
+            current = int(chunk_index)
+            parts = []
+            previous = siblings.get(current - 1)
+            if previous:
+                parts.append(previous[-300:])
+            parts.append(siblings.get(current, ""))
+            following = siblings.get(current + 1)
+            if following:
+                parts.append(following[:300])
+            return "\n".join(part for part in parts if part)
+
         sparse = self._bm25_scores(query, rows)
         result = self.collection.query(
             query_texts=[query],
@@ -662,6 +690,10 @@ class ChromaRagStore:
                 "score": score,
                 "confidence": "normal",
             }
+            # 邻域上下文只用于重排和生成，引用位置仍指向精确分片。
+            context = context_of(document_id, metadata.get("chunk_index"))
+            if context and context != text:
+                entry["context"] = context
             if debug:
                 entry["components"] = {
                     "lexical": lexical,
@@ -678,7 +710,11 @@ class ChromaRagStore:
         hits = sorted(best.values(), key=lambda item: (-int(item["score"]), str(item["document_id"])))
         reranker = get_reranker()
         if reranker is not None and hits:
-            pairs = [(query, f"{item['metadata'].get('title') or ''} {item['text']}") for item in hits]
+            # 用邻域上下文做重排：单条切片信息不足时，前后条款能补回判断依据。
+            pairs = [
+                (query, f"{item['metadata'].get('title') or ''} {item.get('context') or item['text']}")
+                for item in hits
+            ]
             try:
                 raw_scores = reranker.predict(pairs)
                 probabilities = [_as_probability(float(value)) for value in raw_scores]
