@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/http'
 
 interface ApiKnowledgeDocument {
@@ -338,6 +338,34 @@ const updateStatus = async (row: KnowledgeRow, displayStatus: string) => {
   }
 }
 
+// 硬删除只对后端文档开放：先二次确认，再调用 DELETE，成功后把行从表格移除。
+const removeDocument = async (row: KnowledgeRow) => {
+  if (!isAdmin.value || row.id.startsWith('local-')) {
+    ElMessage.info('当前示例资料不能删除，请先导入后端文档')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `删除《${row.title}》后，向量索引分片和磁盘正文会一并清除，且不可恢复。`,
+      '确认删除资料',
+      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  statusUpdatingId.value = row.id
+  try {
+    await api<{ success: boolean }>(`/api/v1/knowledge/${encodeURIComponent(row.id)}`, { method: 'DELETE' })
+    const index = rows.value.findIndex((item) => item.id === row.id)
+    if (index >= 0) rows.value.splice(index, 1)
+    ElMessage.success('资料已删除')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '资料删除失败，请稍后重试')
+  } finally {
+    statusUpdatingId.value = ''
+  }
+}
+
 const validateCsv = async () => {
   if (!csvForm.content.trim()) {
     ElMessage.warning('请输入 CSV 内容')
@@ -430,13 +458,14 @@ onMounted(loadKnowledge)
         <el-table-column prop="status" label="状态" width="90">
           <template #default="s"><span :class="['tag',s.row.status==='现行'?'tag-green':s.row.status==='待审'?'tag-amber':'tag-red']">{{s.row.status}}</span></template>
         </el-table-column>
-        <el-table-column label="操作" width="220">
+        <el-table-column label="操作" width="290">
           <template #default="s">
             <el-button link type="primary" @click="preview(s.row)">预览引用</el-button>
             <template v-if="isAdmin && !s.row.id.startsWith('local-')">
               <el-button link type="success" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '现行')">现行</el-button>
               <el-button link type="warning" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '待审')">待审</el-button>
               <el-button link type="danger" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '废止')">废止</el-button>
+              <el-button link type="danger" :disabled="statusUpdatingId === s.row.id" @click="removeDocument(s.row)">删除</el-button>
             </template>
           </template>
         </el-table-column>

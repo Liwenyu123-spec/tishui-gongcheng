@@ -24,7 +24,8 @@ if str(BACKEND_DIR) not in sys.path:
 os.environ["RAG_EMBEDDING_PROVIDER"] = "hash"
 os.environ["RAG_RERANK_ENABLED"] = "0"
 os.environ["RAG_GENERATION_ENABLED"] = "0"
-# 知识文档落盘到临时目录，避免冒烟用例污染本地 backend/data/knowledge。
+# 向量库和知识文档落盘都指向临时目录，避免冒烟读写真实的 backend/data。
+os.environ["RAG_CHROMA_DIR"] = tempfile.mkdtemp(prefix="smoke_rag_chroma_")
 os.environ["KNOWLEDGE_STORE_DIR"] = tempfile.mkdtemp(prefix="smoke_knowledge_store_")
 
 from fastapi.testclient import TestClient
@@ -170,6 +171,11 @@ def check_knowledge_store_persistence() -> None:
 def run_smoke_checks() -> None:
     check_chroma_index_policy()
     check_knowledge_store_persistence()
+    # TestClient 不用 with 时不会触发 startup 事件，这里显式跑一次重建，
+    # 既验证启动路径，也保证用例从与真实启动一致的索引状态开始。
+    from app.routers.knowledge import rebuild_knowledge_index
+
+    rebuild_knowledge_index()
     """按业务链路执行认证、权限、监控、事件和审计检查。"""
 
     client = TestClient(app)
