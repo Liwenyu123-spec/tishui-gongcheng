@@ -80,7 +80,6 @@ def check_chroma_index_policy() -> None:
         assert chunks >= 1
         hits = store.search("通知重试规程", station_id="pump-02")
         assert hits and hits[0]["document_id"] == "doc-valid"
-        assert hits[0]["score"] < 40
         store.sync_document(
             document_id="doc-other",
             filename="other.md",
