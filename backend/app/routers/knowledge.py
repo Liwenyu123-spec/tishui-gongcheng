@@ -11,6 +11,7 @@ from ..dependencies import get_current_user, require_roles, user_has_station_acc
 from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeRagAskRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
 from ..services.audit import record_audit
 from ..services.document_extract import extract_text, suggested_title
+from ..services.knowledge_generate import ask_with_retrieval, generation_status
 from ..services.knowledge_search import search_rules
 from ..services.rag_chroma import get_rag_store, rag_store_status
 
@@ -120,9 +121,9 @@ def search_knowledge(
 
 @router.get("/knowledge/rag/status")
 def knowledge_rag_status(user: dict = Depends(get_current_user)) -> dict:
-    """返回第一阶段 Chroma RAG 的本地状态，便于联调和排查。"""
+    """返回 Chroma 检索状态和 DeepSeek 生成是否可用。"""
 
-    return rag_store_status()
+    return {**rag_store_status(), **generation_status()}
 
 
 @router.post("/knowledge/rag/reindex")
@@ -137,17 +138,22 @@ def knowledge_rag_reindex(_: dict = Depends(require_roles("admin"))) -> dict:
 @router.post("/knowledge/rag/ask")
 def knowledge_rag_ask(
     payload: KnowledgeRagAskRequest,
-    _: dict = Depends(require_roles("admin", "operator", "reviewer")),
+    user: dict = Depends(require_roles("admin", "operator", "reviewer")),
 ) -> dict:
-    """生成式问答尚未启用；接口保留，调用时返回 503。"""
+    """检索现行有效资料后，用 DeepSeek 生成带引用的规程说明。"""
 
-    store = get_rag_store()
-    if store is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=rag_store_status().get("error"))
+    visible_station_ids = {
+        station["id"] for station in _STATIONS if user_has_station_access(user, station["id"])
+    }
+    if payload.station_id is not None and payload.station_id not in visible_station_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权检索该站点资料")
     try:
-        return store.ask(payload.question, k=payload.k, preset=payload.preset)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return ask_with_retrieval(
+            payload.question,
+            k=payload.k,
+            station_id=payload.station_id,
+            visible_station_ids=visible_station_ids,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 

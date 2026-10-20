@@ -73,6 +73,10 @@ const sourceLabel = ref('本地示例')
 const importVisible = ref(false)
 const importing = ref(false)
 const extracting = ref(false)
+const askQuestion = ref('')
+const askAnswer = ref('')
+const askSources = ref<SearchHit[]>([])
+const asking = ref(false)
 const importForm = reactive({ filename: '', title: '', version: '1.0', category: '规程', content: '', stationIds: '', effectiveFrom: '', effectiveTo: '' })
 const csvVisible = ref(false)
 const csvLoading = ref(false)
@@ -157,6 +161,29 @@ const openImport = () => {
   importForm.effectiveFrom = ''
   importForm.effectiveTo = ''
   importVisible.value = true
+}
+
+const askKnowledge = async () => {
+  const question = askQuestion.value.trim()
+  if (!question) {
+    ElMessage.warning('请输入要说明的规程问题')
+    return
+  }
+  asking.value = true
+  try {
+    const result = await api<{ answer: string; sources: SearchHit[]; generation_error?: string }>(
+      '/api/v1/knowledge/rag/ask',
+      { method: 'POST', body: JSON.stringify({ question, k: 5 }) },
+    )
+    askAnswer.value = result.answer
+    askSources.value = result.sources || []
+  } catch (error) {
+    askAnswer.value = ''
+    askSources.value = []
+    ElMessage.error(error instanceof Error ? error.message : '规程说明生成失败')
+  } finally {
+    asking.value = false
+  }
 }
 
 const extractFromFile = async (event: Event) => {
@@ -275,6 +302,18 @@ onMounted(loadKnowledge)
       <p>检索现行规程、设备台账、应急预案和维修记录 · {{ sourceLabel }}</p>
     </div>
     <div><el-button type="primary" plain @click="openImport">导入资料</el-button><el-button plain @click="csvVisible = true">校验遥测 CSV</el-button></div>
+  </div>
+
+  <div class="panel" style="margin-bottom:16px;padding:16px 18px">
+    <p class="muted">规程说明：根据现行检索片段生成，不查询实时测点。</p>
+    <div class="filterbar" style="padding:0">
+      <el-input v-model="askQuestion" placeholder="例如：二泵站流量下降后按规程先核查什么" style="max-width:520px" clearable />
+      <el-button class="button-stable button-stable--sm" type="primary" :loading="asking" @click="askKnowledge">生成说明</el-button>
+    </div>
+    <div v-if="askAnswer" style="margin-top:12px">
+      <p>{{ askAnswer }}</p>
+      <p v-for="source in askSources" :key="source.source_id" class="muted">引用：{{ source.title }} · {{ source.location }}</p>
+    </div>
   </div>
 
   <div class="panel">

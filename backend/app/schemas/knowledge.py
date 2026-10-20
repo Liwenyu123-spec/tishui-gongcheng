@@ -91,8 +91,8 @@ class KnowledgeSearchResponse(BaseModel):
 
 
 class KnowledgeRagAskRequest(BaseModel):
-    """目标 RAG 编排入口的最小请求模型。"""
+    """规程说明生成请求。先检索，再把片段交给 DeepSeek。"""
 
     question: str = Field(min_length=1, max_length=2000)
     k: int = Field(default=5, ge=1, le=10)
-    preset: str = Field(default="custom", max_length=32)
+    station_id: str | None = Field(default=None, max_length=64)

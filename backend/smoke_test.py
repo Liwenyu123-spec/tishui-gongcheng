@@ -21,6 +21,7 @@ if str(BACKEND_DIR) not in sys.path:
 # 冒烟固定哈希向量并关闭重排，避免首次运行加载语义模型和重排模型。
 os.environ["RAG_EMBEDDING_PROVIDER"] = "hash"
 os.environ["RAG_RERANK_ENABLED"] = "0"
+os.environ["RAG_GENERATION_ENABLED"] = "0"
 
 from fastapi.testclient import TestClient
 
@@ -172,6 +173,11 @@ def run_smoke_checks() -> None:
     assert markdown_extract["parser"] == "plain-text"
     assert "入口压力" in markdown_extract["content"]
     assert markdown_extract["title"] == "pump-02-flow"
+    expect(
+        "生成问答在冒烟中关闭",
+        client.post("/api/v1/knowledge/rag/ask", headers=admin_headers, json={"question": "二泵站流量下降先核查什么"}),
+        503,
+    )
 
     # 本地规程检索只返回版本化规则引用，不依赖数据库或向量库。
     knowledge_search = expect(
