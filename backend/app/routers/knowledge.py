@@ -5,7 +5,8 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from ..data.knowledge import _KNOWLEDGE, _KNOWLEDGE_CONTENT
+from ..data import knowledge_store
+from ..data.knowledge import _KNOWLEDGE, _KNOWLEDGE_CONTENT, reload_from_store
 from ..data.monitoring import _STATIONS
 from ..dependencies import get_current_user, require_roles, user_has_station_access
 from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeRagAskRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
@@ -13,18 +14,97 @@ from ..services.audit import record_audit
 from ..services.document_extract import extract_text, suggested_title
 from ..services.knowledge_generate import ask_with_retrieval, generation_status
 from ..services.knowledge_search import search_rules
-from ..services.rag_chroma import get_rag_store, rag_store_status
+from ..services.rag_chroma import ChromaRagStore, get_rag_store, rag_store_status
 
 # 知识库接口管理文档生命周期；检索只返回正文摘要，不提供全文读取。
 router = APIRouter(prefix="/api/v1", tags=["知识库"])
 
+# 最近一次重建索引的时间；供状态接口展示，重启后从空开始。
+_LAST_REINDEX_AT: datetime | None = None
+
+
+def _is_eligible(document: KnowledgeDocument) -> bool:
+    """判断文档是否应进入检索集合：现行且处于有效期窗口内。
+
+    直接复用 Chroma 存储层的判定，避免列表接口和索引层各写一套有效期逻辑，
+    否则两份规则一旦不一致就会出现「能搜到但列表查不到」的怪现象。
+    """
+
+    return ChromaRagStore._eligible(document.status, document.effective_from, document.effective_to)
+
+
+def _eligible_ids() -> set[str]:
+    """当前应当出现在索引里的文档编号集合。"""
+
+    return {document.id for document in _KNOWLEDGE.values() if _is_eligible(document)}
+
+
+def _indexed_ids(store) -> set[str]:
+    """读取索引里实际存在的文档编号；同一文档的多个分片只算一次。"""
+
+    metadatas = store.collection.get(include=["metadatas"]).get("metadatas") or []
+    return {str(metadata.get("document_id")) for metadata in metadatas if metadata}
+
+
+def _persisted_counts() -> dict:
+    """统计落盘文档数量，用于和索引分片数对账。"""
+
+    with_content = sum(1 for document in _KNOWLEDGE.values() if _KNOWLEDGE_CONTENT.get(document.id, "").strip())
+    return {
+        "persisted_documents": len(_KNOWLEDGE),
+        "persisted_with_content": with_content,
+        "eligible_documents": len(_eligible_ids()),
+    }
+
+
+def _index_snapshot(store, indexed: set[str] | None = None) -> dict:
+    """对比「应进索引」和「实际进索引」，暴露缺失与孤儿文档。
+
+    这是排查「重启后资料还在但搜不到」的关键指标：missing 非空说明索引没建全，
+    orphan 非空说明磁盘上已经没有对应文档但分片没删干净。
+    """
+
+    if indexed is None:
+        indexed = _indexed_ids(store)
+    eligible = _eligible_ids()
+    return {
+        "indexed_documents": len(indexed),
+        "consistent": eligible == indexed,
+        "missing_documents": sorted(eligible - indexed),
+        "orphan_documents": sorted(indexed - eligible),
+        "last_reindex_at": _LAST_REINDEX_AT.isoformat() if _LAST_REINDEX_AT else None,
+    }
+
+
+def _prune_ineligible_documents(store) -> None:
+    """把已失效或不再现行的文档移出索引，避免跨过有效期后仍被检索到。
+
+    索引写入时做过有效期判断，但服务可能跨过失效时间持续运行，所以需要惰性清理。
+    """
+
+    for document in _KNOWLEDGE.values():
+        if _is_eligible(document):
+            continue
+        try:
+            # 不可检索时 sync_document 会删除该文档全部分片，这里直接复用同一入口。
+            _sync_knowledge_index(document)
+        except Exception:  # noqa: BLE001
+            # 状态查询不应因为索引清理失败整体报错，索引问题通过 consistent 字段暴露。
+            continue
+
 
 def rebuild_knowledge_index() -> dict:
-    """按当前内存文档重建索引。重启后内存为空时，会清掉磁盘上残留的旧分片。"""
+    """从落盘文件重建内存文档和 Chroma 索引。
 
+    先 reload 再建索引：否则服务重启后内存为空，落盘资料会被全部误判成孤儿删掉，
+    这正是之前「导入了规程但一重启就消失」的根因。
+    """
+
+    global _LAST_REINDEX_AT
+    reload_from_store()
     store = get_rag_store()
     if store is None:
-        return rag_store_status()
+        return {**rag_store_status(), **_persisted_counts()}
     documents = [
         {
             "document_id": document.id,
@@ -41,14 +121,17 @@ def rebuild_knowledge_index() -> dict:
         for document in _KNOWLEDGE.values()
     ]
     result = store.reindex_documents(documents)
-    indexed_ids = {
-        str(metadata.get("document_id"))
-        for metadata in (store.collection.get(include=["metadatas"]).get("metadatas") or [])
-        if metadata
-    }
+    indexed_ids = _indexed_ids(store)
     for document in _KNOWLEDGE.values():
+        # source 标记用于前端区分「已进向量库」和「仅内存回退」，与索引保持一致。
         document.source = "chroma" if document.id in indexed_ids else "mock"
-    return {**result, **store.stats()}
+    _LAST_REINDEX_AT = datetime.now(timezone.utc)
+    return {
+        **result,
+        **store.stats(),
+        **_persisted_counts(),
+        **_index_snapshot(store, indexed_ids),
+    }
 
 
 def _sync_knowledge_index(document: KnowledgeDocument) -> None:
@@ -121,9 +204,34 @@ def search_knowledge(
 
 @router.get("/knowledge/rag/status")
 def knowledge_rag_status(user: dict = Depends(get_current_user)) -> dict:
-    """返回 Chroma 检索状态和 DeepSeek 生成是否可用。"""
+    """返回 Chroma 检索状态、文档落盘情况和索引对账结果。
 
-    return {**rag_store_status(), **generation_status()}
+    除原有引擎信息外，新增 `documents`（落盘层）和 `index`（索引一致性）两块，
+    用于快速判断「资料是否还在磁盘」「索引是否和资料一致」。
+    """
+
+    store = get_rag_store()
+    if store is None:
+        return {
+            **rag_store_status(),
+            **generation_status(),
+            "documents": knowledge_store.store_status(),
+            "index": {
+                "indexed_documents": 0,
+                "consistent": not _eligible_ids(),
+                "missing_documents": [],
+                "orphan_documents": [],
+                "last_reindex_at": _LAST_REINDEX_AT.isoformat() if _LAST_REINDEX_AT else None,
+            },
+        }
+    # 有效期可能在运行期间跨过，先清掉不该继续被检索的文档。
+    _prune_ineligible_documents(store)
+    return {
+        **rag_store_status(),
+        **generation_status(),
+        "documents": knowledge_store.store_status(),
+        "index": _index_snapshot(store),
+    }
 
 
 @router.post("/knowledge/rag/reindex")
@@ -231,6 +339,8 @@ def import_knowledge(
     # 保存元数据和正文；正文只通过检索命中摘要间接返回，不作为全文接口返回。
     _KNOWLEDGE[document.id] = document
     _KNOWLEDGE_CONTENT[document.id] = payload.content
+    # 先落盘再同步索引：即使进程随后被 --reload 杀掉，重启后仍能重建索引。
+    knowledge_store.save_document(document, payload.content)
     # 新文档默认待审，sync 会拒绝写入检索集合。
     _sync_knowledge_index(document)
     record_audit("import", "knowledge", document.id, f"导入文档 {document.filename}，状态为待审")
@@ -262,7 +372,31 @@ def update_knowledge_status(
             previous.status = "revoked"
             previous.approved_at = None
             _sync_knowledge_index(previous)
+            # 旧版本被自动废止，状态也要落盘，否则重启后旧版本会重新变成现行。
+            knowledge_store.update_document(previous)
             record_audit("status_update", "knowledge", previous.id, f"知识文档 {previous.title} {previous.version} 因新版本生效而废止")
     _sync_knowledge_index(document)
+    knowledge_store.update_document(document)
     record_audit("status_update", "knowledge", document_id, f"知识文档 {document.title} 状态更新为 {payload.status}")
     return document
+
+
+@router.delete("/knowledge/{document_id}")
+def delete_knowledge(document_id: str, _: dict = Depends(require_roles("admin"))) -> dict:
+    """删除一份知识文档及其索引分片。
+
+    以前只能改状态，导错的文件会永久留在列表里；这里补一个硬删除入口，
+    顺序是「删索引 → 删文件 → 清内存」，避免中途失败留下无主分片。
+    """
+
+    document = _KNOWLEDGE.get(document_id)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识文档不存在")
+    store = get_rag_store()
+    if store is not None:
+        store.delete_document(document_id)
+    knowledge_store.delete_document(document_id)
+    _KNOWLEDGE.pop(document_id, None)
+    _KNOWLEDGE_CONTENT.pop(document_id, None)
+    record_audit("delete", "knowledge", document_id, f"删除知识文档 {document.title} {document.version}")
+    return {"success": True, "document_id": document_id}

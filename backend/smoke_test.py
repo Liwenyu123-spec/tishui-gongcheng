@@ -24,6 +24,8 @@ if str(BACKEND_DIR) not in sys.path:
 os.environ["RAG_EMBEDDING_PROVIDER"] = "hash"
 os.environ["RAG_RERANK_ENABLED"] = "0"
 os.environ["RAG_GENERATION_ENABLED"] = "0"
+# 知识文档落盘到临时目录，避免冒烟用例污染本地 backend/data/knowledge。
+os.environ["KNOWLEDGE_STORE_DIR"] = tempfile.mkdtemp(prefix="smoke_knowledge_store_")
 
 from fastapi.testclient import TestClient
 
@@ -123,8 +125,51 @@ def check_chroma_index_policy() -> None:
             os.environ[key] = value
 
 
+def check_knowledge_store_persistence() -> None:
+    """确认知识文档写入磁盘后能重新加载，且时间字段带回时区。"""
+
+    from app.data import knowledge_store
+    from app.data.knowledge import _KNOWLEDGE, reload_from_store
+    from app.schemas.knowledge import KnowledgeDocument
+
+    content = "冒烟持久化规程：通知失败后先核对原因，再执行重试。"
+    now = datetime.now(timezone.utc)
+    document = KnowledgeDocument(
+        id="knowledge-smoke-persist",
+        filename="persist.md",
+        title="冒烟持久化规程",
+        version="1.0",
+        status="valid",
+        content_length=len(content),
+        imported_at=now,
+        station_ids=["pump-02"],
+        effective_from=now - timedelta(days=1),
+        effective_to=now + timedelta(days=1),
+    )
+    knowledge_store.save_document(document, content)
+
+    # 模拟服务重启：清空内存视图后只从磁盘恢复。
+    _KNOWLEDGE.clear()
+    reload_from_store()
+    assert "knowledge-smoke-persist" in _KNOWLEDGE
+    restored = _KNOWLEDGE["knowledge-smoke-persist"]
+    assert restored.title == document.title
+    # 读回的时间必须带 UTC 时区，否则有效期判断会和索引层不一致。
+    assert restored.effective_from is not None and restored.effective_from.tzinfo is not None
+
+    status = knowledge_store.store_status()
+    assert status["persisted"] >= 1 and status["with_content"] >= 1
+    assert not status["errors"]
+
+    # 删除后也要从磁盘消失，避免重启又把删掉的资料捡回来。
+    assert knowledge_store.delete_document("knowledge-smoke-persist") is True
+    reload_from_store()
+    assert "knowledge-smoke-persist" not in _KNOWLEDGE
+
+
 def run_smoke_checks() -> None:
     check_chroma_index_policy()
+    check_knowledge_store_persistence()
     """按业务链路执行认证、权限、监控、事件和审计检查。"""
 
     client = TestClient(app)
@@ -332,6 +377,23 @@ def run_smoke_checks() -> None:
         200,
     )
     assert any(hit["source_id"] == imported_knowledge["id"] for hit in approved_search["results"])
+
+    # 模拟重启：清空内存视图后只从磁盘恢复，已批准的文档应仍在且状态不变。
+    from app.data.knowledge import _KNOWLEDGE as knowledge_docs, reload_from_store as reload_knowledge
+
+    knowledge_docs.clear()
+    reload_knowledge()
+    listed = expect("重启后知识文档仍在", client.get("/api/v1/knowledge", headers=admin_headers), 200)
+    assert any(item["id"] == imported_knowledge["id"] and item["status"] == "valid" for item in listed)
+    rag_status = expect(
+        "RAG 状态含落盘与索引对账",
+        client.get("/api/v1/knowledge/rag/status", headers=admin_headers),
+        200,
+    )
+    assert rag_status["documents"]["persisted"] >= 1
+    assert rag_status["documents"]["with_content"] >= 1
+    assert "consistent" in rag_status["index"] and "missing_documents" in rag_status["index"]
+
     newer_knowledge = expect(
         "导入同一规程新版本",
         client.post(
@@ -364,6 +426,18 @@ def run_smoke_checks() -> None:
     )
     assert any(hit["source_id"] == newer_knowledge["id"] for hit in version_search["results"])
     assert not any(hit["source_id"] == imported_knowledge["id"] for hit in version_search["results"])
+
+    # 硬删除：删掉的文档不应再出现在列表，磁盘记录也要同步清理。
+    delete_result = expect(
+        "删除知识文档",
+        client.delete(f"/api/v1/knowledge/{imported_knowledge['id']}", headers=admin_headers),
+        200,
+    )
+    assert delete_result["success"] is True
+    after_delete = expect("删除后知识列表", client.get("/api/v1/knowledge", headers=admin_headers), 200)
+    assert not any(item["id"] == imported_knowledge["id"] for item in after_delete)
+    reload_knowledge()
+    assert imported_knowledge["id"] not in knowledge_docs
 
     # 固定问法：流量下降必须命中流量规程；过期资料和其他站点资料不得出现。
     flow_question = expect(

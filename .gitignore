@@ -15,6 +15,7 @@ node_modules/
 frontend/dist/
 backend/data/rag_chroma_db/
 backend/data/rag_chroma_test/
+backend/data/knowledge/
 logs/
 *.log
 .DS_Store
