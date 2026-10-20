@@ -48,6 +48,8 @@ class ToolExecution:
     summary: str
     source_ids: tuple[str, ...] = ()
     read_only: bool = True
+    # 实际执行该工具的专业 Agent；旧的直接执行调用默认归入工具执行器。
+    agent: str = "tool_executor"
 
 
 def _visible_station_ids(user: dict) -> set[str]:
@@ -336,6 +338,7 @@ def execute_tool(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
         summary=execution.summary,
         source_ids=filtered_ids,
         read_only=execution.read_only,
+        agent=execution.agent,
     )
 
 

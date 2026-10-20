@@ -1,13 +1,16 @@
 # 提水工程供水调度平台
 
-基于 Agentic RAG 与多智能体协作的提水工程供水调度平台。当前仓库处于模拟阶段，使用 Vue 3、Vite、TypeScript、Element Plus、ECharts 和 FastAPI，暂时使用 Mock 数据，不连接真实数据库和现场控制系统。
+基于 Agentic RAG 与多智能体协作的提水工程供水调度平台。当前项目处于本地模拟联调阶段，使用 Vue 3、Vite、TypeScript、Element Plus、ECharts 和 FastAPI，业务数据仍来自 Mock 数据，不连接真实数据库和现场控制系统。
 
 ## 当前版本
 
-- 前端版本：`0.2.3`
-- 当前模式：测试环境、Mock 数据、规则驱动只读 Agent
+- 项目迭代：`v0.10.151`
+- 前端包版本：`0.2.0`
+- 当前模式：本地测试、Mock 数据、只读 Agent、多 Agent 专业节点协作
 - 前端目录：[frontend](./frontend)
 - 后端目录：[backend](./backend)
+
+当前已经可以完成页面浏览、后端接口联调、Agent 流式问答、只读工具分析、知识库检索、方案比较、审核和报告草稿等流程。数据库、真实测点、现场控制和部署仍属于后续阶段。
 
 ## 已实现页面
 
@@ -89,6 +92,13 @@ cd ..\backend
 
 该脚本会先构建前端，再只启动 FastAPI；浏览器打开 `http://127.0.0.1:8000` 即可使用完整页面和接口。
 
+单地址启动时，FastAPI 会先提供页面和基础接口，再在后台准备 RAG 的 Embedding、重排模型和知识索引。
+可访问 `GET /api/v1/health` 查看 `startup.status`：`starting` 表示准备中，`ready` 表示完成，
+`degraded` 或 `failed` 表示 RAG 降级但基础接口仍可使用。自动化测试如需等待 RAG 完成，可设置
+`RAG_STARTUP_MODE=blocking`；日常开发建议使用 `background`。
+
+如果出现 `WinError 10048` 或“端口已被占用”，说明 8000 或 5173 端口已有进程使用。请先关闭之前启动的项目窗口，或查找并结束占用对应端口的进程后再重启，不要重复启动多个后端实例。
+
 启动后端（PowerShell）：
 
 ```powershell
@@ -98,10 +108,54 @@ cd ..\backend
 
 基础和认证接口文档：`http://127.0.0.1:8000/docs`
 
+## DeepSeek 配置
+
+大模型接入是可选能力。Agent 的事实、数值、引用、权限和控制边界仍由后端只读工具与规则逻辑负责；DeepSeek 只参与可选的意图/参数路由和答案措辞整理。
+
+在系统环境变量或项目 `.env` 中配置：
+
+```env
+AGENT_LLM_ENABLED=1
+AGENT_LLM_ANSWER_ENABLED=1
+AGENT_LLM_MODEL=deepseek-chat
+AGENT_LLM_TIMEOUT=20
+DEEPSEEK_API_KEY=请配置你自己的密钥
+```
+
+后端优先读取 `DEEPSEEK_API_KEY`，同时兼容旧变量名 `DEEPSEEKAPIKEY`；可通过 `DEEPSEEK_BASE_URL` 覆盖接口地址。密钥只由后端读取，不应写入前端代码、提交到 Git 或粘贴到 README。
+
+关闭 `AGENT_LLM_ENABLED` 后，Agent 会回退到本地规则模式；关闭 `AGENT_LLM_ANSWER_ENABLED` 后，最终答案不使用模型润色。冒烟测试会自动关闭外部模型调用，避免消耗 API 配额。
+
+## 多 Agent 协作流程
+
+当前 Agent 是共享状态式的专业节点协作流程：
+
+```text
+调度协调 Agent
+    → 状态 / 趋势 / 诊断 / 事件 / 供需等专业 Agent
+    → 各自的只读工具
+    → 安全复核 Agent
+    → 结构化答案与人工复核提示
+```
+
+对应实现位于 `backend/app/agent/workflow.py`，协调器和 SSE 路由位于 `backend/app/agent/orchestrator.py`、`backend/app/routers/agent.py`。目前所有专业 Agent 只能读取 Mock 数据、知识检索结果和权限范围，不能执行启停泵、切阀、压力设定等现场写操作。
+
+Agent 流式接口：`POST /api/v1/chat/stream`
+
+常见 SSE 事件顺序为：`start → agent / tool（一个或多个）→ result → done`。
+
+- `start`：返回会话、模式和计划来源；
+- `agent`：返回协调、专业执行和安全复核节点；
+- `tool`：返回实际执行 Agent、只读标记、摘要和引用编号；
+- `result`：返回事实、建议、引用、置信度、数据质量和待确认项；
+- `done`：表示本轮流式分析完成。
+
+同一页面的短追问会复用进程内 `session_id`，例如先问“二泵站压力是多少”，再问“那流量呢”。会话按用户隔离，只保留有限的问句和站点上下文，服务重启后清空，不写入数据库。
+
 ## 当前边界
 
 - 使用本地 Mock 数据和前端演示接口；
-- Agent 当前以后端规则分析和 SSE 返回为安全回退路径；设置 `AGENT_LLM_ENABLED=1` 后，可使用 DeepSeek 辅助意图和参数路由，但数值、告警、供需和知识引用仍由后端只读工具提供；
+- Agent 当前以后端规则分析和 SSE 返回为安全回退路径；设置 `AGENT_LLM_ENABLED=1` 后，可使用 DeepSeek 辅助意图和参数路由。另设置 `AGENT_LLM_ANSWER_ENABLED=1` 后，模型可基于用户问题、规则答案摘要和只读工具摘要润色最终措辞，但数值、告警、供需、知识引用和控制边界仍由后端提供；
 - 方案比较当前使用后端确定性评分和约束校验，结果只用于人工复核；
 - 报告草稿会按当前账号可见站点汇总 Mock 供需与告警指标，并在详情和 Markdown 导出中保留来源编号；
 - 站点事件通知支持 Mock 失败记录、失败原因、重试次数和权限范围内的重试操作；
@@ -129,6 +183,8 @@ cd ..\backend
 - [项目需求](./提水工程供水调度平台项目需求.md)
 - [项目规划](./李文聿提水工程供水调度平台项目规划书.md)
 - [前端提示词](./前端提示词.md)
+- [项目文档与前端使用说明](./项目文档与前端使用说明.md)
+- [Mock 阶段回归验收清单](./Mock阶段回归验收清单.md)
 - [更新日志](./更新日志.md)
 - [开发问题与解决方案](./开发问题与解决方案.md)
 - [后端接口调试教程](./后端接口调试教程.md)
@@ -165,11 +221,26 @@ Agent 回答还会显示本次分析的时间范围，例如“过去 2 小时�
 
 Agent 还会显示数据新鲜度。当前固定 Mock 样本会标记为“已过期”，没有观测时间的结果标记为“未知”。
 
-Agent 后端现在具备不依赖大模型的协调器和只读工具白名单。SSE 会返回主 Agent、协作 Agent 和允许工具；当前仍使用规则 Mock 编排，不执行现场写操作。
+Agent 后端现在具备共享状态式的专业节点协作：协调 Agent 先校验范围，再由状态、趋势、诊断、事件、供需等专业 Agent 执行各自只读工具，最后由安全复核 Agent 汇总检查。SSE 会返回真实执行的 Agent 节点、工具归属和复核状态；当前事实仍来自 Mock 数据，不执行现场写操作。
+
+Agent 页面同一轮对话会自动携带进程内 `session_id`，支持“二泵站压力是多少”后继续追问“那流量呢”。会话按用户隔离，只保留最近问句和站点上下文，服务重启后清空，不写入数据库。
 
 提交前应至少执行：
 
 ```powershell
-npm run build
+cd frontend
+npm.cmd run build
+```
+
+```powershell
+cd ..\backend
+..\.venv\Scripts\python.exe -m compileall -q app
+..\.venv\Scripts\python.exe smoke_test.py
+```
+
+```powershell
+cd ..
 git diff --check
 ```
+
+冒烟测试固定使用 Hash Embedding、关闭重排、关闭知识生成和关闭 Agent 外部模型调用，不需要数据库或 DeepSeek API Key。

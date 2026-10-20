@@ -46,6 +46,8 @@ interface AgentAnswer {
   time_range?: string
   observed_at?: string | null
   freshness?: 'fresh' | 'stale' | 'unknown'
+  session_id?: string | null
+  effective_question?: string | null
   work_order_suggestion?: {
     station_id: string
     title: string
@@ -62,16 +64,19 @@ interface AgentMessage {
   text: string
   evidence?: string
   steps?: string[]
+  modelMode?: string
+  planningSource?: string
   pending?: boolean
 }
 
 const input = ref('')
+const agentSessionId = ref(`agent-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`)
 const messages = ref<AgentMessage[]>([
   {
     id: 'welcome',
     role: 'ai',
     text: '您好，我是调度辅助 Agent。当前使用 Mock 数据和只读工具；如已启用模型，将由模型辅助理解问题，但不会直接访问现场或执行控制。请描述您要查询的运行问题。',
-    evidence: '当前模式：规则工具 + 可选大模型路由 · 不生成现场控制指令',
+    evidence: '当前模式：规则工具 + 可选大模型路由/答案整理 · 不生成现场控制指令',
   },
 ])
 const agentLoading = ref(false)
@@ -160,7 +165,23 @@ const ask = async (q = input.value) => {
     const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n')
     if (!data) return
     if (eventName === 'start') {
+      const start = JSON.parse(data) as {
+        mode?: string
+        planning_source?: string
+        execution_mode?: string
+      }
+      aiMessage.modelMode = start.mode || 'rule-mock'
+      aiMessage.planningSource = start.planning_source || 'rule'
       aiMessage.text = '已定位问题，正在整理事实和引用依据…'
+      return
+    }
+    if (eventName === 'agent') {
+      const agent = JSON.parse(data) as { agent?: string; role?: string; summary?: string; status?: string }
+      if (agent.agent && agent.status && agent.status !== 'skipped') {
+        const step = `${agent.role || agent.agent}：${agent.summary || agent.status}`
+        aiMessage.steps = [...(aiMessage.steps || []), step]
+        aiMessage.evidence = `专业 Agent 协作：${aiMessage.steps.join(' → ')}`
+      }
       return
     }
     if (eventName === 'tool') {
@@ -176,6 +197,9 @@ const ask = async (q = input.value) => {
     const answer = JSON.parse(data) as AgentAnswer
     latestAgentAnswer.value = answer
     const evidence = [
+      ...(aiMessage.modelMode ? [`模型参与：${aiMessage.modelMode}`] : []),
+      ...(aiMessage.planningSource ? [`计划来源：${aiMessage.planningSource}`] : []),
+      ...(answer.effective_question ? [`本轮合并问句：${answer.effective_question}`] : []),
       ...(aiMessage.steps?.length ? [`分析步骤：${aiMessage.steps.join(' → ')}`] : []),
       ...answer.facts.map(fact => `事实：${fact}`),
       ...answer.recommendations.map(item => `建议：${item}`),
@@ -200,7 +224,11 @@ const ask = async (q = input.value) => {
     const response = await fetch('/api/v1/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ message: question, station_id: selectedStationId.value || null }),
+      body: JSON.stringify({
+        message: question,
+        station_id: selectedStationId.value || null,
+        session_id: agentSessionId.value,
+      }),
       signal: agentAbortController.signal,
     })
     if (!response.ok) {

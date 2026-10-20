@@ -87,7 +87,7 @@ def _intent(message: str) -> AgentIntent:
         return "supply"
     if any(word in message for word in ("过去", "最近", "趋势", "波动", "变化")):
         return "trend"
-    if any(word in message for word in ("检查", "核查", "原因", "怎么办", "建议", "下降", "告警", "规程")):
+    if any(word in message for word in ("检查", "核查", "排查", "异常", "故障", "原因", "怎么办", "建议", "下降", "告警", "规程")):
         return "diagnosis"
     if any(word in message for word in ("当前", "现在", "多少", "状态", "流量", "压力", "水位", "能耗")):
         return "status"

@@ -5,6 +5,9 @@
 
 # Path 用于定位项目根目录下的前端构建产物。
 from pathlib import Path
+from threading import Thread
+import logging
+import time
 
 # FastAPI 应用对象负责创建服务和注册中间件。
 from fastapi import FastAPI, HTTPException, status
@@ -29,6 +32,11 @@ from .routers.supply import router as supply_router
 from .routers.work_orders import router as work_orders_router
 from .routers.users import router as users_router
 from .routers.knowledge import router as knowledge_router
+from .services.runtime_env import windows_env
+from .services.startup_state import mark_failed, mark_finished, mark_phase, mark_starting
+
+
+logger = logging.getLogger(__name__)
 
 # 创建 FastAPI 应用对象；Swagger 文档会读取这里的元数据。
 app = FastAPI(
@@ -74,19 +82,46 @@ app.include_router(agent_router)
 
 @app.on_event("startup")
 def refresh_knowledge_index_on_startup() -> None:
-    """启动时预加载 RAG 引擎并从磁盘重建知识索引。
+    """启动时准备 RAG 引擎并从磁盘重建知识索引。
 
-    顺序很关键：先预热模型（首次加载 bge 约 10~30 秒），再重建索引。
-    如果放在第一个用户请求里加载，接口会超时；放在重建索引之后，
-    重建过程本身会触发编码器加载，异常信息也更难定位。
+    默认采用后台模式：FastAPI 先完成启动，RAG 在独立线程中预热和重建。
+    需要严格等待 RAG 准备完成的自动化测试可以设置 RAG_STARTUP_MODE=blocking。
     """
 
-    from .routers.knowledge import rebuild_knowledge_index
-    from .services.rag_chroma import warmup_rag
+    mode = (windows_env("RAG_STARTUP_MODE") or "background").strip().lower()
 
-    # 预热失败只写状态，不阻止服务启动：检索会退化为关键词或跳过精排。
-    warmup_rag()
-    rebuild_knowledge_index()
+    def prepare_rag() -> None:
+        started = time.monotonic()
+        mark_starting(mode)
+        logger.info("RAG 启动准备开始（模式=%s）", mode)
+        try:
+            from .routers.knowledge import rebuild_knowledge_index
+            from .services.rag_chroma import warmup_rag
+
+            mark_phase("warmup", "正在加载 Embedding 和重排模型")
+            warmup = warmup_rag()
+            mark_phase("reindex", "正在重建知识库索引")
+            rebuild_knowledge_index()
+            degraded = not bool(warmup.get("ok", False))
+            message = (
+                "RAG 已就绪"
+                if not degraded
+                else "RAG 已启动但处于降级模式，请查看知识库状态"
+            )
+            elapsed = time.monotonic() - started
+            mark_finished(elapsed_seconds=elapsed, degraded=degraded, message=message)
+            logger.info("%s（耗时 %.2f 秒）", message, elapsed)
+        except Exception as exc:  # noqa: BLE001
+            elapsed = time.monotonic() - started
+            mark_failed(elapsed_seconds=elapsed, error=str(exc))
+            logger.exception("RAG 启动准备失败，普通接口继续提供服务")
+
+    if mode in {"blocking", "sync", "synchronous"}:
+        prepare_rag()
+        return
+
+    # daemon 线程不会阻止开发服务关闭；服务接口和前端页面可以先启动。
+    Thread(target=prepare_rag, name="rag-startup", daemon=True).start()
 
 
 # 前端构建目录位于项目根目录的 frontend/dist；开发时可以先执行 npm run build。

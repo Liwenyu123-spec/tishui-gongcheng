@@ -1,0 +1,204 @@
+"""提水工程 Agent 的专业节点协作工作流。
+
+参考 ``H:\\Python工程\\agent`` 中的共享状态、流水线节点和审稿回路，
+这里把当前项目的只读工具拆给可执行的专业 Agent。每个 Agent 只负责自己的
+工具集合，所有结果回到共享协作状态，最后由安全复核 Agent 检查结果。
+
+本阶段不让多个模型自由编造事实：专业 Agent 直接读取经过权限过滤的后端工具，
+DeepSeek 仍只负责受限路由和答案整理。这样先得到可测试、可追踪的多 Agent
+协作结构，后续再按 Agent 增加独立模型提示词不会改变安全边界。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+
+from ..schemas.agent import AgentAnswer
+from .executor import ToolContext, ToolExecution, execute_tool
+from .tools import AgentPlan, ReadOnlyTool
+
+
+@dataclass(frozen=True)
+class SpecialistRun:
+    """一个专业 Agent 节点的结构化执行记录。"""
+
+    agent: str
+    role: str
+    status: str
+    summary: str
+    tool_names: tuple[str, ...] = ()
+    iterations: int = 1
+
+    def as_event(self) -> dict[str, object]:
+        """转换成 SSE 可直接返回的结构。"""
+
+        return {
+            "agent": self.agent,
+            "role": self.role,
+            "status": self.status,
+            "summary": self.summary,
+            "tool_names": list(self.tool_names),
+            "iterations": self.iterations,
+        }
+
+
+@dataclass(frozen=True)
+class CollaborationTrace:
+    """一次协作工作流的共享状态摘要。"""
+
+    runs: tuple[SpecialistRun, ...]
+    execution_mode: str = "specialist-pipeline"
+    shared_state: bool = True
+
+    def as_events(self) -> list[dict[str, object]]:
+        return [run.as_event() for run in self.runs]
+
+
+_AGENT_ROLES = {
+    "dispatch_coordinator": "调度协调与权限范围校验",
+    "station_monitor_agent": "站点状态与遥测分析",
+    "trend_analysis_agent": "跨站点趋势和波动分析",
+    "diagnosis_agent": "告警、规程和异常诊断",
+    "event_context_agent": "事件和平台通知上下文整理",
+    "supply_balance_agent": "片区供需平衡计算",
+    "safety_review_agent": "安全边界与结果复核",
+    "clarification_agent": "问题澄清和缺失信息提示",
+}
+
+
+_AGENT_TOOL_NAMES: dict[str, tuple[str, ...]] = {
+    "dispatch_coordinator": ("check_scope",),
+    "station_monitor_agent": ("read_telemetry",),
+    "trend_analysis_agent": ("read_telemetry",),
+    "diagnosis_agent": ("read_alarms", "search_knowledge", "explain_protocol"),
+    "event_context_agent": ("read_event_context",),
+    "supply_balance_agent": ("calculate_supply_balance",),
+    "safety_review_agent": ("apply_control_boundary",),
+    "clarification_agent": (),
+}
+
+
+class SpecialistAgent:
+    """拥有独立职责和工具白名单的专业 Agent 节点。"""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.role = _AGENT_ROLES.get(name, name)
+        self.tool_names = _AGENT_TOOL_NAMES.get(name, ())
+
+    def _tools_for_plan(self, plan: AgentPlan) -> tuple[ReadOnlyTool, ...]:
+        allowed = set(self.tool_names)
+        return tuple(tool for tool in plan.tools if tool.name in allowed)
+
+    def run(self, plan: AgentPlan, context: ToolContext) -> tuple[SpecialistRun, tuple[ToolExecution, ...]]:
+        """执行当前 Agent 的工具，并将结果写回共享状态。"""
+
+        tools = self._tools_for_plan(plan)
+        if not tools:
+            return (
+                SpecialistRun(
+                    agent=self.name,
+                    role=self.role,
+                    status="skipped",
+                    summary="本轮计划没有分配该 Agent 的工具",
+                    tool_names=(),
+                ),
+                (),
+            )
+
+        executions: list[ToolExecution] = []
+        for tool in tools:
+            execution = execute_tool(tool, context)
+            # 工具仍由统一执行层完成权限裁剪，但执行归属明确记录到专业 Agent。
+            executions.append(replace(execution, agent=self.name))
+        completed = sum(1 for execution in executions if execution.status == "completed")
+        summary = f"完成 {completed}/{len(executions)} 个只读步骤"
+        return (
+            SpecialistRun(
+                agent=self.name,
+                role=self.role,
+                status="completed" if completed == len(executions) else "partial",
+                summary=summary,
+                tool_names=tuple(tool.name for tool in tools),
+            ),
+            tuple(executions),
+        )
+
+
+class SafetyReviewAgent(SpecialistAgent):
+    """对所有专业 Agent 的共享结果做最终安全复核。"""
+
+    def review(
+        self,
+        answer: AgentAnswer,
+        executions: tuple[ToolExecution, ...],
+        tool_run: SpecialistRun | None,
+    ) -> SpecialistRun:
+        unsafe = [execution for execution in executions if not execution.read_only]
+        if unsafe:
+            return SpecialistRun(
+                agent=self.name,
+                role=self.role,
+                status="blocked",
+                summary="复核拒绝：发现非只读执行结果，未允许进入最终答案",
+                tool_names=tool_run.tool_names if tool_run else (),
+                iterations=1,
+            )
+
+        if answer.intent == "control_rejected":
+            summary = "复核通过：控制请求已被边界工具拦截，未生成现场写指令"
+        else:
+            summary = f"复核通过：{len(executions)} 个工具结果均为只读证据"
+        return SpecialistRun(
+            agent=self.name,
+            role=self.role,
+            status="approved",
+            summary=summary,
+            tool_names=tool_run.tool_names if tool_run else (),
+            iterations=1,
+        )
+
+
+class DispatchWorkflow:
+    """共享状态式的协调 → 专业节点 → 安全复核流水线。"""
+
+    def __init__(self, plan: AgentPlan) -> None:
+        self.plan = plan
+
+    def _agent_order(self) -> tuple[str, ...]:
+        names = ["dispatch_coordinator", *self.plan.collaborating_agents]
+        if self.plan.primary_agent not in names:
+            names.append(self.plan.primary_agent)
+        # 安全复核必须最后执行，确保它看到所有专业 Agent 的结果。
+        names = [name for name in names if name != "safety_review_agent"] + [
+            name for name in names if name == "safety_review_agent"
+        ]
+        return tuple(dict.fromkeys(names))
+
+    def run(self, context: ToolContext) -> tuple[tuple[ToolExecution, ...], CollaborationTrace]:
+        executions: list[ToolExecution] = []
+        runs: list[SpecialistRun] = []
+        safety_run: SpecialistRun | None = None
+
+        for name in self._agent_order():
+            if name == "safety_review_agent":
+                # 先执行控制边界工具（如果计划包含），再复核前面所有共享结果。
+                agent = SpecialistAgent(name)
+                tool_run, tool_executions = agent.run(self.plan, context)
+                executions.extend(tool_executions)
+                safety_run = SafetyReviewAgent(name).review(context.answer, tuple(executions), tool_run)
+                # 工具事件会单独展示；Agent 事件只保留合并后的最终复核状态，
+                # 避免控制请求在前端出现两个同名安全 Agent 节点。
+                runs.append(safety_run)
+                continue
+
+            run, tool_executions = SpecialistAgent(name).run(self.plan, context)
+            executions.extend(tool_executions)
+            # 未分配工具的澄清 Agent 也保留节点记录，方便前端说明流程为何结束。
+            runs.append(run)
+
+        # 没有显式安全 Agent 的简单问题也必须经过一次只读复核。
+        if safety_run is None:
+            runs.append(SafetyReviewAgent("safety_review_agent").review(context.answer, tuple(executions), None))
+
+        return tuple(executions), CollaborationTrace(runs=tuple(runs))

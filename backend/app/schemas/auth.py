@@ -16,6 +16,8 @@ class HealthResponse(BaseModel):
     environment: str = "mock"
     # 服务器生成本次检查响应的时间。
     timestamp: datetime
+    # RAG 后台准备状态；不影响基础接口是否已经启动。
+    startup: dict[str, object] | None = None
 
 
 class LoginRequest(BaseModel):

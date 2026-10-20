@@ -18,6 +18,8 @@ class AgentChatRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=2000)
     station_id: str | None = Field(default=None, max_length=64)
+    # 多轮追问的进程内会话编号；重启后会话记忆清空，不写数据库。
+    session_id: str | None = Field(default=None, max_length=64)
 
 
 class AgentCitation(BaseModel):
@@ -73,6 +75,9 @@ class AgentAnswer(BaseModel):
     observed_at: datetime | None = None
     # 观测数据的新鲜度与数据质量分开表示；没有观测时间时使用 unknown。
     freshness: Literal["fresh", "stale", "unknown"] = "unknown"
-    source: Literal["mock-rule", "llm-router+mock"] = "mock-rule"
+    source: Literal["mock-rule", "llm-router+mock", "llm-answer+mock", "llm-router+answer+mock"] = "mock-rule"
+    # 返回本轮使用的会话编号和合并后的有效问句，便于前端展示和问题回放。
+    session_id: str | None = None
+    effective_question: str | None = None
     generated_at: datetime
 
