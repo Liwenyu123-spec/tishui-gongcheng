@@ -11,6 +11,8 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import os
+import tempfile
 from typing import Any
 
 # 允许从项目根目录执行 `python backend/smoke_test.py` 时导入 app 包。
@@ -168,6 +170,25 @@ def run_smoke_checks() -> None:
         select_strong_hits,
     )
     from app.services.knowledge_search import KnowledgeHit
+
+    # 照片索引落盘在临时目录，避免污染正式 backend/data。
+    with tempfile.TemporaryDirectory() as photo_dir:
+        os.environ["PHOTO_STORE_DIR"] = photo_dir
+        from app.services.photo_store import PhotoIndex
+
+        index = PhotoIndex()
+        tiny_png = Path(r"C:\Users\lenovo\AppData\Local\Temp\smoke_photo.png").read_bytes()
+        record = index.register(
+            filename="smoke_test.png",
+            payload=tiny_png,
+            station_id="pump-02",
+            station_name="二泵站",
+            caption="冒烟测试占位图",
+        )
+        assert record.photo_id.startswith("photo-")
+        assert index.status()["photos"] == 1
+        listed = index.list_photos()
+        assert listed and listed[0].photo_id == record.photo_id
 
     assert "泵站" in clean_query("帮我看看水泵流量掉下去先看啥")
     assert "下降" in clean_query("帮我看看水泵流量掉下去先看啥")

@@ -21,6 +21,7 @@ from .routers.health import router as health_router
 from .routers.imports import router as imports_router
 from .routers.incidents import router as incidents_router
 from .routers.monitoring import router as monitoring_router
+from .routers.photos import router as photos_router
 from .routers.reports import router as reports_router
 from .routers.reviews import router as reviews_router
 from .routers.schemes import router as schemes_router
@@ -65,6 +66,7 @@ app.include_router(reports_router)
 app.include_router(work_orders_router)
 app.include_router(users_router)
 app.include_router(knowledge_router)
+app.include_router(photos_router)
 app.include_router(imports_router)
 app.include_router(audit_router)
 app.include_router(agent_router)

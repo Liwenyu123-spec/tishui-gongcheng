@@ -13,3 +13,5 @@ torch>=2.2
 pypdf>=5.0
 python-docx>=1.1
 openai>=1.40
+# 现场照片图文匹配：Chinese-CLIP（本地模型目录，不连 HuggingFace）
+pillow>=10.0
