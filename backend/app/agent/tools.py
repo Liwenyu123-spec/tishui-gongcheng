@@ -16,6 +16,7 @@ ToolName = Literal[
     "read_alarms",
     "read_event_context",
     "search_knowledge",
+    "explain_protocol",
     "calculate_supply_balance",
     "apply_control_boundary",
 ]
@@ -46,6 +47,11 @@ READ_ONLY_TOOLS: dict[ToolName, ReadOnlyTool] = {
     "read_alarms": ReadOnlyTool("read_alarms", "读取关联告警", "读取授权站点的告警和趋势样本"),
     "read_event_context": ReadOnlyTool("read_event_context", "读取未关闭事件和平台通知", "读取授权站点的事件、通知和处理状态"),
     "search_knowledge": ReadOnlyTool("search_knowledge", "检索版本化规程引用", "从当前规则知识目录返回适用规程引用"),
+    "explain_protocol": ReadOnlyTool(
+        "explain_protocol",
+        "整理规程说明",
+        "基于已检索片段整理核查说明；不编造实时数字，不生成控制指令",
+    ),
     "calculate_supply_balance": ReadOnlyTool("calculate_supply_balance", "计算供需差额和缺口片区", "使用确定性代码计算供水量减需求量"),
     "apply_control_boundary": ReadOnlyTool("apply_control_boundary", "检查只读控制边界并拒绝控制指令", "识别控制请求并阻止任何现场写操作"),
 }
@@ -68,9 +74,9 @@ def plan_for_question(intent: AgentIntent, message: str = "") -> AgentPlan:
             word in message for word in ("告警", "下降", "压力", "流量", "水位", "电流")
         )
         diagnosis_tools = (
-            ("search_knowledge", "read_alarms", "read_event_context")
+            ("search_knowledge", "explain_protocol", "read_alarms", "read_event_context")
             if procedure_first
-            else ("read_alarms", "search_knowledge", "read_event_context")
+            else ("read_alarms", "search_knowledge", "explain_protocol", "read_event_context")
         )
         return AgentPlan(
             "diagnosis_agent",

@@ -584,9 +584,12 @@ def run_smoke_checks() -> None:
     assert "alarm-20261015-002" not in diagnosis_tools.text
     assert "alarm-20261015-003" not in diagnosis_tools.text
     assert diagnosis_tools.text.find('"name": "read_alarms"') < diagnosis_tools.text.find('"name": "search_knowledge"')
+    assert diagnosis_tools.text.find('"name": "search_knowledge"') < diagnosis_tools.text.find('"name": "explain_protocol"')
+    assert "已整理规程说明" in diagnosis_tools.text
     procedure_question = client.post("/api/v1/chat/stream", headers=admin_headers, json={"message": "二泵站按规程应该怎么核查？"})
     assert procedure_question.status_code == 200
-    assert procedure_question.text.find('"name": "search_knowledge"') < procedure_question.text.find('"name": "read_alarms"')
+    assert procedure_question.text.find('"name": "search_knowledge"') < procedure_question.text.find('"name": "explain_protocol"')
+    assert procedure_question.text.find('"name": "explain_protocol"') < procedure_question.text.find('"name": "read_alarms"')
     missing_station = client.post("/api/v1/chat/stream", headers=admin_headers, json={"message": "流量下降后先检查什么？"})
     assert missing_station.status_code == 200
     assert "补充要核查的泵站" in missing_station.text

@@ -109,8 +109,8 @@ def _filter_source_ids(tool_name: ToolName, source_ids: tuple[str, ...], context
     """二次过滤工具引用，阻止越权站点、告警或事件编号漏出。"""
 
     visible = _visible_station_ids(context.user)
-    if tool_name in {"search_knowledge", "apply_control_boundary"}:
-        # 规程目录和控制策略是全局只读规则，不按站点裁剪。
+    if tool_name in {"search_knowledge", "explain_protocol", "apply_control_boundary"}:
+        # 规程目录、规程说明和控制策略是全局只读规则，不按站点裁剪。
         return source_ids
     if tool_name == "check_scope":
         return tuple(item for item in source_ids if item in visible)
@@ -260,6 +260,29 @@ def _execute_search_knowledge(tool: ReadOnlyTool, context: ToolContext) -> ToolE
     return ToolExecution(tool=tool, status="completed", summary=summary, source_ids=source_ids)
 
 
+def _execute_explain_protocol(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
+    """展示诊断中已整理的规程说明；说明正文由答案层生成，本工具只播报步骤。"""
+
+    text = (context.answer.protocol_explanation or "").strip()
+    source_ids = tuple(
+        citation.source_id for citation in context.answer.citations if citation.source_type == "knowledge"
+    )
+    if not text:
+        return ToolExecution(
+            tool=tool,
+            status="completed",
+            summary="无强相关规程说明可整理，请补充问法或导入现行规程",
+            source_ids=source_ids,
+        )
+    preview = text if len(text) <= 96 else f"{text[:96]}…"
+    return ToolExecution(
+        tool=tool,
+        status="completed",
+        summary=f"已整理规程说明：{preview}",
+        source_ids=source_ids,
+    )
+
+
 def _execute_calculate_supply_balance(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
     """按可见片区计算供需差额，选出缺口最大的片区。"""
 
@@ -290,6 +313,7 @@ _TOOL_HANDLERS = {
     "read_alarms": _execute_read_alarms,
     "read_event_context": _execute_read_event_context,
     "search_knowledge": _execute_search_knowledge,
+    "explain_protocol": _execute_explain_protocol,
     "calculate_supply_balance": _execute_calculate_supply_balance,
     "apply_control_boundary": _execute_apply_control_boundary,
 }
