@@ -512,6 +512,7 @@ def build_answer(payload: AgentChatRequest, user: dict) -> AgentAnswer:
             update={
                 "source": "llm-router+mock",
                 "time_range": model_route.time_range or answer.time_range,
+                "planned_tools": list(model_route.tools),
                 "facts": [
                     *answer.facts,
                     f"大模型路由：意图={model_route.intent}；指标={model_route.metric}；时间范围={model_route.time_range}",

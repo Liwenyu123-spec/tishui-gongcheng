@@ -53,6 +53,8 @@ class AgentAnswer(BaseModel):
     facts: list[str] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
     citations: list[AgentCitation] = Field(default_factory=list)
+    # 模型路由阶段提出的工具顺序；最终仍由后端白名单和意图规则校验。
+    planned_tools: list[str] = Field(default_factory=list)
     # 只有诊断类答案提供工单建议，状态查询等答案保持为空。
     work_order_suggestion: AgentWorkOrderSuggestion | None = None
     # 诊断时基于检索片段整理的规程说明；无强相关命中时为空。

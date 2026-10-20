@@ -51,6 +51,7 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
                 "request_id": answer.request_id,
                 "mode": "llm-router+rule-tools" if answer.source == "llm-router+mock" else "rule-mock",
                 "llm_route_used": answer.source == "llm-router+mock",
+                "planning_source": "llm+backend-guard" if answer.planned_tools else "rule",
                 "coordinator": "dispatch_coordinator",
                 "primary_agent": plan.primary_agent,
                 "collaborating_agents": list(plan.collaborating_agents),

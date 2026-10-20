@@ -708,6 +708,7 @@ def run_smoke_checks() -> None:
             assert "mock-knowledge-flow-v1.2" in agent_response.text
         assert '"coordinator": "dispatch_coordinator"' in agent_response.text
         assert '"allowed_tools":' in agent_response.text
+        assert '"planning_source": "rule"' in agent_response.text
         assert '"read_only": true' in agent_response.text
         assert "工具证据" in agent_response.text
         assert '"summary":' in agent_response.text

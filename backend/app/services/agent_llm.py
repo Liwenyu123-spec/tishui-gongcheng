@@ -25,6 +25,7 @@ class AgentModelRoute(BaseModel):
     metric: Literal["flow", "pressure", "level", "energy", "current", "unknown"] = "unknown"
     time_range: str = "当前 Mock 样本"
     control_request: bool = False
+    tools: list[str] = Field(default_factory=list, max_length=8)
 
 
 def model_status() -> dict[str, object]:
@@ -78,9 +79,13 @@ def route_question(message: str, *, visible_stations: list[dict], requested_stat
             "supply=供需/缺口/片区；control_rejected=启停泵、开关阀、改压力、切换运行方式等现场控制；"
             "无法判断时使用 unknown。\n"
             "station_id 只能从给定站点编号中选择；没有明确站点时返回 null。\n"
+            "可建议的工具只有：check_scope、read_telemetry、read_alarms、read_event_context、"
+            "search_knowledge、explain_protocol、calculate_supply_balance、apply_control_boundary。\n"
+            "只选择完成当前问题所需的工具，控制请求只能选择 check_scope 和 apply_control_boundary。\n"
             "只返回 JSON，不要 Markdown，不要解释。格式："
             '{"intent":"status","station_id":null,"metric":"pressure",'
-            '"time_range":"当前 Mock 样本","control_request":false}\n\n'
+            '"time_range":"当前 Mock 样本","control_request":false,'
+            '"tools":["check_scope","read_telemetry"]}\n\n'
             f"当前账号可见站点：\n{station_lines}"
         )
         client = OpenAI(
@@ -110,4 +115,11 @@ def route_question(message: str, *, visible_stations: list[dict], requested_stat
         route = route.model_copy(update={"station_id": requested_station_id})
     if route.control_request:
         route = route.model_copy(update={"intent": "control_rejected"})
+
+    from ..agent.tools import READ_ONLY_TOOLS
+
+    selected_tools = [name for name in route.tools if name in READ_ONLY_TOOLS]
+    if route.intent == "control_rejected":
+        selected_tools = ["check_scope", "apply_control_boundary"]
+    route = route.model_copy(update={"tools": selected_tools})
     return route
