@@ -243,6 +243,77 @@ def run_smoke_checks() -> None:
     assert any(hit["source_id"] == newer_knowledge["id"] for hit in version_search["results"])
     assert not any(hit["source_id"] == imported_knowledge["id"] for hit in version_search["results"])
 
+    # 固定问法：流量下降必须命中流量规程；过期资料和其他站点资料不得出现。
+    flow_question = expect(
+        "固定问法命中流量规程",
+        client.get(
+            "/api/v1/knowledge/search",
+            headers=admin_headers,
+            params={"q": "二泵站流量下降先核查什么", "metric": "flow", "station_id": "pump-02"},
+        ),
+        200,
+    )
+    assert flow_question["results"][0]["source_id"] == "mock-knowledge-flow-v1.2"
+    expired_knowledge = expect(
+        "导入已过期规程",
+        client.post(
+            "/api/v1/knowledge/import",
+            headers=admin_headers,
+            json={
+                "filename": "expired-flow.md",
+                "title": "过期流量核查规程",
+                "version": "0.1",
+                "content": "过期流量核查规程不应再被引用。",
+                "station_ids": ["pump-02"],
+                "effective_from": "2020-01-01T00:00:00Z",
+                "effective_to": "2020-02-01T00:00:00Z",
+            },
+        ),
+        200,
+    )
+    expect(
+        "批准过期规程",
+        client.patch(f"/api/v1/knowledge/{expired_knowledge['id']}/status", headers=admin_headers, json={"status": "valid"}),
+        200,
+    )
+    expired_search = expect(
+        "过期规程不可检索",
+        client.get("/api/v1/knowledge/search", headers=admin_headers, params={"q": "过期流量核查规程", "station_id": "pump-02"}),
+        200,
+    )
+    assert not any(hit["source_id"] == expired_knowledge["id"] for hit in expired_search["results"])
+    other_station_knowledge = expect(
+        "导入四泵站资料",
+        client.post(
+            "/api/v1/knowledge/import",
+            headers=admin_headers,
+            json={
+                "filename": "pump-04-seal.md",
+                "title": "四泵站专用密封规程",
+                "version": "1.0",
+                "content": "四泵站专用密封规程只允许四泵站账号检索。",
+                "station_ids": ["pump-04"],
+            },
+        ),
+        200,
+    )
+    expect(
+        "批准四泵站资料",
+        client.patch(f"/api/v1/knowledge/{other_station_knowledge['id']}/status", headers=admin_headers, json={"status": "valid"}),
+        200,
+    )
+    station_hidden = expect(
+        "站点账号看不到其他站资料",
+        client.get("/api/v1/knowledge/search", headers=station_headers, params={"q": "四泵站专用密封规程"}),
+        200,
+    )
+    assert not any(hit["source_id"] == other_station_knowledge["id"] for hit in station_hidden["results"])
+    expect(
+        "站点账号不能指定其他站点",
+        client.get("/api/v1/knowledge/search", headers=station_headers, params={"q": "四泵站专用密封规程", "station_id": "pump-04"}),
+        403,
+    )
+
     # 方案比较：检查目标需求、约束违反项和确定性推荐结果。
     comparison = expect(
         "方案比较约束分析",
