@@ -133,7 +133,7 @@ SYSTEM_PROMPT = (
 def generation_status() -> dict[str, Any]:
     enabled = os.getenv("RAG_GENERATION_ENABLED", "1").strip().lower() not in {"0", "false", "off", "none"}
     key = _deepseek_api_key()
-    model = _windows_env("DEEPSEEK_MODEL") or "deepseek-flash"
+    model = _windows_env("DEEPSEEK_MODEL") or "deepseek-chat"
     return {
         "generation": "deepseek" if enabled and key else "disabled",
         "generation_model": model if enabled else None,
@@ -571,6 +571,6 @@ def _chat(messages: list[dict[str, str]], *, temperature: float) -> str:
         api_key=_deepseek_api_key(),
         base_url=_windows_env("DEEPSEEK_BASE_URL") or "https://api.deepseek.com",
     )
-    model = _windows_env("DEEPSEEK_MODEL") or "deepseek-flash"
+    model = _windows_env("DEEPSEEK_MODEL") or "deepseek-chat"
     response = client.chat.completions.create(model=model, temperature=temperature, messages=messages)
     return (response.choices[0].message.content or "").strip()
