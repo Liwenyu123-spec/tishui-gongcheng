@@ -4,6 +4,7 @@
 本层不访问外部系统，也不修改事件、通知或现场设备状态；控制边界工具只做检查。
 """
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 
 from ..data.incidents import _INCIDENTS, _NOTIFICATIONS
@@ -13,6 +14,7 @@ from ..dependencies import user_has_station_access
 from ..schemas.agent import AgentAnswer, AgentChatRequest
 from ..services.analysis import compare_variation, metric_label
 from ..services.knowledge_search import search_rules
+from ..services.runtime_env import windows_env
 from .tools import AgentPlan, ReadOnlyTool, ToolName
 
 
@@ -54,6 +56,41 @@ class ToolExecution:
     read_only: bool = True
     # 实际执行该工具的专业 Agent；旧的直接执行调用默认归入工具执行器。
     agent: str = "tool_executor"
+    # 工具级超时/失败重试次数，便于 SSE 和审计区分一次请求是否经历过重试。
+    attempts: int = 1
+    error: str | None = None
+
+
+def _tool_timeout_seconds() -> float:
+    """读取单个只读工具的超时上限，异常配置回退到安全默认值。"""
+
+    try:
+        value = float(windows_env("AGENT_TOOL_TIMEOUT") or "5")
+    except ValueError:
+        value = 5.0
+    return min(max(value, 0.01), 60.0)
+
+
+def _tool_retry_limit() -> int:
+    """读取只读工具最大重试次数；默认只重试一次，避免放大请求。"""
+
+    try:
+        value = int(windows_env("AGENT_TOOL_RETRIES") or "1")
+    except ValueError:
+        value = 1
+    return min(max(value, 0), 3)
+
+
+def _invoke_with_timeout(handler, tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
+    """在线程边界内执行工具，避免单个工具阻塞整个 Agent 请求。"""
+
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agent-tool")
+    future = executor.submit(handler, tool, context)
+    try:
+        return future.result(timeout=_tool_timeout_seconds())
+    finally:
+        # 超时后不等待后台线程结束；当前 Mock 工具只读，不会继续修改业务状态。
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _visible_station_ids(user: dict) -> set[str]:
