@@ -2,12 +2,13 @@
 
 from fastapi import APIRouter, Depends, Query
 
-from ..data.supply import _SUPPLY_AREAS
+from ..data.repositories import get_data_source
 from ..dependencies import require_roles, user_has_station_access
 from ..schemas.supply import SupplyArea, SupplyBalanceResponse
 
 # 供需接口统一挂在 /api/v1 下，前端通过同一 Token 访问。
 router = APIRouter(prefix="/api/v1", tags=["供需"])
+data_source = get_data_source()
 
 
 @router.get("/supply/balance", response_model=SupplyBalanceResponse)
@@ -20,7 +21,7 @@ def supply_balance(
 
     # 把每个片区的供水量减去需求量，得到供需余额。
     # 先按用户站点范围过滤，避免有限站点账号看到其他片区数据。
-    visible_areas = [area for area in _SUPPLY_AREAS if user_has_station_access(user, area["station_id"])]
+    visible_areas = [area for area in data_source.supply.list() if user_has_station_access(user, area["station_id"])]
     # 根据供水量减需求量计算每个片区的供需结余。
     rows = [SupplyArea(**area, balance=area["supply"] - area["demand"]) for area in visible_areas]
     # 汇总所有片区，得到全局供需结果。

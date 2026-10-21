@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 
 from ..data import knowledge_store
 from ..data.knowledge import _KNOWLEDGE, _KNOWLEDGE_CONTENT, reload_from_store
-from ..data.monitoring import _STATIONS
+from ..data.repositories import get_data_source
 from ..dependencies import get_current_user, require_roles, user_has_station_access
 from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeRagAskRequest, KnowledgeRagDebugRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
 from ..services.audit import record_audit
@@ -20,6 +20,7 @@ from ..services.runtime_env import env_summary
 
 # 知识库接口管理文档生命周期；检索只返回正文摘要，不提供全文读取。
 router = APIRouter(prefix="/api/v1", tags=["知识库"])
+data_source = get_data_source()
 
 # 最近一次重建索引的时间；供状态接口展示，重启后从空开始。
 _LAST_REINDEX_AT: datetime | None = None
@@ -163,7 +164,7 @@ def knowledge(user: dict = Depends(get_current_user)) -> list[KnowledgeDocument]
     """返回已导入知识文档的元数据。"""
 
     visible_station_ids = {
-        station["id"] for station in _STATIONS if user_has_station_access(user, station["id"])
+        station["id"] for station in data_source.stations.list() if user_has_station_access(user, station["id"])
     }
     # 只返回当前账号可见范围内的元数据，正文不会从 Mock 存储中返回。
     return [
@@ -184,7 +185,7 @@ def search_knowledge(
     """检索内置规则和已批准、当前有效的导入文档。"""
 
     visible_station_ids = {
-        station["id"] for station in _STATIONS if user_has_station_access(user, station["id"])
+        station["id"] for station in data_source.stations.list() if user_has_station_access(user, station["id"])
     }
     if station_id is not None and station_id not in visible_station_ids:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权检索该站点资料")
@@ -257,7 +258,7 @@ def knowledge_rag_ask(
     """检索现行有效资料后，用 DeepSeek 生成带引用的规程说明。"""
 
     visible_station_ids = {
-        station["id"] for station in _STATIONS if user_has_station_access(user, station["id"])
+        station["id"] for station in data_source.stations.list() if user_has_station_access(user, station["id"])
     }
     if payload.station_id is not None and payload.station_id not in visible_station_ids:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权检索该站点资料")
@@ -284,7 +285,7 @@ def knowledge_rag_debug(
     """
 
     visible_station_ids = {
-        station["id"] for station in _STATIONS if user_has_station_access(user, station["id"])
+        station["id"] for station in data_source.stations.list() if user_has_station_access(user, station["id"])
     }
     if payload.station_id is not None and payload.station_id not in visible_station_ids:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权检索该站点资料")
@@ -306,7 +307,7 @@ def knowledge_detail(document_id: str, user: dict = Depends(get_current_user)) -
         # 文档编号不存在时返回 404，避免返回一个虚构的空文档。
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识文档不存在")
     visible_station_ids = {
-        station["id"] for station in _STATIONS if user_has_station_access(user, station["id"])
+        station["id"] for station in data_source.stations.list() if user_has_station_access(user, station["id"])
     }
     if document.station_ids and not set(document.station_ids).intersection(visible_station_ids):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权查看该站点资料")
@@ -345,7 +346,7 @@ def import_knowledge(
     """保存知识文档元数据和正文。待审资料只留在内存，批准为现行后才写入 Chroma。"""
 
     # 使用短 UUID 生成文档编号，避免依赖上传文件名的唯一性。
-    unknown_stations = sorted({station_id for station_id in payload.station_ids if station_id not in {item["id"] for item in _STATIONS}})
+    unknown_stations = sorted({station_id for station_id in payload.station_ids if station_id not in {item["id"] for item in data_source.stations.list()}})
     if unknown_stations:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"未知适用站点：{', '.join(unknown_stations)}")
     if payload.effective_from and payload.effective_to and payload.effective_to <= payload.effective_from:

@@ -195,12 +195,34 @@ const ask = async (q = input.value) => {
       return
     }
     if (eventName === 'tool') {
-      const tool = JSON.parse(data) as { label?: string; summary?: string; status?: string }
+      const tool = JSON.parse(data) as { label?: string; summary?: string; status?: string; attempts?: number; error?: string | null }
       if (tool.label && tool.status === 'completed') {
         const step = tool.summary ? `${tool.label}：${tool.summary}` : tool.label
         aiMessage.steps = [...(aiMessage.steps || []), step]
         aiMessage.evidence = `分析步骤：${aiMessage.steps.join(' → ')}`
       }
+      return
+    }
+    if (eventName === 'retry') {
+      const retry = JSON.parse(data) as { label?: string; attempts?: number; status?: string; error?: string | null }
+      const step = `重试：${retry.label || '只读工具'}，已尝试 ${retry.attempts || 2} 次${retry.error ? `（${retry.error}）` : ''}`
+      aiMessage.steps = [...(aiMessage.steps || []), step]
+      aiMessage.evidence = `分析步骤：${aiMessage.steps.join(' → ')}`
+      return
+    }
+    if (eventName === 'error') {
+      const failure = JSON.parse(data) as { label?: string; status?: string; attempts?: number; error?: string }
+      const status = failure.status === 'timeout' ? '超时' : '失败'
+      const step = `工具${status}：${failure.label || '只读工具'} · ${failure.error || '未提供错误原因'}`
+      aiMessage.steps = [...(aiMessage.steps || []), step]
+      aiMessage.evidence = `分析步骤：${aiMessage.steps.join(' → ')}`
+      return
+    }
+    if (eventName === 'fallback') {
+      const fallback = JSON.parse(data) as { message?: string }
+      const step = `降级处理：${fallback.message || '部分工具未完成，转人工复核'}`
+      aiMessage.steps = [...(aiMessage.steps || []), step]
+      aiMessage.evidence = `分析步骤：${aiMessage.steps.join(' → ')}`
       return
     }
     if (eventName !== 'result') return

@@ -5,13 +5,14 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from ..data.reviews import _REVIEWS
+from ..data.repositories import get_data_source
 from ..dependencies import require_roles
 from ..schemas.reviews import Review, ReviewCreateRequest, ReviewUpdateRequest
 from ..services.audit import record_audit
 
 # 审核路由负责记录人工复核结果，不执行现场控制。
 router = APIRouter(prefix="/api/v1", tags=["审核"])
+data_source = get_data_source()
 
 # 待补充材料返回后可以再次进入审核；已通过或已驳回记录保持终态。
 _REVIEW_STATUS_TRANSITIONS: dict[str, set[str]] = {
@@ -25,14 +26,14 @@ _REVIEW_STATUS_TRANSITIONS: dict[str, set[str]] = {
 @router.post("/reviews", response_model=Review)
 def create_review(
     payload: ReviewCreateRequest,
-    user: dict = Depends(require_roles("admin", "operator")),
+    user: dict = Depends(require_roles("admin", "operator", required_permissions=("submit_scheme",))),
 ) -> Review:
     """创建一条待人工处理的审核记录。"""
 
     # Agent 转办主题带有唯一请求编号；重复点击时直接返回原待办，避免生成重复审核记录。
     if payload.subject.startswith("Agent "):
         existing = next(
-            (item for item in _REVIEWS.values() if item.subject == payload.subject and item.status == "pending"),
+            (item for item in data_source.reviews.all().values() if item.subject == payload.subject and item.status == "pending"),
             None,
         )
         if existing is not None:
@@ -48,7 +49,7 @@ def create_review(
         updated_at=now,
     )
     # Mock 阶段将审核记录放入进程内字典，重启服务后会清空。
-    _REVIEWS[review.id] = review
+    data_source.reviews.all()[review.id] = review
     # 记录转人工复核的操作人，便于管理员在审计页面追踪 Agent 转办来源。
     record_audit(
         "create",
@@ -65,7 +66,7 @@ def list_reviews(_: dict = Depends(require_roles("admin", "operator", "reviewer"
     """查询当前进程内的审核记录。"""
 
     # 列表接口只返回当前进程内已经创建的审核记录。
-    return list(_REVIEWS.values())
+    return list(data_source.reviews.all().values())
 
 
 @router.get("/reviews/{review_id}", response_model=Review)
@@ -73,7 +74,7 @@ def get_review(review_id: str, _: dict = Depends(require_roles("admin", "operato
     """按 ID 查询审核详情。"""
 
     # 使用路径中的审核编号查找详情，不存在时返回 404。
-    review = _REVIEWS.get(review_id)
+    review = data_source.reviews.get(review_id)
     if review is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="审核记录不存在")
     return review
@@ -83,12 +84,12 @@ def get_review(review_id: str, _: dict = Depends(require_roles("admin", "operato
 def update_review(
     review_id: str,
     payload: ReviewUpdateRequest,
-    _: dict = Depends(require_roles("admin", "reviewer")),
+    _: dict = Depends(require_roles("admin", "reviewer", required_permissions=("review",))),
 ) -> Review:
     """更新审核结论并写入审计事件。"""
 
     # 先按路径编号查找记录，再判断当前记录是否仍处于待审核状态。
-    review = _REVIEWS.get(review_id)
+    review = data_source.reviews.get(review_id)
     if review is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="审核记录不存在")
     # 按状态流转表校验当前记录，允许补充材料后再次审核，已通过或已驳回记录保持终态。

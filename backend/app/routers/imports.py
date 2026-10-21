@@ -4,20 +4,21 @@ import csv
 import io
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from ..data.monitoring import _STATIONS
-from ..dependencies import require_roles
+from ..data.repositories import get_data_source
+from ..dependencies import require_roles, user_has_station_access
 from ..schemas.imports import CsvImportResponse
 
 # 导入路由使用统一的接口前缀，当前只负责校验，不写入数据库。
 router = APIRouter(prefix="/api/v1", tags=["数据导入"])
+data_source = get_data_source()
 
 
 @router.post("/imports/telemetry-csv", response_model=CsvImportResponse)
 async def import_telemetry_csv(
     request: Request,
-    _: dict = Depends(require_roles("admin", "operator")),
+    user: dict = Depends(require_roles("admin", "operator", required_permissions=("submit_scheme",))),
 ) -> CsvImportResponse:
     """读取遥测 CSV 并返回格式校验统计，不写入遥测存储。"""
 
@@ -60,7 +61,7 @@ async def import_telemetry_csv(
     accepted = 0
     total = 0
     # 站点编号来自当前 Mock 站点列表，不依赖数据库。
-    station_ids = {station["id"] for station in _STATIONS}
+    station_ids = {station["id"] for station in data_source.stations.list()}
     # 从第二行开始计数，因为第一行已经是 CSV 表头。
     for line_number, row in enumerate(reader, start=2):
         total += 1
@@ -68,6 +69,9 @@ async def import_telemetry_csv(
         if row.get("station_id") not in station_ids:
             errors.append(f"第 {line_number} 行站点不存在: {row.get('station_id')}")
             continue
+        # 站点值班账号不能借 CSV 接口导入其他站点数据。
+        if not user_has_station_access(user, row["station_id"]):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"当前账号无权导入站点 {row['station_id']} 数据")
         # 数值和时间字段必须能转换成功。
         try:
             float(row.get("value", ""))

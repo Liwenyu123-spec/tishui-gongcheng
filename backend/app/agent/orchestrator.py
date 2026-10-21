@@ -26,6 +26,7 @@ def coordinate(answer: AgentAnswer, message: str = "") -> AgentPlan:
         "status": ["read_telemetry"],
         "trend": ["read_telemetry"],
         "diagnosis": ["read_alarms", "search_knowledge", "explain_protocol"],
+        "knowledge": ["search_knowledge", "explain_protocol"],
         "supply": ["calculate_supply_balance"],
     }
     required = required_by_intent.get(answer.intent, [])

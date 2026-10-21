@@ -83,6 +83,12 @@ def plan_for_question(intent: AgentIntent, message: str = "") -> AgentPlan:
             ("diagnosis_agent", "safety_review_agent", "event_context_agent"),
             common + tuple(READ_ONLY_TOOLS[name] for name in diagnosis_tools),
         )
+    if intent == "knowledge":
+        return AgentPlan(
+            "diagnosis_agent",
+            ("diagnosis_agent", "safety_review_agent"),
+            common + (READ_ONLY_TOOLS["search_knowledge"], READ_ONLY_TOOLS["explain_protocol"]),
+        )
     if intent == "supply":
         return AgentPlan("supply_balance_agent", ("supply_balance_agent",), common + (READ_ONLY_TOOLS["calculate_supply_balance"],))
     if intent == "control_rejected":

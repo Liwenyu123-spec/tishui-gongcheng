@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import os
@@ -258,6 +259,7 @@ def run_smoke_checks() -> None:
         compress_detail,
         resolve_follow_up,
         select_strong_hits,
+        validate_citations,
     )
     from app.services.knowledge_search import KnowledgeHit
 
@@ -288,6 +290,9 @@ def run_smoke_checks() -> None:
 
     assert "泵站" in clean_query("帮我看看水泵流量掉下去先看啥")
     assert "下降" in clean_query("帮我看看水泵流量掉下去先看啥")
+    assert "流量" in clean_query("水泵出水量突然变少了要检查哪些地方")
+    assert "通信中断" in clean_query("数据断了以后怎么补")
+    assert "有限空间作业" in clean_query("一个人能不能单独下阀门井")
     compressed = compress_detail(
         "流量下降先核查什么",
         "先核对入口压力、泵组运行电流和下游压力。无关的设备台账编号是 ABC-001。再决定是否升级人工处置。",
@@ -317,6 +322,13 @@ def run_smoke_checks() -> None:
         [grounded_hit],
     )
     assert grounded_ok["grounded"] is True and grounded_ok["status"] == "grounded"
+    citation_ok = validate_citations(
+        "根据泵站流量异常核查规程 1.2（[1]），先核对入口压力。",
+        [grounded_hit],
+    )
+    assert citation_ok["valid"] is True and citation_ok["cited_count"] == 1
+    citation_missing = validate_citations("先核对入口压力。", [grounded_hit])
+    assert citation_missing["valid"] is False and citation_missing["warnings"]
     grounded_bad = check_groundedness(
         "建议立即启动泵，把流量调到 9999。",
         [grounded_hit],
@@ -686,6 +698,137 @@ def run_smoke_checks() -> None:
     resolved = expect("事件关闭", client.post(f"/api/v1/incidents/{incident['id']}/resolve", headers=operator_headers), 200)
     assert resolved["status"] == "resolved"
 
+    # 第 6 项端到端闭环：告警/事件 → 通知 → 工单 → 审核 → 报告 → 审计。
+    # 各步骤使用同一条站点和业务编号，验证不是只把几个独立接口分别跑通。
+    workflow_order = expect(
+        "闭环工单草稿",
+        client.post(
+            "/api/v1/work-orders/draft",
+            headers=operator_headers,
+            json={
+                "title": f"处理事件 {incident['id']}",
+                "station_id": "pump-02",
+                "issue": f"关联告警 {alarm_id}、事件 {incident['id']}：{incident['description']}",
+                "suggested_action": "现场核对入口压力、泵组运行状态和通知处理记录",
+                "priority": "high",
+            },
+        ),
+        200,
+    )
+    assert workflow_order["status"] == "draft" and workflow_order["station_id"] == "pump-02"
+    workflow_list = expect("闭环工单列表", client.get("/api/v1/work-orders", headers=operator_headers), 200)
+    assert any(item["id"] == workflow_order["id"] for item in workflow_list)
+    workflow_detail = expect("闭环工单详情", client.get(f"/api/v1/work-orders/{workflow_order['id']}", headers=operator_headers), 200)
+    assert incident["id"] in workflow_detail["issue"] and alarm_id in workflow_detail["issue"]
+    assigned_order = expect(
+        "闭环工单分派",
+        client.patch(
+            f"/api/v1/work-orders/{workflow_order['id']}",
+            headers=operator_headers,
+            json={"owner": "station-operator", "due_at": "2026-10-21T18:00:00Z"},
+        ),
+        200,
+    )
+    assert assigned_order["owner"] == "station-operator"
+    expect(
+        "工单越级流转被拒绝",
+        client.patch(
+            f"/api/v1/work-orders/{workflow_order['id']}/status",
+            headers=operator_headers,
+            json={"status": "in_progress"},
+        ),
+        409,
+    )
+    assigned_order = expect(
+        "工单进入已分派",
+        client.patch(
+            f"/api/v1/work-orders/{workflow_order['id']}/status",
+            headers=operator_headers,
+            json={"status": "assigned"},
+        ),
+        200,
+    )
+    in_progress_order = expect(
+        "工单进入处理中",
+        client.patch(
+            f"/api/v1/work-orders/{workflow_order['id']}/status",
+            headers=operator_headers,
+            json={"status": "in_progress"},
+        ),
+        200,
+    )
+    assert assigned_order["status"] == "assigned" and in_progress_order["status"] == "in_progress"
+
+    workflow_review = expect(
+        "闭环审核创建",
+        client.post(
+            "/api/v1/reviews",
+            headers=operator_headers,
+            json={
+                "subject": f"告警 {alarm_id} / 事件 {incident['id']} / 工单 {workflow_order['id']}",
+                "recommendation": "确认现场核查结果后完成工单",
+                "comment": "由闭环回归测试创建",
+            },
+        ),
+        200,
+    )
+    approved_workflow_review = expect(
+        "闭环审核通过",
+        client.patch(
+            f"/api/v1/reviews/{workflow_review['id']}",
+            headers=reviewer_headers,
+            json={"status": "approved", "comment": "审核通过，可按流程完成工单"},
+        ),
+        200,
+    )
+    assert approved_workflow_review["status"] == "approved"
+    expect(
+        "调度员不能修改审核结论",
+        client.patch(
+            f"/api/v1/reviews/{workflow_review['id']}",
+            headers=operator_headers,
+            json={"status": "rejected"},
+        ),
+        403,
+    )
+    completed_order = expect(
+        "闭环工单完成",
+        client.patch(
+            f"/api/v1/work-orders/{workflow_order['id']}/status",
+            headers=operator_headers,
+            json={"status": "completed"},
+        ),
+        200,
+    )
+    assert completed_order["status"] == "completed"
+    expect(
+        "已完成工单不可修改",
+        client.patch(
+            f"/api/v1/work-orders/{workflow_order['id']}",
+            headers=operator_headers,
+            json={"owner": "another-owner"},
+        ),
+        409,
+    )
+
+    workflow_report = expect(
+        "闭环报告生成",
+        client.post(
+            "/api/v1/reports/generate",
+            headers=operator_headers,
+            json={
+                "report_type": "incident-summary",
+                "report_date": "2026-10-21",
+                "from_time": "2026-10-21T00:00:00Z",
+                "to_time": "2026-10-21T23:59:59Z",
+            },
+        ),
+        200,
+    )
+    assert workflow_report["status"] == "draft"
+    # 报告对供需来源使用 `supply:<station_id>` 命名，对告警来源保留告警编号。
+    assert alarm_id in workflow_report["source_ids"] and "supply:pump-02" in workflow_report["source_ids"]
+
     # 规则驱动 Agent 只读取 Mock 数据；SSE 必须按 start、result、done 顺序结束。
     agent_questions = [
         ("现在二泵站的压力是多少？", '"intent": "status"'),
@@ -735,6 +878,15 @@ def run_smoke_checks() -> None:
     assert diagnosis_tools.text.find('"name": "read_alarms"') < diagnosis_tools.text.find('"name": "search_knowledge"')
     assert diagnosis_tools.text.find('"name": "search_knowledge"') < diagnosis_tools.text.find('"name": "explain_protocol"')
     assert "已整理规程说明" in diagnosis_tools.text
+    safety_question = client.post(
+        "/api/v1/chat/stream",
+        headers=admin_headers,
+        json={"message": "一个人能不能单独下阀门井"},
+    )
+    assert safety_question.status_code == 200
+    assert "mock-knowledge-confined-space-v1.0" in safety_question.text
+    assert "两人以上" in safety_question.text and "外监护" in safety_question.text
+    assert "无强相关规程说明" not in safety_question.text
     # 多 Agent 必须通过不可变共享状态交接前序证据，安全复核也必须看到完整协作链。
     assert '"depends_on": ["dispatch_coordinator"]' in diagnosis_tools.text
     assert '"shared_evidence_count": 1' in diagnosis_tools.text
@@ -775,9 +927,158 @@ def run_smoke_checks() -> None:
     )
     assert unauthorized_agent.status_code == 403
 
+    # 工具级失败和超时必须有限重试后返回结构化降级结果，不能抛出 500。
+    from app.agent import executor as agent_executor
+    from app.agent.executor import ToolContext
+    from app.agent.tools import READ_ONLY_TOOLS
+    from app.schemas.agent import AgentAnswer, AgentChatRequest
+
+    original_handler = agent_executor._TOOL_HANDLERS["read_telemetry"]
+    original_timeout = os.environ.get("AGENT_TOOL_TIMEOUT")
+    original_retries = os.environ.get("AGENT_TOOL_RETRIES")
+    try:
+        os.environ["AGENT_TOOL_TIMEOUT"] = "0.01"
+        os.environ["AGENT_TOOL_RETRIES"] = "1"
+
+        def slow_telemetry(tool, context):
+            time.sleep(0.05)
+            return original_handler(tool, context)
+
+        agent_executor._TOOL_HANDLERS["read_telemetry"] = slow_telemetry
+        request = AgentChatRequest(message="现在二泵站的压力是多少？")
+        answer = AgentAnswer(
+            request_id="smoke-timeout",
+            intent="status",
+            answer="测试超时",
+            generated_at=datetime.now(timezone.utc),
+        )
+        tool_context = ToolContext(
+            user={"username": "admin", "role": "admin", "station_ids": ["*"]},
+            request=request,
+            answer=answer,
+        )
+        timeout_execution = agent_executor.execute_tool(READ_ONLY_TOOLS["read_telemetry"], tool_context)
+        assert timeout_execution.status == "timeout"
+        assert timeout_execution.attempts == 2
+        assert timeout_execution.error and "超过" in timeout_execution.error
+        degraded_response = client.post(
+            "/api/v1/chat/stream",
+            headers=admin_headers,
+            json={"message": "现在二泵站的压力是多少？"},
+        )
+        assert degraded_response.status_code == 200
+        assert "event: retry" in degraded_response.text
+        assert "event: error" in degraded_response.text
+        assert "event: fallback" in degraded_response.text
+        assert "本轮只读分析未完整完成" in degraded_response.text
+    finally:
+        agent_executor._TOOL_HANDLERS["read_telemetry"] = original_handler
+        if original_timeout is None:
+            os.environ.pop("AGENT_TOOL_TIMEOUT", None)
+        else:
+            os.environ["AGENT_TOOL_TIMEOUT"] = original_timeout
+        if original_retries is None:
+            os.environ.pop("AGENT_TOOL_RETRIES", None)
+        else:
+            os.environ["AGENT_TOOL_RETRIES"] = original_retries
+
     # 管理员可以查询前面操作产生的审计记录，普通调度员不能查询审计接口。
+    # 第 7 项安全回归：认证、功能权限、站点范围和跨域资源过滤。
+    expect("无 Token 访问受保护接口", client.get("/api/v1/stations"), 401)
+    expect("错误 Token 访问受保护接口", client.get("/api/v1/stations", headers={"Authorization": "Bearer invalid-token"}), 401)
+    expect(
+        "站点账号缺少写权限",
+        client.post(
+            "/api/v1/work-orders/draft",
+            headers=station_headers,
+            json={
+                "title": "安全回归工单",
+                "station_id": "pump-02",
+                "issue": "权限矩阵测试",
+                "suggested_action": "仅验证后端拒绝",
+            },
+        ),
+        403,
+    )
+    station_reports = expect("站点账号报告列表过滤", client.get("/api/v1/reports", headers=station_headers), 200)
+    assert report["id"] not in {item["id"] for item in station_reports}
+    expect("站点账号读取全站报告被拒绝", client.get(f"/api/v1/reports/{report['id']}", headers=station_headers), 403)
+
+    # 管理员上传的其他站点照片不能出现在站点账号列表中；照片文件写入临时目录。
+    from app.services import photo_store
+
+    previous_photo_dir = os.environ.get("PHOTO_STORE_DIR")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as photo_dir:
+        os.environ["PHOTO_STORE_DIR"] = photo_dir
+        photo_store._INDEX = None
+        tiny_photo = Path(r"C:\Users\lenovo\AppData\Local\Temp\smoke_photo.png").read_bytes()
+        uploaded_photo = expect(
+            "管理员上传跨站点照片",
+            client.post(
+                "/api/v1/photos",
+                headers=admin_headers,
+                files={"file": ("pump-01.png", tiny_photo, "image/png")},
+                data={"station_id": "pump-01", "station_name": "一泵站", "caption": "安全范围测试"},
+            ),
+            200,
+        )
+        station_photos = expect("站点账号照片列表过滤", client.get("/api/v1/photos", headers=station_headers), 200)
+        assert uploaded_photo["photo_id"] not in {item["photo_id"] for item in station_photos}
+        admin_photos = expect("管理员照片列表", client.get("/api/v1/photos", headers=admin_headers), 200)
+        assert uploaded_photo["photo_id"] in {item["photo_id"] for item in admin_photos}
+        photo_store._INDEX = None
+    if previous_photo_dir is None:
+        os.environ.pop("PHOTO_STORE_DIR", None)
+    else:
+        os.environ["PHOTO_STORE_DIR"] = previous_photo_dir
+
+    # 通过管理员修改站点账号后，原 Token 立即使用新的权限和站点范围。
+    users = expect("读取用户用于权限回归", client.get("/api/v1/users", headers=admin_headers), 200)
+    station_user = next(item for item in users if item["username"] == "station-operator")
+    expect(
+        "临时授予站点账号写权限",
+        client.patch(
+            f"/api/v1/users/{station_user['id']}",
+            headers=admin_headers,
+            json={"permissions": ["read", "submit_scheme"], "station_ids": ["pump-02"]},
+        ),
+        200,
+    )
+    scoped_csv = "station_id,observed_at,metric,value,unit\npump-01,2026-10-18T10:00:00Z,pressure,0.7,MPa\n"
+    expect(
+        "站点账号跨站 CSV 导入被拒绝",
+        client.post("/api/v1/imports/telemetry-csv", headers=station_headers, content=scoped_csv.encode("utf-8")),
+        403,
+    )
+    expect(
+        "切换站点范围后立即生效",
+        client.patch(
+            f"/api/v1/users/{station_user['id']}",
+            headers=admin_headers,
+            json={"station_ids": ["pump-01"]},
+        ),
+        200,
+    )
+    expect("更新范围访问新站点", client.get("/api/v1/stations/pump-01", headers=station_headers), 200)
+    expect("更新范围失去旧站点", client.get("/api/v1/stations/pump-02", headers=station_headers), 403)
+    # 恢复内置账号，避免本地后续手动验证受到回归用例临时数据影响。
+    expect(
+        "恢复站点账号权限",
+        client.patch(
+            f"/api/v1/users/{station_user['id']}",
+            headers=admin_headers,
+            json={"permissions": ["read"], "station_ids": ["pump-02"]},
+        ),
+        200,
+    )
+
     audit_events = expect("审计查询", client.get("/api/v1/audit-events", headers=admin_headers), 200)
     assert any(event["action"] == "acknowledge" for event in audit_events)
+    assert any(event["action"] == "forbidden" for event in audit_events)
+    workflow_audit_resource_ids = {event["resource_id"] for event in audit_events}
+    assert workflow_order["id"] in workflow_audit_resource_ids
+    assert workflow_review["id"] in workflow_audit_resource_ids
+    assert workflow_report["id"] in workflow_audit_resource_ids
     expect("调度员审计权限", client.get("/api/v1/audit-events", headers=operator_headers), 403)
 
 

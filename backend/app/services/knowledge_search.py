@@ -82,6 +82,14 @@ KNOWLEDGE_RULES: tuple[KnowledgeRule, ...] = (
         keywords=("电流", "电机", "负荷", "保护", "运行记录"),
         detail="核查电机负荷、运行记录和保护状态，必要时交由现场负责人确认。",
     ),
+    KnowledgeRule(
+        source_id="mock-knowledge-confined-space-v1.0",
+        title="有限空间与临水作业安全规程",
+        version="v1.0",
+        metric="safety",
+        keywords=("有限空间", "阀门井", "下井", "通风", "两人以上", "外部监护", "安全"),
+        detail="进入集水井、阀门井等有限空间前必须通风并检测气体；有限空间作业必须两人以上，一人在外监护，全程保持联络。",
+    ),
 )
 
 

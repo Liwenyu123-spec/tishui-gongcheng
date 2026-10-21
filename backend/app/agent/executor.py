@@ -7,15 +7,16 @@
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 
-from ..data.incidents import _INCIDENTS, _NOTIFICATIONS
-from ..data.monitoring import _ALARMS, _STATIONS
-from ..data.supply import _SUPPLY_AREAS
+from ..data.repositories import get_data_source
 from ..dependencies import user_has_station_access
 from ..schemas.agent import AgentAnswer, AgentChatRequest
 from ..services.analysis import compare_variation, metric_label
 from ..services.knowledge_search import search_rules
 from ..services.runtime_env import windows_env
 from .tools import AgentPlan, ReadOnlyTool, ToolName
+
+
+data_source = get_data_source()
 
 
 # 与 Agent 服务保持一致的中文别名，避免工具层只能识别站点编号。
@@ -96,7 +97,7 @@ def _invoke_with_timeout(handler, tool: ReadOnlyTool, context: ToolContext) -> T
 def _visible_station_ids(user: dict) -> set[str]:
     """返回当前账号有权访问的站点编号集合。"""
 
-    return {station["id"] for station in _STATIONS if user_has_station_access(user, station["id"])}
+    return {station["id"] for station in data_source.stations.list() if user_has_station_access(user, station["id"])}
 
 
 def _station_by_id(station_id: str, visible: set[str]) -> dict | None:
@@ -104,7 +105,7 @@ def _station_by_id(station_id: str, visible: set[str]) -> dict | None:
 
     if station_id not in visible:
         return None
-    return next((station for station in _STATIONS if station["id"] == station_id), None)
+    return data_source.stations.get(station_id)
 
 
 def _station_from_message(message: str, visible: set[str]) -> dict | None:
@@ -140,7 +141,7 @@ def _station_from_context(context: ToolContext) -> dict | None:
             if station is not None:
                 return station
         if citation.source_type == "alarm":
-            alarm = next((item for item in _ALARMS if item["id"] == citation.source_id), None)
+            alarm = data_source.alarms.get(citation.source_id)
             if alarm is not None:
                 station = _station_by_id(alarm["station_id"], visible)
                 if station is not None:
@@ -163,17 +164,17 @@ def _filter_source_ids(tool_name: ToolName, source_ids: tuple[str, ...], context
         if item in _GLOBAL_SOURCE_IDS or item in visible:
             allowed.append(item)
             continue
-        alarm = next((row for row in _ALARMS if row["id"] == item), None)
+        alarm = data_source.alarms.get(item)
         if alarm is not None and alarm["station_id"] in visible:
             allowed.append(item)
             continue
-        incident = _INCIDENTS.get(item)
+        incident = data_source.incidents.get(item)
         if incident is not None and incident.station_id in visible:
             allowed.append(item)
             continue
-        notification = _NOTIFICATIONS.get(item)
+        notification = data_source.notifications.get(item)
         if notification is not None:
-            related = _INCIDENTS.get(notification.incident_id)
+            related = data_source.incidents.get(notification.incident_id)
             if related is not None and related.station_id in visible:
                 allowed.append(item)
     return tuple(allowed)
@@ -182,7 +183,7 @@ def _filter_source_ids(tool_name: ToolName, source_ids: tuple[str, ...], context
 def _execute_check_scope(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
     """读取当前账号可见站点范围，不依赖最终答案倒推。"""
 
-    stations = [station for station in _STATIONS if user_has_station_access(context.user, station["id"])]
+    stations = [station for station in data_source.stations.list() if user_has_station_access(context.user, station["id"])]
     source_ids = tuple(station["id"] for station in stations)
     if not stations:
         summary = "当前账号没有可访问站点，后续只读工具将返回空结果"
@@ -204,7 +205,7 @@ def _execute_read_telemetry(tool: ReadOnlyTool, context: ToolContext) -> ToolExe
         and not any(alias in context.request.message for alias in ("集泉", "一泵站", "二泵站", "三泵站", "四泵站", "平定入口"))
     )
     if is_cross_station_trend:
-        visible = [item for item in _STATIONS if user_has_station_access(context.user, item["id"])]
+        visible = [item for item in data_source.stations.list() if user_has_station_access(context.user, item["id"])]
         metric = "flow" if "流量" in context.request.message else "level" if "水位" in context.request.message else "energy" if "能耗" in context.request.message else "pressure"
         comparisons = compare_variation(visible, metric)
         if not comparisons:
@@ -230,7 +231,7 @@ def _execute_read_alarms(tool: ReadOnlyTool, context: ToolContext) -> ToolExecut
     """读取授权站点的告警 Mock，并返回编号摘要。"""
 
     visible = _visible_station_ids(context.user)
-    alarms = [alarm for alarm in _ALARMS if alarm["station_id"] in visible]
+    alarms = [alarm for alarm in data_source.alarms.list() if alarm["station_id"] in visible]
     station = _station_from_context(context)
     # 已解析到目标站点时必须收窄，即使该站点暂无告警也不能回退成全量可见告警。
     if station is not None:
@@ -252,14 +253,14 @@ def _execute_read_event_context(tool: ReadOnlyTool, context: ToolContext) -> Too
     station_ids = {station["id"]} if station is not None else visible
     incidents = [
         incident
-        for incident in _INCIDENTS.values()
+        for incident in data_source.incidents.all().values()
         if incident.station_id in station_ids and incident.status not in {"resolved", "false_positive"}
     ]
     source_ids: list[str] = []
     notification_count = 0
     for incident in incidents:
         source_ids.append(incident.id)
-        related = [item for item in _NOTIFICATIONS.values() if item.incident_id == incident.id]
+        related = [item for item in data_source.notifications.all().values() if item.incident_id == incident.id]
         notification_count += len(related)
         source_ids.extend(item.id for item in related)
     if not incidents:
@@ -271,12 +272,14 @@ def _execute_read_event_context(tool: ReadOnlyTool, context: ToolContext) -> Too
 def _execute_search_knowledge(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
     """调用本地规程检索服务，返回版本化引用编号。"""
 
+    from ..services.knowledge_generate import clean_query
+
     metric = None
-    for alarm in _ALARMS:
+    for alarm in data_source.alarms.list():
         if any(citation.source_id == alarm["id"] for citation in context.answer.citations):
             metric = alarm["metric"]
             break
-    query = context.request.message.strip() or "泵站 异常核查"
+    query = clean_query(context.request.message.strip() or "泵站 异常核查")
     station = _station_from_context(context)
     visible = _visible_station_ids(context.user)
     hits = search_rules(
@@ -329,7 +332,7 @@ def _execute_explain_protocol(tool: ReadOnlyTool, context: ToolContext) -> ToolE
 def _execute_calculate_supply_balance(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
     """按可见片区计算供需差额，选出缺口最大的片区。"""
 
-    rows = [row for row in _SUPPLY_AREAS if user_has_station_access(context.user, row["station_id"])]
+    rows = [row for row in data_source.supply.list() if user_has_station_access(context.user, row["station_id"])]
     if not rows:
         return ToolExecution(tool=tool, status="completed", summary="可见范围内没有可计算的供需片区", source_ids=())
     bottleneck = min(rows, key=lambda row: row["supply"] - row["demand"])
@@ -363,23 +366,72 @@ _TOOL_HANDLERS = {
 
 
 def execute_tool(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
-    """执行一个白名单工具的确定性 Mock 读取，并返回摘要和引用编号。"""
+    """执行一个白名单工具，并提供超时、失败和有限重试保护。"""
 
     handler = _TOOL_HANDLERS.get(tool.name)
     if handler is None:
         return ToolExecution(tool=tool, status="completed", summary="已完成只读工具检查", source_ids=())
-    execution = handler(tool, context)
-    # 统一做一次权限裁剪，防止单个工具实现遗漏时把越权编号发给前端。
-    filtered_ids = _filter_source_ids(tool.name, execution.source_ids, context)
-    if filtered_ids == execution.source_ids:
-        return execution
+    retry_limit = _tool_retry_limit()
+    last_status = "failed"
+    last_error = "未知工具错误"
+
+    for attempt in range(1, retry_limit + 2):
+        try:
+            execution = _invoke_with_timeout(handler, tool, context)
+            # 工具返回失败状态时同样允许有限重试，便于后续替换真实数据适配器。
+            if execution.status not in {"completed", "failed", "timeout"}:
+                execution = ToolExecution(
+                    tool=execution.tool,
+                    status="failed",
+                    summary="工具返回了无法识别的执行状态",
+                    source_ids=execution.source_ids,
+                    read_only=execution.read_only,
+                    error=f"未知状态：{execution.status}",
+                )
+            if execution.status == "completed":
+                suffix = f"；第 {attempt} 次尝试成功" if attempt > 1 else ""
+                execution = ToolExecution(
+                    tool=execution.tool,
+                    status=execution.status,
+                    summary=f"{execution.summary}{suffix}",
+                    source_ids=execution.source_ids,
+                    read_only=execution.read_only,
+                    agent=execution.agent,
+                    attempts=attempt,
+                    error=execution.error,
+                )
+                # 统一做一次权限裁剪，防止单个工具实现遗漏时把越权编号发给前端。
+                filtered_ids = _filter_source_ids(tool.name, execution.source_ids, context)
+                return ToolExecution(
+                    tool=execution.tool,
+                    status=execution.status,
+                    summary=execution.summary,
+                    source_ids=filtered_ids,
+                    read_only=execution.read_only,
+                    agent=execution.agent,
+                    attempts=execution.attempts,
+                    error=execution.error,
+                )
+            last_status = execution.status
+            last_error = execution.error or execution.summary
+        except FutureTimeoutError:
+            last_status = "timeout"
+            last_error = f"工具执行超过 {_tool_timeout_seconds():g} 秒"
+        except Exception as exc:  # noqa: BLE001
+            # 单个专业工具失败不能拖垮整轮 Agent；保留错误摘要并交给上层降级。
+            last_status = "failed"
+            last_error = str(exc) or exc.__class__.__name__
+
+    attempts = retry_limit + 1
+    status_label = "超时" if last_status == "timeout" else "失败"
     return ToolExecution(
-        tool=execution.tool,
-        status=execution.status,
-        summary=execution.summary,
-        source_ids=filtered_ids,
-        read_only=execution.read_only,
-        agent=execution.agent,
+        tool=tool,
+        status=last_status,
+        summary=f"{tool.label}{status_label}，已尝试 {attempts} 次；{last_error}",
+        source_ids=(),
+        read_only=True,
+        attempts=attempts,
+        error=last_error,
     )
 
 

@@ -10,13 +10,14 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
-from ..data.incidents import _INCIDENTS, _NOTIFICATIONS
-from ..data.monitoring import _ALARMS, _STATIONS
-from ..data.supply import _SUPPLY_AREAS
+from ..data.repositories import get_data_source
 from ..dependencies import user_has_station_access
 from ..schemas.agent import AgentAnswer, AgentCitation, AgentChatRequest, AgentIntent, AgentWorkOrderSuggestion
 from .analysis import compare_variation, latest_telemetry, metric_label
 from .knowledge_search import KNOWLEDGE_RULES, KnowledgeHit, search_rules
+
+
+data_source = get_data_source()
 
 
 _CONTROL_WORDS = ("启动", "停止", "开阀", "关阀", "切换阀", "修改压力", "下发", "控制指令")
@@ -59,7 +60,7 @@ def _freshness(observed_at: datetime | None, now: datetime) -> str:
 def _visible_stations(user: dict) -> list[dict]:
     """只返回当前账号有权查看的站点。"""
 
-    return [station for station in _STATIONS if user_has_station_access(user, station["id"])]
+    return [station for station in data_source.stations.list() if user_has_station_access(user, station["id"])]
 
 
 def _find_station(message: str, requested_station_id: str | None, user: dict) -> dict | None:
@@ -74,7 +75,7 @@ def _find_station(message: str, requested_station_id: str | None, user: dict) ->
     if station_id is not None:
         if not user_has_station_access(user, station_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权访问该站点")
-        return next((station for station in _STATIONS if station["id"] == station_id), None)
+        return data_source.stations.get(station_id)
     return next(iter(_visible_stations(user)), None)
 
 
@@ -87,6 +88,8 @@ def _intent(message: str) -> AgentIntent:
         return "supply"
     if any(word in message for word in ("过去", "最近", "趋势", "波动", "变化")):
         return "trend"
+    if any(word in message for word in ("有限空间", "阀门井", "下井", "通风", "两人以上", "监护")):
+        return "knowledge"
     if any(word in message for word in ("检查", "核查", "排查", "异常", "故障", "原因", "怎么办", "建议", "下降", "告警", "规程")):
         return "diagnosis"
     if any(word in message for word in ("当前", "现在", "多少", "状态", "流量", "压力", "水位", "能耗")):
@@ -110,7 +113,7 @@ def _event_context(station_id: str, user: dict) -> tuple[list[str], list[str], l
         return [], [], []
     active_incidents = [
         incident
-        for incident in _INCIDENTS.values()
+        for incident in data_source.incidents.all().values()
         if incident.station_id == station_id and incident.status not in {"resolved", "false_positive"}
     ]
     facts: list[str] = []
@@ -126,7 +129,7 @@ def _event_context(station_id: str, user: dict) -> tuple[list[str], list[str], l
                 detail=incident.description,
             )
         )
-        related_notifications = [item for item in _NOTIFICATIONS.values() if item.incident_id == incident.id]
+        related_notifications = [item for item in data_source.notifications.all().values() if item.incident_id == incident.id]
         for notification in related_notifications:
             facts.append(f"平台通知：{notification.id}，接收人 {notification.recipient}，状态为 {notification.status}")
             citations.append(
@@ -147,12 +150,18 @@ def _knowledge_hits(alarm: dict, message: str = "") -> list[KnowledgeHit]:
 
     from .knowledge_generate import clean_query
 
+    cleaned_message = clean_query(message)
+    safety_terms = ("有限空间", "阀门井", "下井", "通风", "两人以上", "监护")
+    is_safety_question = any(term in cleaned_message for term in safety_terms)
+    # 诊断请求可能同时带有当前告警指标和一个安全追问。安全追问不能被
+    # 告警指标的 metric 加分压掉，否则页面会显示「资料不足」而不是安全规程。
+    search_metric = None if is_safety_question else alarm["metric"]
     query = clean_query(f"{alarm.get('station_name', '')}{alarm['metric']}异常核查 {message}".strip())
     hits = [
         hit
         for hit in search_rules(
             query or f"{alarm['metric']} 异常核查",
-            metric=alarm["metric"],
+            metric=search_metric,
             limit=5,
             station_id=alarm["station_id"],
         )
@@ -370,7 +379,7 @@ def _answer_for_diagnosis(message: str, user: dict, request_id: str, now: dateti
             generated_at=now,
         )
     station = _find_station(message, requested_station_id, user)
-    alarm = next((item for item in _ALARMS if station and item["station_id"] == station["id"]), None)
+    alarm = next((item for item in data_source.alarms.list() if station and item["station_id"] == station["id"]), None)
     if alarm is None:
         return AgentAnswer(
             request_id=request_id,
@@ -383,7 +392,7 @@ def _answer_for_diagnosis(message: str, user: dict, request_id: str, now: dateti
     context_facts, context_recommendations, context_citations = _event_context(alarm["station_id"], user)
     protocol_text, knowledge_citations = _protocol_explanation(alarm, message)
     checks = _diagnosis_checks(alarm)
-    station = next((item for item in _STATIONS if item["id"] == alarm["station_id"]), None)
+    station = data_source.stations.get(alarm["station_id"])
     telemetry = latest_telemetry(station, alarm["metric"]) if station else None
     telemetry_citations = [
         AgentCitation(
@@ -428,8 +437,77 @@ def _answer_for_diagnosis(message: str, user: dict, request_id: str, now: dateti
     )
 
 
+def _answer_for_knowledge(
+    message: str,
+    user: dict,
+    request_id: str,
+    now: datetime,
+    requested_station_id: str | None,
+) -> AgentAnswer:
+    """回答不依赖实时告警的规程问题，保留可回指的知识引用。"""
+
+    from .knowledge_generate import clean_query, select_strong_hits
+
+    visible_station_ids = {station["id"] for station in _visible_stations(user)}
+    station_id = requested_station_id
+    if station_id is None:
+        for alias, candidate in _STATION_ALIASES.items():
+            if alias in message:
+                station_id = candidate
+                break
+    if station_id is not None and not user_has_station_access(user, station_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权访问该站点资料")
+
+    queries = list(dict.fromkeys((message.strip(), clean_query(message))))
+    merged: dict[str, KnowledgeHit] = {}
+    for query in queries:
+        for hit in search_rules(
+            query,
+            limit=5,
+            station_id=station_id,
+            visible_station_ids=visible_station_ids,
+        ):
+            if hit.confidence == "low":
+                continue
+            previous = merged.get(hit.source_id)
+            if previous is None or hit.score > previous.score:
+                merged[hit.source_id] = hit
+    hits = sorted(merged.values(), key=lambda item: (-item.score, item.source_id))
+    strong, gate = select_strong_hits(hits)
+    if not strong:
+        return AgentAnswer(
+            request_id=request_id,
+            intent="knowledge",
+            answer="当前没有检索到足够强的现行规程依据，请补充规程关键词或由人工复核。",
+            facts=[f"检索候选数：{len(hits)}", f"最高相关度：{gate['top_score']}"],
+            confidence="low",
+            pending_items=["补充资料关键词或导入并批准现行规程"],
+            time_range="当前现行规程资料",
+            generated_at=now,
+        )
+    top = strong[0]
+    citations = [
+        AgentCitation(source_type="knowledge", source_id=hit.source_id, title=hit.title, detail=hit.detail)
+        for hit in strong[:3]
+    ]
+    explanation = f"依据《{top.title}》：{top.detail}"
+    return AgentAnswer(
+        request_id=request_id,
+        intent="knowledge",
+        answer=explanation,
+        facts=[f"已检索 {len(strong)} 条可引用规程资料", f"主要依据：{top.title}"],
+        recommendations=["请以引用规程原文和现场安全流程为准，不将本 Mock 结果直接作为操作指令"],
+        citations=citations,
+        protocol_explanation=explanation,
+        confidence="medium",
+        pending_items=["确认规程版本、适用范围和现场安全审批要求"],
+        time_range="当前现行规程资料",
+        generated_at=now,
+    )
+
+
 def _answer_for_supply(user: dict, request_id: str, now: datetime) -> AgentAnswer:
-    rows = [row for row in _SUPPLY_AREAS if user_has_station_access(user, row["station_id"])]
+    rows = [row for row in data_source.supply.list() if user_has_station_access(user, row["station_id"])]
     if not rows:
         return AgentAnswer(
             request_id=request_id,
@@ -493,6 +571,8 @@ def build_answer(payload: AgentChatRequest, user: dict) -> AgentAnswer:
         answer = _answer_for_trend(payload.message, user, request_id, now, payload.station_id, metric_override)
     elif intent == "diagnosis":
         answer = _answer_for_diagnosis(payload.message, user, request_id, now, payload.station_id)
+    elif intent == "knowledge":
+        answer = _answer_for_knowledge(payload.message, user, request_id, now, payload.station_id)
     elif intent == "supply":
         answer = _answer_for_supply(user, request_id, now)
     else:
@@ -546,6 +626,11 @@ def reconcile_answer_with_tools(answer: AgentAnswer, executions: tuple[object, .
         getattr(getattr(execution, "tool", None), "name", "")
         for execution in executions
     }
+    failed_executions = [
+        execution
+        for execution in executions
+        if getattr(execution, "status", "completed") in {"failed", "timeout"}
+    ]
 
     # 只保留本轮工具真正返回或明确允许的引用。策略引用不属于数据检索，
     # 必须始终保留，用来说明只读边界。
@@ -567,13 +652,31 @@ def reconcile_answer_with_tools(answer: AgentAnswer, executions: tuple[object, .
         ],
     }
 
+    # 工具超时或失败时不能把规则初始答案伪装成完整结论；保留已完成的证据，
+    # 但把答案降级为人工复核提示，避免用户误以为所有工具都成功执行。
+    if failed_executions:
+        failed_names = "、".join(
+            getattr(getattr(execution, "tool", None), "label", "未知工具")
+            for execution in failed_executions
+        )
+        updates["answer"] = f"本轮只读分析未完整完成（{failed_names}），暂不能形成完整结论。请稍后重试或转人工复核。"
+        updates["confidence"] = "low"
+        updates["pending_items"] = [
+            *answer.pending_items,
+            "检查失败工具的错误信息，确认后再使用分析结果",
+        ]
+        updates["limitations"] = [
+            *answer.limitations,
+            "本轮存在超时或失败的只读工具，已完成的证据不能代表完整分析",
+        ]
+
     # 诊断必须经过知识检索；没有有效知识来源时不能继续保留规程说明。
     knowledge_tools_used = {"search_knowledge", "explain_protocol"}.intersection(executed_tool_names)
     has_knowledge_evidence = any(
         citation.source_type == "knowledge" and citation.source_id in executed_source_ids
         for citation in filtered_citations
     )
-    if answer.intent == "diagnosis" and knowledge_tools_used and not has_knowledge_evidence:
+    if answer.intent in {"diagnosis", "knowledge"} and knowledge_tools_used and not has_knowledge_evidence:
         updates["protocol_explanation"] = None
         updates["confidence"] = "low"
         updates["pending_items"] = [

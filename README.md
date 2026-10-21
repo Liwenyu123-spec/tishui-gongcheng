@@ -4,13 +4,15 @@
 
 ## 当前版本
 
-- 项目迭代：`v0.10.153`
+- 项目迭代：`v0.10.158`
 - 前端包版本：`0.2.0`
 - 当前模式：本地测试、Mock 数据、只读 Agent、多 Agent 专业节点协作
 - 前端目录：[frontend](./frontend)
 - 后端目录：[backend](./backend)
 
 当前已经可以完成页面浏览、后端接口联调、Agent 流式问答、只读工具分析、知识库检索、方案比较、审核和报告草稿等流程。数据库、真实测点、现场控制和部署仍属于后续阶段。
+
+当前主要业务读取统一经过 `backend/app/data/repositories.py` 的数据访问接口，底层实现仍是 Mock 数据。后续接入数据库或时序数据时，优先替换仓储实现，不直接改动路由、Agent 和前端接口。
 
 ## 已实现页面
 
@@ -119,6 +121,8 @@ AGENT_LLM_ENABLED=1
 AGENT_LLM_ANSWER_ENABLED=1
 AGENT_LLM_MODEL=deepseek-chat
 AGENT_LLM_TIMEOUT=20
+AGENT_TOOL_TIMEOUT=5
+AGENT_TOOL_RETRIES=1
 DEEPSEEK_API_KEY=请配置你自己的密钥
 ```
 
@@ -147,6 +151,7 @@ Agent 流式接口：`POST /api/v1/chat/stream`
 - `start`：返回会话、模式和计划来源；
 - `agent`：返回协调、专业执行和安全复核节点，以及前序 Agent 依赖和当前节点看到的共享证据数量；
 - `tool`：返回实际执行 Agent、只读标记、摘要和引用编号；
+- `retry` / `error` / `fallback`：工具重试、失败/超时和降级为人工复核提示；
 - `result`：返回事实、建议、引用、置信度、数据质量和待确认项；
 - `done`：表示本轮流式分析完成。
 
@@ -244,3 +249,13 @@ git diff --check
 ```
 
 冒烟测试固定使用 Hash Embedding、关闭重排、关闭知识生成和关闭 Agent 外部模型调用，不需要数据库或 DeepSeek API Key。
+
+RAG 质量回归使用 `backend/rag_eval.py`，会覆盖线上问句清洗、Recall@K、MRR、无答案弃答、可回答误拒和引用完整性（来源编号、标题、版本、正文）检查：
+
+```powershell
+cd backend
+python rag_eval.py
+python rag_eval.py --no-rerank  # 对照测试，预期暴露质量退化
+```
+
+评测语料为合成样本，仅用于检索和引用回归，不代表现场资料。

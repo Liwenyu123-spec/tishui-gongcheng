@@ -67,6 +67,15 @@ REWRITE_PROMPT = (
 
 _FILLERS = ("嗯", "啊", "那个", "这个", "帮我看看", "帮我查一下", "请问一下", "请问", "麻烦", "一下")
 _TERM_MAP = {
+    # 现场口语到规程术语的归一化。按最长短语优先替换，避免「下井作业」
+    # 先被「下井」拆坏；这些词也由离线评测集覆盖，防止只在演示问句上调参。
+    "一个人能不能单独下阀门井": "有限空间作业是否必须两人以上",
+    "下井作业": "有限空间作业",
+    "阀门井": "有限空间",
+    "数据断了": "通信中断 数据补录",
+    "出水量": "流量",
+    "变少了": "下降",
+    "变少": "下降",
     "水泵": "泵站",
     "掉下去": "下降",
     "掉了": "下降",
@@ -82,7 +91,7 @@ def clean_query(text: str) -> str:
     query = (text or "").strip()
     for filler in _FILLERS:
         query = query.replace(filler, " ")
-    for src, dst in _TERM_MAP.items():
+    for src, dst in sorted(_TERM_MAP.items(), key=lambda item: len(item[0]), reverse=True):
         query = query.replace(src, dst)
     query = re.sub(r"[?？!！。.~～…]+", " ", query)
     query = re.sub(r"\s+", " ", query).strip()
@@ -448,11 +457,8 @@ def check_groundedness(answer: str, hits: list[KnowledgeHit]) -> dict[str, Any]:
     answer_terms = set(_terms(text))
     overlap = (len(answer_terms & evidence_terms) / len(answer_terms)) if answer_terms else 0.0
 
-    cited_titles: list[str] = []
-    for hit in hits:
-        title_core = re.sub(r"\s+\d+(?:\.\d+)*\s*$", "", hit.title or "").strip() or (hit.title or "")
-        if title_core and title_core in text:
-            cited_titles.append(hit.title)
+    citation_integrity = validate_citations(text, hits)
+    cited_titles = list(citation_integrity["cited_titles"])
 
     warnings: list[str] = []
     evidence_nums = set(re.findall(r"\d+(?:\.\d+)?", evidence))
@@ -467,12 +473,60 @@ def check_groundedness(answer: str, hits: list[KnowledgeHit]) -> dict[str, Any]:
     grounded = overlap >= 0.2 or (bool(cited_titles) and overlap >= 0.12)
     if invented or any("操作指令" in item for item in warnings):
         grounded = False
+    if not citation_integrity["valid"]:
+        warnings.extend(citation_integrity["warnings"])
+        grounded = False
     return {
         "grounded": grounded,
         "overlap": round(overlap, 3),
         "cited_titles": cited_titles,
+        "citation_integrity": citation_integrity,
         "warnings": warnings,
         "status": "grounded" if grounded else "ungrounded",
+    }
+
+
+def validate_citations(answer: str, hits: list[KnowledgeHit]) -> dict[str, Any]:
+    """校验回答引用是否能回指到本轮实际检索证据。
+
+    引用不是把一个编号拼到答案末尾就算完成：来源必须有稳定编号、标题、版本和
+    可核对正文，答案还必须至少引用一个本轮来源。支持标题、来源编号以及常见的
+    ``[1]``/``【1】``位置引用，兼容不同答案整理模型的表达方式。
+    """
+
+    warnings: list[str] = []
+    invalid_sources: list[str] = []
+    cited_titles: list[str] = []
+    cited_source_ids: list[str] = []
+    text = (answer or "").strip()
+
+    for index, hit in enumerate(hits, start=1):
+        source_id = str(hit.source_id or "").strip()
+        title = str(hit.title or "").strip()
+        version = str(hit.version or "").strip()
+        detail = str(_evidence_text(hit) or hit.detail or "").strip()
+        if not source_id or not title or not version or not detail:
+            invalid_sources.append(source_id or f"hit-{index}")
+            continue
+        title_core = re.sub(r"\s+\d+(?:\.\d+)*\s*$", "", title).strip() or title
+        position_ref = bool(re.search(rf"(?:\[{index}\]|【{index}】|资料\s*{index})", text))
+        if title_core in text or title in text or source_id in text or position_ref:
+            cited_titles.append(title)
+            cited_source_ids.append(source_id)
+
+    if invalid_sources:
+        warnings.append(f"存在字段不完整的引用来源：{', '.join(invalid_sources[:5])}")
+    if hits and not cited_source_ids and text:
+        warnings.append("回答没有明确回指本轮检索资料")
+    valid = not invalid_sources and (not hits or bool(cited_source_ids))
+    return {
+        "valid": valid,
+        "total_sources": len(hits),
+        "cited_count": len(cited_source_ids),
+        "cited_source_ids": list(dict.fromkeys(cited_source_ids)),
+        "cited_titles": list(dict.fromkeys(cited_titles)),
+        "invalid_sources": invalid_sources,
+        "warnings": warnings,
     }
 
 

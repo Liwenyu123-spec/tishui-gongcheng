@@ -3,8 +3,11 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from ..data.audit import _AUDIT_EVENTS
+from ..data.repositories import get_data_source
 from ..schemas.audit import AuditEvent
+
+
+data_source = get_data_source()
 
 
 def record_audit(action: str, resource: str, resource_id: str | None, detail: str, operator: str = "mock-admin") -> None:
@@ -15,7 +18,7 @@ def record_audit(action: str, resource: str, resource_id: str | None, detail: st
     # 记录 UTC 时间，便于和事件、通知、审核等其他时间字段对齐。
     occurred_at = datetime.now(timezone.utc)
     # 将完整审计模型追加到内存列表，查询接口会按倒序返回。
-    _AUDIT_EVENTS.append(
+    data_source.audit.append(
         AuditEvent(
             id=audit_id,
             action=action,

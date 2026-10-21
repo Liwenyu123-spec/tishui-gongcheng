@@ -88,8 +88,36 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
         for agent_run in trace.runs:
             yield _sse_event("agent", {"request_id": answer.request_id, **agent_run.as_event()})
         # tool 事件只描述确定性只读步骤，不代表调用了真实现场或外部系统。
+        failed_tools = []
         for execution in executions:
             tool = execution.tool
+            if execution.attempts > 1:
+                yield _sse_event(
+                    "retry",
+                    {
+                        "request_id": answer.request_id,
+                        "name": tool.name,
+                        "label": tool.label,
+                        "agent": execution.agent,
+                        "attempts": execution.attempts,
+                        "status": execution.status,
+                        "error": execution.error,
+                    },
+                )
+            if execution.status in {"failed", "timeout"}:
+                failed_tools.append(execution)
+                yield _sse_event(
+                    "error",
+                    {
+                        "request_id": answer.request_id,
+                        "name": tool.name,
+                        "label": tool.label,
+                        "agent": execution.agent,
+                        "status": execution.status,
+                        "attempts": execution.attempts,
+                        "error": execution.error or execution.summary,
+                    },
+                )
             yield _sse_event(
                 "tool",
                 {
@@ -101,6 +129,18 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
                     "summary": execution.summary,
                     "source_ids": list(execution.source_ids),
                     "read_only": execution.read_only,
+                    "attempts": execution.attempts,
+                    "error": execution.error,
+                },
+            )
+        if failed_tools:
+            yield _sse_event(
+                "fallback",
+                {
+                    "request_id": answer.request_id,
+                    "status": "degraded",
+                    "message": "部分只读工具失败或超时，已降级为人工复核提示",
+                    "failed_tools": [execution.tool.name for execution in failed_tools],
                 },
             )
         # result 事件只返回结构化答案，前端不需要解析自然语言日志。

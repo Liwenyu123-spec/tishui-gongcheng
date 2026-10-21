@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-AgentIntent = Literal["status", "trend", "diagnosis", "supply", "control_rejected", "unknown"]
+AgentIntent = Literal["status", "trend", "diagnosis", "knowledge", "supply", "control_rejected", "unknown"]
 
 
 class AgentChatRequest(BaseModel):

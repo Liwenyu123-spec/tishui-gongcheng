@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from ..data.users import _USERS
+from ..data.repositories import get_data_source
 from ..dependencies import require_roles
 from ..schemas.auth import UserResponse
 from ..schemas.users import UserCreateRequest, UserPatchRequest
@@ -12,13 +12,14 @@ from ..services.audit import record_audit
 
 # 用户管理路由只允许管理员访问，避免普通调度员修改权限配置。
 router = APIRouter(prefix="/api/v1", tags=["管理"])
+data_source = get_data_source()
 
 
 def _public_user(username: str) -> UserResponse:
     """移除密码后生成公开用户响应。"""
 
     # 读取内部用户记录，并在响应模型转换时排除 password 字段。
-    user = _USERS[username]
+    user = data_source.users.users()[username]
     return UserResponse(**{key: value for key, value in user.items() if key != "password"})
 
 
@@ -28,7 +29,7 @@ def users(_: dict = Depends(require_roles("admin"))) -> list[UserResponse]:
 
     # 遍历用户名生成公开列表，密码不会进入响应模型。
     # 返回顺序沿用内存用户字典顺序，便于联调时稳定查看结果。
-    return [_public_user(username) for username in _USERS]
+    return [_public_user(username) for username in data_source.users.users()]
 
 
 @router.post("/users", response_model=UserResponse)
@@ -36,13 +37,13 @@ def create_user(payload: UserCreateRequest, _: dict = Depends(require_roles("adm
     """创建一个内存 Mock 用户并记录审计事件。"""
 
     # 用户名是内存字典键，先做唯一性校验再生成新用户编号。
-    if payload.username in _USERS:
+    if payload.username in data_source.users.users():
         # 用户名作为字典键必须唯一，否则无法区分后续登录账号。
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在")
     # 使用短 UUID 生成便于日志和页面展示的用户编号。
     user_id = f"user-{uuid4().hex[:10]}"
     # 将请求中的身份、角色、功能权限和站点范围保存到 Mock 用户表。
-    _USERS[payload.username] = {
+    data_source.users.users()[payload.username] = {
         "password": payload.password,
         "id": user_id,
         "username": payload.username,
@@ -63,14 +64,14 @@ def update_user(user_id: str, payload: UserPatchRequest, _: dict = Depends(requi
     """只更新请求中实际提供的用户字段。"""
 
     # 用户接口使用 user_id 更新，因此先反向查找字典中的用户名。
-    username = next((name for name, user in _USERS.items() if user["id"] == user_id), None)
+    username = next((name for name, user in data_source.users.users().items() if user["id"] == user_id), None)
     if username is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
     # 排除未提交字段，避免 PATCH 请求把已有权限覆盖为空值。
     updates = payload.model_dump(exclude_none=True)
     # 空 PATCH 不会改变用户记录，但仍按一次合法管理请求继续返回当前用户。
     # 只更新请求实际提供的字段，并保留用户密码等未开放字段。
-    _USERS[username].update(updates)
+    data_source.users.users()[username].update(updates)
     # 用户权限或展示信息变化需要留下审计记录，便于追踪管理操作。
     record_audit("update", "user", user_id, f"修改用户 {username}")
     return _public_user(username)

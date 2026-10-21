@@ -15,6 +15,8 @@
 - 门控：无答案问句是否被 `RAG_ASK_MIN_SCORE` 拦住（abstain accuracy），
   以及可回答问句是否被误拦（误拒率）。这一对指标必须同时看，
   单看召回会把阈值调得越低越好，最后模型被弱相关片段带偏。
+- 引用完整性：正确来源是否携带稳定编号、标题、版本和可核对正文，
+  防止「召回命中了但答案无法回指原文」。
 
 用法：
     python backend/rag_eval.py
@@ -93,7 +95,14 @@ def build_temp_store(corpus: list[dict[str, Any]], provider: str):
     return store, directory
 
 
-def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> dict[str, Any]:
+def evaluate(
+    store,
+    cases: list[dict[str, Any]],
+    *,
+    k: int,
+    min_score: int,
+    known_source_ids: set[str] | None = None,
+) -> dict[str, Any]:
     """跑完所有问句并汇总指标。"""
 
     rank_hits = {1: 0, 3: 0, 5: 0}
@@ -104,16 +113,49 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
     # 前者用来解释阈值调整的影响方向，后者才是产品实际行为。
     abstain_correct = {"score": 0, "live": 0}
     false_reject = {"score": 0, "live": 0}
+    citation_valid = 0
+    citation_errors = 0
     rows: list[dict[str, Any]] = []
     min_rerank_value: float | None = None
 
-    from app.services.knowledge_generate import select_strong_hits
+    from app.services.knowledge_generate import clean_query, select_strong_hits
     from app.services.knowledge_search import KnowledgeHit
+
+    known_source_ids = known_source_ids or set()
+
+    def search_variants(query: str) -> tuple[list[dict[str, Any]], str]:
+        """按线上问句清洗逻辑检索，并合并原问句与归一化问句结果。"""
+
+        variants = list(dict.fromkeys((query.strip(), clean_query(query))))
+        merged: dict[str, dict[str, Any]] = {}
+        for variant in variants:
+            for item in store.search(variant, limit=max(k, 5)):
+                document_id = str(item.get("document_id") or "")
+                previous = merged.get(document_id)
+                if previous is None or int(item.get("score") or 0) > int(previous.get("score") or 0):
+                    merged[document_id] = item
+        return (
+            sorted(merged.values(), key=lambda item: (-int(item.get("score") or 0), str(item.get("document_id") or ""))),
+            clean_query(query),
+        )
+
+    def citation_ok(hit: dict[str, Any] | None, expected: str | None) -> bool:
+        """评测引用最小闭环：编号属于语料，且元数据和正文可供核对。"""
+
+        if hit is None or not expected or str(hit.get("document_id") or "") != expected:
+            return False
+        metadata = hit.get("metadata") or {}
+        return bool(
+            expected in known_source_ids
+            and str(metadata.get("title") or "").strip()
+            and str(metadata.get("version") or "").strip()
+            and str(hit.get("text") or "").strip()
+        )
 
     for case in cases:
         query = case["query"]
         expected = case.get("expected")
-        hits = store.search(query, limit=max(k, 5))
+        hits, effective_query = search_variants(query)
         ids = [hit["document_id"] for hit in hits]
         top_score = hits[0]["score"] if hits else 0
         # 与线上门控保持一致：直接复用生产函数，避免脚本和实现两套逻辑漂移。
@@ -140,6 +182,7 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
         row: dict[str, Any] = {
             "id": case.get("id"),
             "query": query,
+            "effective_query": effective_query,
             "expected": expected,
             "rank": None,
             "top_score": top_score,
@@ -147,6 +190,7 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
             "gated": gated_live,
             "top_ids": ids[:k],
             "note": case.get("note"),
+            "citation_valid": None,
         }
 
         if expected is None:
@@ -162,6 +206,11 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
             if rank is None:
                 row["result"] = "miss"
             else:
+                row["citation_valid"] = citation_ok(hits[rank - 1], expected)
+                if row["citation_valid"]:
+                    citation_valid += 1
+                else:
+                    citation_errors += 1
                 false_reject["score"] += 1 if gated else 0
                 false_reject["live"] += 1 if gated_live else 0
                 if gated_live:
@@ -191,6 +240,8 @@ def evaluate(store, cases: list[dict[str, Any]], *, k: int, min_score: int) -> d
         "false_reject_rate": ratio(false_reject["live"], answerable),
         "abstain_accuracy_score_only": ratio(abstain_correct["score"], abstain_total),
         "false_reject_rate_score_only": ratio(false_reject["score"], answerable),
+        "citation_coverage": ratio(citation_valid, answerable),
+        "citation_integrity_errors": citation_errors,
         "min_score": min_score,
         "min_rerank": min_rerank_value,
         "k": k,
@@ -208,6 +259,8 @@ def print_report(summary: dict[str, Any], *, verbose: bool) -> None:
     print(f"  线上门控：无答案正确弃答 {summary['abstain_accuracy']:.2%}，可回答误拒 {summary['false_reject_rate']:.2%}")
     print(f"  只看分数：无答案正确弃答 {summary['abstain_accuracy_score_only']:.2%}，"
           f"可回答误拒 {summary['false_reject_rate_score_only']:.2%}")
+    print(f"  引用完整性：正确来源可回指 {summary['citation_coverage']:.2%}，"
+          f"字段/来源错误 {summary['citation_integrity_errors']} 条")
 
     def is_success(row: dict[str, Any]) -> bool:
         """命中或正确弃答都算达标；误拒、漏检、误答才算未达标。"""
@@ -221,7 +274,7 @@ def print_report(summary: dict[str, Any], *, verbose: bool) -> None:
         for row in failures:
             if verbose:
                 print(f"  [{row['id']}] {row['result']}｜期望={row['expected']}｜top={row['top_ids']}｜"
-                      f"分数={row['top_score']}｜{row['query']}")
+                      f"分数={row['top_score']}｜引用={row['citation_valid']}｜{row['query']}")
             else:
                 print(f"  [{row['id']}] {row['result']}｜{row['query']}")
     else:
@@ -262,10 +315,12 @@ def main() -> int:
                 print("真实索引不可用，请先启动服务或检查 RAG_CHROMA_DIR", file=sys.stderr)
                 return 2
             print(f"模式：真实索引｜{store.embedding.name()}｜chunks={store.collection.count()}")
+            known_source_ids = {str(case["expected"]) for case in cases if case.get("expected")}
         else:
             corpus = load_corpus(Path(args.corpus))
             store, cleanup_dir = build_temp_store(corpus, args.provider)
             print(f"模式：临时索引｜{store.embedding.name()}｜文档 {len(corpus)}｜chunks={store.collection.count()}")
+            known_source_ids = {str(item["document_id"]) for item in corpus if item.get("document_id")}
 
         from app.services import rag_chroma
 
@@ -273,7 +328,13 @@ def main() -> int:
         # 必须读模块属性：from ... import 拿到的是 import 时的快照，
         # 而 _RERANKER_NAME 是 get_reranker() 执行后才被赋值的。
         rerank_label = rag_chroma._RERANKER_NAME or ("关闭" if rag_chroma._RERANKER_ERROR else "未加载")
-        summary = evaluate(store, cases, k=args.k, min_score=min_score)
+        summary = evaluate(
+            store,
+            cases,
+            k=args.k,
+            min_score=min_score,
+            known_source_ids=known_source_ids,
+        )
         summary["rerank"] = rerank_label
         summary["embedding"] = store.embedding.name()
         summary["mode"] = "live" if args.live else "temp"
@@ -289,6 +350,8 @@ def main() -> int:
             summary["recall_at_3"] >= 0.9
             and summary["abstain_accuracy"] >= 0.75
             and summary["false_reject_rate"] <= 0.1
+            and summary["citation_coverage"] >= 0.9
+            and summary["citation_integrity_errors"] == 0
         ) else 1
     finally:
         if cleanup_dir:

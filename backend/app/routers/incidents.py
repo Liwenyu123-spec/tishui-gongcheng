@@ -4,14 +4,15 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from ..data.incidents import _INCIDENTS, _NOTIFICATIONS, _STATION_BACKUP_CONTACTS, _STATION_CONTACTS, _STATION_HEARTBEATS
-from ..data.monitoring import _STATIONS
+from ..data.incidents import _STATION_BACKUP_CONTACTS, _STATION_CONTACTS, _STATION_HEARTBEATS
+from ..data.repositories import get_data_source
 from ..dependencies import require_roles, require_station_access, user_has_station_access
 from ..schemas.incidents import HeartbeatResponse, Incident, IncidentCreateRequest, Notification, StationContact
 from ..services.audit import record_audit
 
 # 事件路由覆盖站点上报、心跳、联系人、通知处理和事件关闭。
 router = APIRouter(prefix="/api/v1", tags=["站点事件与通知"])
+data_source = get_data_source()
 
 
 def _now() -> datetime:
@@ -36,7 +37,7 @@ def _station_exists(station_id: str) -> bool:
     """判断站点编码是否存在于当前拓扑 Mock 数据。"""
 
     # 站点数据来自当前 Mock 拓扑，后续真实接入时应替换为站点仓储查询。
-    return any(station["id"] == station_id for station in _STATIONS)
+    return data_source.stations.get(station_id) is not None
 
 
 def _find_duplicate(payload: IncidentCreateRequest, station_id: str) -> Incident | None:
@@ -50,7 +51,7 @@ def _find_duplicate(payload: IncidentCreateRequest, station_id: str) -> Incident
     return next(
         (
             incident
-            for incident in _INCIDENTS.values()
+            for incident in data_source.incidents.all().values()
             if incident.station_id == station_id
             and incident.deduplication_key == payload.deduplication_key
             and incident.status not in closed_statuses
@@ -69,7 +70,7 @@ def _create_notifications(incident: Incident, now: datetime) -> None:
         # 失败模拟只用于验收通知兜底；正常上报仍保持 sent 状态。
         delivery_failed = incident.simulate_delivery_failure
         notification = Notification(
-            id=_next_identifier("通知", _NOTIFICATIONS, now),
+            id=_next_identifier("通知", data_source.notifications.all(), now),
             incident_id=incident.id,
             recipient=recipient,
             sent_at=now,
@@ -77,11 +78,11 @@ def _create_notifications(incident: Incident, now: datetime) -> None:
             retry_count=1 if delivery_failed else 0,
             failure_reason="Mock 通知网关模拟失败" if delivery_failed else None,
         )
-        _NOTIFICATIONS[notification.id] = notification
+        data_source.notifications.all()[notification.id] = notification
 
 
 @router.post("/stations/{station_id}/incidents", response_model=Incident)
-def report_incident(station_id: str, payload: IncidentCreateRequest, _: dict = Depends(require_station_access("admin", "operator"))) -> Incident:
+def report_incident(station_id: str, payload: IncidentCreateRequest, _: dict = Depends(require_station_access("admin", "operator", required_permissions=("submit_scheme",)))) -> Incident:
     """接收站点事件并生成平台内通知。"""
 
     # 先确认路径中的站点编号有效，再进入事件去重和创建流程。
@@ -102,7 +103,7 @@ def report_incident(station_id: str, payload: IncidentCreateRequest, _: dict = D
 
     # 首次上报创建新的业务事件记录。
     incident = Incident(
-        id=_next_identifier("事件", _INCIDENTS, now),
+        id=_next_identifier("事件", data_source.incidents.all(), now),
         station_id=station_id,
         category=payload.category,
         level=payload.level,
@@ -116,14 +117,14 @@ def report_incident(station_id: str, payload: IncidentCreateRequest, _: dict = D
         updated_at=now,
     )
     # 先保存事件，再根据站点联系人生成平台通知。
-    _INCIDENTS[incident.id] = incident
+    data_source.incidents.all()[incident.id] = incident
     _create_notifications(incident, now)
     record_audit("report", "incident", incident.id, f"站点上报事件：{station_id} {incident.category}")
     return incident
 
 
 @router.post("/stations/{station_id}/heartbeat", response_model=HeartbeatResponse)
-def receive_station_heartbeat(station_id: str, _: dict = Depends(require_station_access("admin", "operator"))) -> HeartbeatResponse:
+def receive_station_heartbeat(station_id: str, _: dict = Depends(require_station_access("admin", "operator", required_permissions=("submit_scheme",)))) -> HeartbeatResponse:
     """接收站点在线心跳；心跳只表示通信可达，不代表设备运行正常。"""
 
     # 心跳也要求站点真实存在，避免写入无效站点编号。
@@ -180,7 +181,7 @@ def list_incidents(
     """按状态和站点查询事件。"""
 
     # 先读取全部事件，再按账号范围、状态和查询站点逐层过滤。
-    rows = list(_INCIDENTS.values())
+    rows = list(data_source.incidents.all().values())
     # 如果请求显式指定站点，先校验该站点，避免通过查询参数越权探测。
     if station_id and not user_has_station_access(user, station_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权访问该站点")
@@ -203,8 +204,8 @@ def list_notifications(status_filter: str | None = Query(default=None, alias="st
     # 通知必须通过关联事件判断站点范围，不能仅凭通知编号放行。
     rows = [
         notification
-        for notification in _NOTIFICATIONS.values()
-        if (incident := _INCIDENTS.get(notification.incident_id)) is not None
+        for notification in data_source.notifications.all().values()
+        if (incident := data_source.incidents.get(notification.incident_id)) is not None
         and user_has_station_access(user, incident.station_id)
     ]
     if status_filter:
@@ -215,14 +216,14 @@ def list_notifications(status_filter: str | None = Query(default=None, alias="st
 
 
 @router.post("/notifications/{notification_id}/ack", response_model=Notification)
-def acknowledge_notification(notification_id: str, user: dict = Depends(require_roles("admin", "operator"))) -> Notification:
+def acknowledge_notification(notification_id: str, user: dict = Depends(require_roles("admin", "operator", required_permissions=("submit_scheme",)))) -> Notification:
     """确认平台内通知，并同步确认关联事件。"""
 
     # 先查通知，再通过关联事件校验站点权限。
-    notification = _NOTIFICATIONS.get(notification_id)
+    notification = data_source.notifications.get(notification_id)
     if notification is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="通知不存在")
-    incident = _INCIDENTS.get(notification.incident_id)
+    incident = data_source.incidents.get(notification.incident_id)
     if incident is None or not user_has_station_access(user, incident.station_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权处理该站点通知")
     # 重复确认保持幂等；首次确认才更新确认时间和事件状态。
@@ -235,7 +236,7 @@ def acknowledge_notification(notification_id: str, user: dict = Depends(require_
         if incident is not None:
             # 同一事件可能已经升级出多条通知，统一同步事件处置状态。
             # 同一事件可能存在主联系人和升级通知，需要同步显示事件状态。
-            for related in _NOTIFICATIONS.values():
+            for related in data_source.notifications.all().values():
                 if related.incident_id == incident.id:
                     related.incident_status = incident.status
         record_audit("acknowledge", "notification", notification_id, f"确认站点事件通知：{notification.incident_id}")
@@ -243,14 +244,14 @@ def acknowledge_notification(notification_id: str, user: dict = Depends(require_
 
 
 @router.post("/notifications/{notification_id}/retry", response_model=Notification)
-def retry_notification(notification_id: str, user: dict = Depends(require_roles("admin", "operator"))) -> Notification:
+def retry_notification(notification_id: str, user: dict = Depends(require_roles("admin", "operator", required_permissions=("submit_scheme",)))) -> Notification:
     """重试发送失败的 Mock 通知，并保留重试次数和审计记录。"""
 
     # 先定位通知，再通过关联事件校验站点范围，避免只凭通知编号越权重试。
-    notification = _NOTIFICATIONS.get(notification_id)
+    notification = data_source.notifications.get(notification_id)
     if notification is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="通知不存在")
-    incident = _INCIDENTS.get(notification.incident_id)
+    incident = data_source.incidents.get(notification.incident_id)
     if incident is None or not user_has_station_access(user, incident.station_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权处理该站点通知")
     # 只有失败通知可以重试；已发送或已确认通知保持幂等边界。
@@ -265,14 +266,14 @@ def retry_notification(notification_id: str, user: dict = Depends(require_roles(
 
 
 @router.post("/notifications/{notification_id}/escalate", response_model=Notification)
-def escalate_notification(notification_id: str, user: dict = Depends(require_roles("admin", "operator"))) -> Notification:
+def escalate_notification(notification_id: str, user: dict = Depends(require_roles("admin", "operator", required_permissions=("submit_scheme",)))) -> Notification:
     """将未确认的平台内通知升级给站点备用调度联系人。"""
 
     # 升级前先定位原通知，并确认操作者拥有关联站点权限。
-    notification = _NOTIFICATIONS.get(notification_id)
+    notification = data_source.notifications.get(notification_id)
     if notification is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="通知不存在")
-    incident = _INCIDENTS.get(notification.incident_id)
+    incident = data_source.incidents.get(notification.incident_id)
     if incident is None or not user_has_station_access(user, incident.station_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权处理该站点通知")
     # 只有尚未确认且尚未升级的原始通知可以执行升级。
@@ -290,7 +291,7 @@ def escalate_notification(notification_id: str, user: dict = Depends(require_rol
     # 原通知记录升级时间，新通知沿用原事件并把升级等级加一。
     notification.escalated_at = now
     escalated = Notification(
-        id=_next_identifier("通知", _NOTIFICATIONS, now),
+        id=_next_identifier("通知", data_source.notifications.all(), now),
         incident_id=notification.incident_id,
         recipient=backup_recipient,
         channel=notification.channel,
@@ -298,7 +299,7 @@ def escalate_notification(notification_id: str, user: dict = Depends(require_rol
         escalation_level=notification.escalation_level + 1,
     )
     # 保存升级通知；接口返回新通知，前端可直接刷新备用联系人通知状态。
-    _NOTIFICATIONS[escalated.id] = escalated
+    data_source.notifications.all()[escalated.id] = escalated
     record_audit(
         "escalate",
         "notification",
@@ -309,11 +310,11 @@ def escalate_notification(notification_id: str, user: dict = Depends(require_rol
 
 
 @router.post("/incidents/{incident_id}/resolve", response_model=Incident)
-def resolve_incident(incident_id: str, user: dict = Depends(require_roles("admin", "operator"))) -> Incident:
+def resolve_incident(incident_id: str, user: dict = Depends(require_roles("admin", "operator", required_permissions=("submit_scheme",)))) -> Incident:
     """关闭一个站点事件，不触发任何现场控制动作。"""
 
     # 关闭事件前先定位记录并校验站点权限。
-    incident = _INCIDENTS.get(incident_id)
+    incident = data_source.incidents.get(incident_id)
     if incident is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="事件不存在")
     if not user_has_station_access(user, incident.station_id):
@@ -323,7 +324,7 @@ def resolve_incident(incident_id: str, user: dict = Depends(require_roles("admin
     incident.updated_at = _now()
     # 事件关闭后，通知中心中的原始通知和升级通知都应显示已解决。
     # 关联通知同步为已解决，保证通知中心与事件详情一致。
-    for related in _NOTIFICATIONS.values():
+    for related in data_source.notifications.all().values():
         if related.incident_id == incident.id:
             related.incident_status = incident.status
     record_audit("resolve", "incident", incident_id, f"关闭站点事件：{incident.station_id} {incident.category}")

@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/v1", tags=["方案"])
 @router.post("/schemes/compare", response_model=SchemeCompareResponse)
 def compare_schemes(
     payload: SchemeCompareRequest,
-    _: dict = Depends(require_roles("admin", "operator")),
+    _: dict = Depends(require_roles("admin", "operator", required_permissions=("submit_scheme",))),
 ) -> SchemeCompareResponse:
     """按供需、时延、能耗、负荷、风险和约束比较多个方案。"""
 

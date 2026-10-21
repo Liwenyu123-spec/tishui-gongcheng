@@ -5,14 +5,14 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from ..data.monitoring import _STATIONS
-from ..data.work_orders import _WORK_ORDERS
+from ..data.repositories import get_data_source
 from ..dependencies import require_roles, user_has_station_access
 from ..schemas.work_orders import WorkOrderAssignmentUpdateRequest, WorkOrderDraft, WorkOrderDraftRequest, WorkOrderStatusUpdateRequest
 from ..services.audit import record_audit
 
 # 工单接口只生成建议草稿，明确禁止现场设备控制。
 router = APIRouter(prefix="/api/v1", tags=["工单"])
+data_source = get_data_source()
 
 # 状态变更只允许沿着业务流程推进，重复提交当前状态保持幂等。
 _WORK_ORDER_TRANSITIONS: dict[str, set[str]] = {
@@ -33,12 +33,12 @@ def _can_view_order(order: WorkOrderDraft, user: dict) -> bool:
 @router.post("/work-orders/draft", response_model=WorkOrderDraft)
 def create_work_order_draft(
     payload: WorkOrderDraftRequest,
-    user: dict = Depends(require_roles("admin", "operator")),
+    user: dict = Depends(require_roles("admin", "operator", required_permissions=("submit_scheme",))),
 ) -> WorkOrderDraft:
     """根据建议生成工单草稿，不执行现场控制。"""
 
     # 如果请求指定站点，先确认站点编号存在。
-    if payload.station_id and not any(station["id"] == payload.station_id for station in _STATIONS):
+    if payload.station_id and data_source.stations.get(payload.station_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="站点不存在")
     # 站点存在不代表当前账号有权访问，还要执行站点范围检查。
     if payload.station_id and not user_has_station_access(user, payload.station_id):
@@ -50,7 +50,7 @@ def create_work_order_draft(
         created_at=datetime.now(timezone.utc),
     )
     # 草稿先保存到 Mock 存储，后续列表和状态接口才能继续处理同一条工单。
-    _WORK_ORDERS[order.id] = order
+    data_source.work_orders.all()[order.id] = order
     record_audit("create", "work_order", order.id, f"创建工单草稿：{order.title}")
     return order
 
@@ -60,7 +60,7 @@ def list_work_orders(user: dict = Depends(require_roles("admin", "operator"))) -
     """返回当前账号有权查看的工单列表。"""
 
     # 工单站点范围与站点监控、事件查询保持一致，避免跨站点泄露处理任务。
-    return [order for order in reversed(list(_WORK_ORDERS.values())) if _can_view_order(order, user)]
+    return [order for order in reversed(list(data_source.work_orders.all().values())) if _can_view_order(order, user)]
 
 
 @router.get("/work-orders/{work_order_id}", response_model=WorkOrderDraft)
@@ -70,7 +70,7 @@ def get_work_order(
 ) -> WorkOrderDraft:
     """查询单条工单详情。"""
 
-    order = _WORK_ORDERS.get(work_order_id)
+    order = data_source.work_orders.get(work_order_id)
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工单不存在")
     if not _can_view_order(order, user):
@@ -82,11 +82,11 @@ def get_work_order(
 def update_work_order_status(
     work_order_id: str,
     payload: WorkOrderStatusUpdateRequest,
-    user: dict = Depends(require_roles("admin", "operator")),
+    user: dict = Depends(require_roles("admin", "operator", required_permissions=("submit_scheme",))),
 ) -> WorkOrderDraft:
     """推进工单状态，不执行现场设备控制。"""
 
-    order = _WORK_ORDERS.get(work_order_id)
+    order = data_source.work_orders.get(work_order_id)
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工单不存在")
     if not _can_view_order(order, user):
@@ -107,11 +107,11 @@ def update_work_order_status(
 def update_work_order_assignment(
     work_order_id: str,
     payload: WorkOrderAssignmentUpdateRequest,
-    user: dict = Depends(require_roles("admin", "operator")),
+    user: dict = Depends(require_roles("admin", "operator", required_permissions=("submit_scheme",))),
 ) -> WorkOrderDraft:
     """补充工单负责人和截止时间，不执行自动派单或现场控制。"""
 
-    order = _WORK_ORDERS.get(work_order_id)
+    order = data_source.work_orders.get(work_order_id)
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工单不存在")
     if not _can_view_order(order, user):
