@@ -354,7 +354,7 @@ const ask = async (q = input.value) => {
     ElMessage.error('Agent 接口调用失败')
   } finally {
     agentLoading.value = false
-    if (agentRequestState.value === 'loading' || agentRequestState.value === 'cancelling') {
+    if (agentRequestState.value !== 'error') {
       agentRequestState.value = 'idle'
     }
     agentAbortController = null
