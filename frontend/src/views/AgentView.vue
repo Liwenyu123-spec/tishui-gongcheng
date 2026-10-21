@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
 
@@ -69,8 +69,21 @@ interface AgentMessage {
   pending?: boolean
 }
 
+type AgentRequestState = 'idle' | 'loading' | 'cancelling' | 'error'
+
 const input = ref('')
-const agentSessionId = ref(`agent-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`)
+const currentUserKey = (() => {
+  try {
+    const user = JSON.parse(localStorage.getItem('current_user') || '{}') as { id?: string; username?: string }
+    return user.id || user.username || 'anonymous'
+  } catch {
+    return 'anonymous'
+  }
+})()
+const agentSessionStorageKey = `agent-session:${currentUserKey}`
+const createAgentSessionId = () => `agent-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
+const agentSessionId = ref(sessionStorage.getItem(agentSessionStorageKey) || createAgentSessionId())
+sessionStorage.setItem(agentSessionStorageKey, agentSessionId.value)
 const messages = ref<AgentMessage[]>([
   {
     id: 'welcome',
@@ -80,6 +93,9 @@ const messages = ref<AgentMessage[]>([
   },
 ])
 const agentLoading = ref(false)
+const agentRequestState = ref<AgentRequestState>('idle')
+const agentStatusText = ref('可以开始提问')
+const agentCancelRequested = ref(false)
 let agentAbortController: AbortController | null = null
 const reviewId = ref('')
 // 保存最近一次完整的 Agent 答案，工单草稿会从其中读取结构化诊断建议。
@@ -112,6 +128,29 @@ const assignmentForm = ref({ owner: '', due_at: '' })
 const workOrderStatusNames: Record<string, string> = { draft: '草稿', assigned: '已分派', in_progress: '处理中', completed: '已完成', cancelled: '已取消' }
 const confidenceNames: Record<string, string> = { low: '低', medium: '中', high: '高' }
 const freshnessNames: Record<string, string> = { fresh: '新鲜', stale: '已过期', unknown: '未知' }
+
+const updateAgentSession = (value: string | null | undefined) => {
+  if (!value || value === agentSessionId.value) return
+  agentSessionId.value = value
+  sessionStorage.setItem(agentSessionStorageKey, value)
+}
+
+const resetConversation = () => {
+  if (agentLoading.value) return
+  agentSessionId.value = createAgentSessionId()
+  sessionStorage.setItem(agentSessionStorageKey, agentSessionId.value)
+  messages.value = [{
+    id: 'welcome',
+    role: 'ai',
+    text: '您好，我是调度辅助 Agent。当前使用 Mock 数据和只读工具；如已启用模型，将由模型辅助理解问题，但不会直接访问现场或执行控制。请描述您要查询的运行问题。',
+    evidence: '当前模式：规则工具 + 可选大模型路由/答案整理 · 不生成现场控制指令',
+  }]
+  latestAgentAnswer.value = null
+  reviewId.value = ''
+  workOrder.value = null
+  agentRequestState.value = 'idle'
+  agentStatusText.value = '已新建会话，可以开始提问'
+}
 
 // 加载当前账号可见的工单，站点范围由后端再次校验。
 const loadWorkOrders = async () => {
@@ -157,6 +196,9 @@ const ask = async (q = input.value) => {
   // 清空当前预览；已生成的历史工单仍保留在下面的工单列表中。
   workOrder.value = null
   agentLoading.value = true
+  agentRequestState.value = 'loading'
+  agentCancelRequested.value = false
+  agentStatusText.value = '正在连接 Agent 流…'
   agentAbortController = new AbortController()
 
   const handleEvent = (rawEvent: string) => {
@@ -169,10 +211,13 @@ const ask = async (q = input.value) => {
         mode?: string
         planning_source?: string
         execution_mode?: string
+        session_id?: string | null
       }
+      updateAgentSession(start.session_id)
       aiMessage.modelMode = start.mode || 'rule-mock'
       aiMessage.planningSource = start.planning_source || 'rule'
       aiMessage.text = '已定位问题，正在整理事实和引用依据…'
+      agentStatusText.value = '已连接，正在执行只读分析…'
       return
     }
     if (eventName === 'agent') {
@@ -191,6 +236,7 @@ const ask = async (q = input.value) => {
         const step = `${agent.role || agent.agent}：${agent.summary || agent.status}${handoff}`
         aiMessage.steps = [...(aiMessage.steps || []), step]
         aiMessage.evidence = `专业 Agent 协作：${aiMessage.steps.join(' → ')}`
+        agentStatusText.value = `${agent.role || agent.agent}：${agent.summary || agent.status}`
       }
       return
     }
@@ -200,6 +246,7 @@ const ask = async (q = input.value) => {
         const step = tool.summary ? `${tool.label}：${tool.summary}` : tool.label
         aiMessage.steps = [...(aiMessage.steps || []), step]
         aiMessage.evidence = `分析步骤：${aiMessage.steps.join(' → ')}`
+        agentStatusText.value = tool.summary ? `${tool.label}：${tool.summary}` : `正在执行：${tool.label}`
       }
       return
     }
@@ -208,6 +255,7 @@ const ask = async (q = input.value) => {
       const step = `重试：${retry.label || '只读工具'}，已尝试 ${retry.attempts || 2} 次${retry.error ? `（${retry.error}）` : ''}`
       aiMessage.steps = [...(aiMessage.steps || []), step]
       aiMessage.evidence = `分析步骤：${aiMessage.steps.join(' → ')}`
+      agentStatusText.value = step
       return
     }
     if (eventName === 'error') {
@@ -216,6 +264,7 @@ const ask = async (q = input.value) => {
       const step = `工具${status}：${failure.label || '只读工具'} · ${failure.error || '未提供错误原因'}`
       aiMessage.steps = [...(aiMessage.steps || []), step]
       aiMessage.evidence = `分析步骤：${aiMessage.steps.join(' → ')}`
+      agentStatusText.value = step
       return
     }
     if (eventName === 'fallback') {
@@ -223,10 +272,12 @@ const ask = async (q = input.value) => {
       const step = `降级处理：${fallback.message || '部分工具未完成，转人工复核'}`
       aiMessage.steps = [...(aiMessage.steps || []), step]
       aiMessage.evidence = `分析步骤：${aiMessage.steps.join(' → ')}`
+      agentStatusText.value = step
       return
     }
     if (eventName !== 'result') return
     const answer = JSON.parse(data) as AgentAnswer
+    updateAgentSession(answer.session_id)
     latestAgentAnswer.value = answer
     const evidence = [
       ...(aiMessage.modelMode ? [`模型参与：${aiMessage.modelMode}`] : []),
@@ -250,6 +301,7 @@ const ask = async (q = input.value) => {
     aiMessage.text = answer.answer
     aiMessage.evidence = evidence
     aiMessage.pending = false
+    agentStatusText.value = '分析完成，可以继续追问'
   }
 
   try {
@@ -283,26 +335,39 @@ const ask = async (q = input.value) => {
     if (buffer.trim()) handleEvent(buffer)
     if (aiMessage.pending) throw new Error('Agent 没有返回完整结果')
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    const aborted = error instanceof DOMException && error.name === 'AbortError'
+      || error instanceof Error && error.name === 'AbortError'
+    if (aborted || agentCancelRequested.value) {
       // 用户主动停止时保留这条消息，但明确标记为未完成，避免误认为已得到结论。
       aiMessage.text = '本次分析已停止，未生成完整结论。'
       aiMessage.evidence = '可以补充问题后重新发送。'
       aiMessage.pending = false
+      agentRequestState.value = 'idle'
+      agentStatusText.value = '分析已停止，可以修改问题后重新发送'
       return
     }
     aiMessage.text = error instanceof Error ? `Agent 请求失败：${error.message}` : 'Agent 请求失败，请稍后重试'
     aiMessage.evidence = '请确认后端已启动，并检查浏览器是否保留了当前登录 Token。'
     aiMessage.pending = false
+    agentRequestState.value = 'error'
+    agentStatusText.value = '请求失败，可以稍后重试'
     ElMessage.error('Agent 接口调用失败')
   } finally {
     agentLoading.value = false
+    if (agentRequestState.value === 'loading' || agentRequestState.value === 'cancelling') {
+      agentRequestState.value = 'idle'
+    }
     agentAbortController = null
   }
 }
 
 // 中止当前 SSE 请求；后端不会把未完成的回答当作有效结论保存。
 const cancelAgent = () => {
-  agentAbortController?.abort()
+  if (!agentAbortController || !agentLoading.value) return
+  agentCancelRequested.value = true
+  agentRequestState.value = 'cancelling'
+  agentStatusText.value = '正在停止当前分析…'
+  agentAbortController.abort()
 }
 
 const createWorkOrder = async () => {
@@ -416,6 +481,12 @@ const saveAssignment = async () => {
 onMounted(() => {
   loadWorkOrders()
   loadStations()
+})
+
+onBeforeUnmount(() => {
+  // 离开页面时中止未完成的流，避免切换页面后仍占用请求和更新旧消息。
+  agentCancelRequested.value = true
+  agentAbortController?.abort()
 })
 
 const formatTime = (value: string) => value.slice(11, 16)
