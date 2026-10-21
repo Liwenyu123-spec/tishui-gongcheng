@@ -28,6 +28,10 @@ class SpecialistRun:
     summary: str
     tool_names: tuple[str, ...] = ()
     iterations: int = 1
+    # 当前节点读取过的前序 Agent，明确共享状态的交接关系。
+    depends_on: tuple[str, ...] = ()
+    # 当前节点启动时看到的共享只读工具证据数量。
+    shared_evidence_count: int = 0
 
     def as_event(self) -> dict[str, object]:
         """转换成 SSE 可直接返回的结构。"""
@@ -39,6 +43,8 @@ class SpecialistRun:
             "summary": self.summary,
             "tool_names": list(self.tool_names),
             "iterations": self.iterations,
+            "depends_on": list(self.depends_on),
+            "shared_evidence_count": self.shared_evidence_count,
         }
 
 
@@ -91,7 +97,7 @@ class SpecialistAgent:
         return tuple(tool for tool in plan.tools if tool.name in allowed)
 
     def run(self, plan: AgentPlan, context: ToolContext) -> tuple[SpecialistRun, tuple[ToolExecution, ...]]:
-        """执行当前 Agent 的工具，并将结果写回共享状态。"""
+        """执行当前 Agent 的工具，并读取前序节点交接的共享状态快照。"""
 
         tools = self._tools_for_plan(plan)
         if not tools:
@@ -102,6 +108,8 @@ class SpecialistAgent:
                     status="skipped",
                     summary="本轮计划没有分配该 Agent 的工具",
                     tool_names=(),
+                    depends_on=context.shared_agents,
+                    shared_evidence_count=len(context.shared_executions),
                 ),
                 (),
             )
@@ -112,7 +120,12 @@ class SpecialistAgent:
             # 工具仍由统一执行层完成权限裁剪，但执行归属明确记录到专业 Agent。
             executions.append(replace(execution, agent=self.name))
         completed = sum(1 for execution in executions if execution.status == "completed")
-        summary = f"完成 {completed}/{len(executions)} 个只读步骤"
+        handoff = (
+            f"；已接收 {len(context.shared_executions)} 条共享证据"
+            if context.shared_executions
+            else ""
+        )
+        summary = f"完成 {completed}/{len(executions)} 个只读步骤{handoff}"
         return (
             SpecialistRun(
                 agent=self.name,
@@ -120,6 +133,8 @@ class SpecialistAgent:
                 status="completed" if completed == len(executions) else "partial",
                 summary=summary,
                 tool_names=tuple(tool.name for tool in tools),
+                depends_on=context.shared_agents,
+                shared_evidence_count=len(context.shared_executions),
             ),
             tuple(executions),
         )
@@ -133,8 +148,12 @@ class SafetyReviewAgent(SpecialistAgent):
         answer: AgentAnswer,
         executions: tuple[ToolExecution, ...],
         tool_run: SpecialistRun | None,
+        shared_agents: tuple[str, ...] = (),
     ) -> SpecialistRun:
+        """复核共享状态中的全部工具证据和前序 Agent 交接关系。"""
+
         unsafe = [execution for execution in executions if not execution.read_only]
+        evidence_note = f"；已复核 {len(shared_agents)} 个 Agent 的共享证据"
         if unsafe:
             return SpecialistRun(
                 agent=self.name,
@@ -143,12 +162,14 @@ class SafetyReviewAgent(SpecialistAgent):
                 summary="复核拒绝：发现非只读执行结果，未允许进入最终答案",
                 tool_names=tool_run.tool_names if tool_run else (),
                 iterations=1,
+                depends_on=shared_agents,
+                shared_evidence_count=len(executions),
             )
 
         if answer.intent == "control_rejected":
-            summary = "复核通过：控制请求已被边界工具拦截，未生成现场写指令"
+            summary = f"复核通过：控制请求已被边界工具拦截，未生成现场写指令{evidence_note}"
         else:
-            summary = f"复核通过：{len(executions)} 个工具结果均为只读证据"
+            summary = f"复核通过：{len(executions)} 个工具结果均为只读证据{evidence_note}"
         return SpecialistRun(
             agent=self.name,
             role=self.role,
@@ -156,6 +177,8 @@ class SafetyReviewAgent(SpecialistAgent):
             summary=summary,
             tool_names=tool_run.tool_names if tool_run else (),
             iterations=1,
+            depends_on=shared_agents,
+            shared_evidence_count=len(executions),
         )
 
 
@@ -181,24 +204,41 @@ class DispatchWorkflow:
         safety_run: SpecialistRun | None = None
 
         for name in self._agent_order():
+            # 每个节点只拿到前序结果的不可变快照；本节点新结果完成后再写回共享列表。
+            node_context = replace(
+                context,
+                shared_executions=tuple(executions),
+                shared_agents=tuple(run.agent for run in runs),
+            )
             if name == "safety_review_agent":
                 # 先执行控制边界工具（如果计划包含），再复核前面所有共享结果。
                 agent = SpecialistAgent(name)
-                tool_run, tool_executions = agent.run(self.plan, context)
+                tool_run, tool_executions = agent.run(self.plan, node_context)
                 executions.extend(tool_executions)
-                safety_run = SafetyReviewAgent(name).review(context.answer, tuple(executions), tool_run)
+                safety_run = SafetyReviewAgent(name).review(
+                    node_context.answer,
+                    tuple(executions),
+                    tool_run,
+                    shared_agents=node_context.shared_agents,
+                )
                 # 工具事件会单独展示；Agent 事件只保留合并后的最终复核状态，
                 # 避免控制请求在前端出现两个同名安全 Agent 节点。
                 runs.append(safety_run)
                 continue
 
-            run, tool_executions = SpecialistAgent(name).run(self.plan, context)
+            run, tool_executions = SpecialistAgent(name).run(self.plan, node_context)
             executions.extend(tool_executions)
             # 未分配工具的澄清 Agent 也保留节点记录，方便前端说明流程为何结束。
             runs.append(run)
 
         # 没有显式安全 Agent 的简单问题也必须经过一次只读复核。
         if safety_run is None:
-            runs.append(SafetyReviewAgent("safety_review_agent").review(context.answer, tuple(executions), None))
+            safety_run = SafetyReviewAgent("safety_review_agent").review(
+                context.answer,
+                tuple(executions),
+                None,
+                shared_agents=tuple(run.agent for run in runs),
+            )
+            runs.append(safety_run)
 
         return tuple(executions), CollaborationTrace(runs=tuple(runs))

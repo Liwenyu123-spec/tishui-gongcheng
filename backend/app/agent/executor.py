@@ -32,11 +32,15 @@ _GLOBAL_SOURCE_IDS = {"mock-readonly-policy"}
 
 @dataclass(frozen=True)
 class ToolContext:
-    """一次工具执行所需的账号、问题和答案上下文。"""
+    """一次工具执行所需的账号、问题和共享协作状态。"""
 
     user: dict
     request: AgentChatRequest
     answer: AgentAnswer
+    # 前序 Agent 已经写入共享状态的工具证据；只读快照，避免节点私自改写结果。
+    shared_executions: tuple["ToolExecution", ...] = ()
+    # 已经完成或跳过的前序 Agent，供当前节点形成可追踪的交接关系。
+    shared_agents: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
