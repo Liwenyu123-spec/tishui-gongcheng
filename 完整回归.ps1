@@ -41,6 +41,24 @@ $env:TEMP = $tempRoot
 $env:TMP = $tempRoot
 $env:TMPDIR = $tempRoot
 
+function ConvertTo-CommandLine {
+    param([string[]]$Arguments)
+
+    # 把参数数组拼成命令行字符串，含空格或引号的参数用双引号包裹。
+    # Windows PowerShell 5.1（.NET Framework）的 ProcessStartInfo 没有
+    # ArgumentList 属性，只有 Arguments 字符串，因此这里统一走字符串拼装，
+    # 让脚本在 PowerShell 5.1 和 7 下行为一致。
+    $parts = foreach ($item in $Arguments) {
+        if ($item -match '[\s"]') {
+            '"' + ($item -replace '"', '\"') + '"'
+        }
+        else {
+            $item
+        }
+    }
+    return ($parts -join ' ')
+}
+
 function Invoke-BoundedCommand {
     param(
         [string]$Name,
@@ -58,9 +76,8 @@ function Invoke-BoundedCommand {
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.CreateNoWindow = $true
-    foreach ($argument in $Arguments) {
-        [void]$startInfo.ArgumentList.Add($argument)
-    }
+    # 用 Arguments 字符串传参，避免 5.1 下 ArgumentList 为 $null 直接抛错。
+    $startInfo.Arguments = ConvertTo-CommandLine $Arguments
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     [void]$process.Start()

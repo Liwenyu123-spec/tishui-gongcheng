@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-- 项目迭代：`v0.10.159`
+- 项目迭代：`v0.10.162`
 - 前端包版本：`0.2.0`
 - 当前模式：本地测试、Mock 数据、只读 Agent、多 Agent 专业节点协作
 - 前端目录：[frontend](./frontend)
@@ -230,7 +230,36 @@ Agent 后端现在具备共享状态式的专业节点协作：协调 Agent 先�
 
 Agent 页面同一轮对话会自动携带进程内 `session_id`，支持“二泵站压力是多少”后继续追问“那流量呢”。会话按用户隔离，只保留最近问句和站点上下文，服务重启后清空，不写入数据库。
 
-提交前应至少执行：
+## 提交前检查与完整回归
+
+分两层，避免每次提交都等最慢的检查：
+
+**日常提交（提交前门禁）**
+
+安装一次即可由 `git commit` 自动触发：
+
+```powershell
+.\安装提交检查.ps1
+```
+
+也可以用批处理双击安装：`安装提交检查.bat`。门禁依次执行后端编译、pytest 单元用例、Mock 冒烟和 `git diff --check`，约 1 分钟；只改文档的提交会自动跳过代码检查。临时绕过用 `git commit --no-verify` 或设置环境变量 `SKIP_PRECOMMIT=1`，需要卸载时执行 `.\安装提交检查.ps1 -卸载`。
+
+手工执行同一套检查：
+
+```powershell
+python scripts\pre_commit_check.py
+python scripts\pre_commit_check.py --full   # 追加 RAG 质量回归
+```
+
+**发布前或里程碑前（完整回归）**
+
+```powershell
+.\完整回归.ps1
+```
+
+依次执行前端生产构建、后端编译、pytest 单元用例、Mock 冒烟回归、RAG 质量回归和 `git diff --check`，每个子任务都有硬超时，不会因为某个子进程卡住而停在终端。
+
+单独跑某一项：
 
 ```powershell
 cd frontend
@@ -240,6 +269,7 @@ npm.cmd run build
 ```powershell
 cd ..\backend
 ..\.venv\Scripts\python.exe -m compileall -q app
+..\.venv\Scripts\python.exe -m pytest tests -q
 ..\.venv\Scripts\python.exe smoke_test.py
 ```
 
@@ -247,6 +277,8 @@ cd ..\backend
 cd ..
 git diff --check
 ```
+
+验收时对照 [Mock 阶段回归验收清单](./Mock阶段回归验收清单.md)：标「自动化」的条目已由脚本覆盖，标「待人工验证」的页面交互需要人工点击确认。
 
 冒烟测试固定使用 Hash Embedding、关闭重排、关闭知识生成和关闭 Agent 外部模型调用，不需要数据库或 DeepSeek API Key。
 
