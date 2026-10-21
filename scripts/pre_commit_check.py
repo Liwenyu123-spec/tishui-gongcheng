@@ -31,6 +31,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND_DIR = ROOT / "backend"
 
+# 控制台代码页可能是 GBK，这里显式把标准输出切到 UTF-8，
+# 否则 git 钩子在终端里打印的中文提示会变成乱码。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 
 def python_executable() -> Path:
     """返回项目虚拟环境里的解释器；缺失时回退到当前解释器。
