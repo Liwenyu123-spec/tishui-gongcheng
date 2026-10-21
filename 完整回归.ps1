@@ -1,16 +1,24 @@
-<##
+﻿<##
 .SYNOPSIS
     执行第九步完整回归，并为每个子任务设置硬超时。
 
 .DESCRIPTION
     每个检查都在独立 Python/Node 进程中运行。某个依赖或测试客户端卡住时，
     脚本会结束该子进程并继续输出明确的失败原因，不会占住当前终端。
+
+    检查顺序：前端生产构建 → 后端编译 → pytest 单元用例 → Mock 冒烟回归
+    → RAG 质量回归 → git diff --check。
+
+    日常提交只需要跑提交前门禁（scripts\pre_commit_check.py，由
+    安装提交检查.ps1 装成 git pre-commit 钩子），它跳过前端构建和 RAG 评测；
+    本脚本用于发布或里程碑前的完整回归。
 ##>
 
 param(
     [int]$SmokeTimeoutSeconds = 120,
     [int]$RagTimeoutSeconds = 180,
-    [int]$BuildTimeoutSeconds = 120
+    [int]$BuildTimeoutSeconds = 120,
+    [int]$UnitTimeoutSeconds = 120
 )
 
 $ErrorActionPreference = 'Stop'
@@ -76,6 +84,8 @@ try {
     # 通过 cmd 调用 npm.cmd，避免 ProcessStartInfo 误选 frontend/node_modules/.bin 下的 npm shim。
     Invoke-BoundedCommand '前端生产构建' 'cmd.exe' @('/d', '/c', 'npm.cmd', 'run', 'build') $frontendDir $BuildTimeoutSeconds
     Invoke-BoundedCommand '后端编译' $pythonExe @('-m', 'compileall', '-q', 'app') $backendDir $BuildTimeoutSeconds
+    # 单元用例先跑：失败信息比冒烟脚本更短，能先定位到具体断言。
+    Invoke-BoundedCommand '后端单元用例' $pythonExe @('-m', 'pytest', 'tests', '-q') $backendDir $UnitTimeoutSeconds
     Invoke-BoundedCommand 'Mock 冒烟回归' $pythonExe @('-u', 'smoke_test.py') $backendDir $SmokeTimeoutSeconds
     Invoke-BoundedCommand 'RAG 质量回归' $pythonExe @('rag_eval.py', '--provider', 'hash') $backendDir $RagTimeoutSeconds
     Invoke-BoundedCommand '差异检查' 'git' @('diff', '--check') $projectRoot 30
