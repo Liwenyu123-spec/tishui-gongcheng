@@ -78,6 +78,12 @@ function Invoke-BoundedCommand {
     $startInfo.CreateNoWindow = $true
     # 用 Arguments 字符串传参，避免 5.1 下 ArgumentList 为 $null 直接抛错。
     $startInfo.Arguments = ConvertTo-CommandLine $Arguments
+    # 子进程输出统一按 UTF-8 处理：Python 在输出被重定向时默认使用系统代码页
+    # （简体中文环境为 GBK），不显式指定会让 RAG 评测等中文输出在终端变成乱码。
+    $startInfo.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $startInfo.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
+    $startInfo.EnvironmentVariables['PYTHONIOENCODING'] = 'utf-8'
+    $startInfo.EnvironmentVariables['PYTHONUTF8'] = '1'
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     [void]$process.Start()
