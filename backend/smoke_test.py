@@ -608,6 +608,12 @@ def run_smoke_checks() -> None:
     reviewed_report = expect("报告标记复核", client.patch(f"/api/v1/reports/{report['id']}/status", headers=reviewer_headers, json={"status": "reviewed"}), 200)
     archived_report = expect("报告归档", client.patch(f"/api/v1/reports/{report['id']}/status", headers=reviewer_headers, json={"status": "archived"}), 200)
     assert reviewed_report["metrics"] == archived_report["metrics"] and archived_report["status"] == "archived"
+    # 报告进入复核流程后正文冻结，避免已审核内容被悄悄改写。
+    expect(
+        "已归档报告不能编辑正文",
+        client.patch(f"/api/v1/reports/{report['id']}", headers=operator_headers, json={"summary": "归档后篡改"}),
+        409,
+    )
 
     # 管理员可以查看全部站点；站点账号只能访问授权的二泵站。
     stations = expect("管理员站点列表", client.get("/api/v1/stations", headers=admin_headers), 200)
@@ -615,6 +621,47 @@ def run_smoke_checks() -> None:
     expect("站点账号访问授权站点", client.get("/api/v1/stations/pump-02", headers=station_headers), 200)
     expect("站点账号访问未授权站点", client.get("/api/v1/stations/pump-01", headers=station_headers), 403)
     expect("审核员访问告警接口", client.get("/api/v1/alarms", headers=reviewer_headers), 403)
+
+    # 当前用户接口：前端刷新页面后靠它恢复账号信息，响应不能带密码字段。
+    current_user = expect("当前用户信息", client.get("/api/v1/auth/me", headers=admin_headers), 200)
+    assert current_user["username"] == "admin" and "password" not in current_user
+
+    # 拓扑接口按站点范围过滤：管理员看到完整链路，站点账号只剩本站节点、没有连接边。
+    admin_topology = expect("管理员拓扑", client.get("/api/v1/topology", headers=admin_headers), 200)
+    assert admin_topology["version"] and admin_topology["nodes"]
+    assert len(admin_topology["edges"]) == len(admin_topology["nodes"]) - 1
+    scoped_topology = expect("站点账号拓扑范围", client.get("/api/v1/topology", headers=station_headers), 200)
+    assert [node["station_id"] for node in scoped_topology["nodes"]] == ["pump-02"]
+    assert scoped_topology["edges"] == []
+
+    # 供需结余必须等于供水量减需求量，瓶颈说明以结余最小的片区开头。
+    supply = expect("片区供需结余", client.get("/api/v1/supply/balance", headers=admin_headers), 200)
+    assert supply["areas"]
+    assert abs(supply["total_balance"] - (supply["total_supply"] - supply["total_demand"])) < 1e-6
+    bottleneck = min(supply["areas"], key=lambda area: area["balance"])
+    assert supply["bottleneck_summary"].startswith(bottleneck["area"])
+
+    # 遥测按站点支持的测点生成时间序列；不支持的测点应返回 400，不能编造数据。
+    telemetry = expect("站点遥测序列", client.get("/api/v1/stations/pump-02/telemetry", headers=operator_headers), 200)
+    assert telemetry and {point["metric"] for point in telemetry} <= {"flow", "pressure", "level", "energy"}
+    assert all(point["unit"] and point["observed_at"] for point in telemetry)
+    expect(
+        "不支持测点被拒绝",
+        client.get("/api/v1/stations/pump-01/telemetry", headers=operator_headers, params={"metric": "level"}),
+        400,
+    )
+    expect("站点账号越权遥测被拒绝", client.get("/api/v1/stations/pump-01/telemetry", headers=station_headers), 403)
+
+    # 心跳只表示通信可达；站点账号只有 read 权限，不能替调度上报心跳。
+    heartbeat = expect("站点心跳", client.post("/api/v1/stations/pump-02/heartbeat", headers=operator_headers), 200)
+    assert heartbeat["status"] == "online" and heartbeat["last_seen_at"]
+    expect(
+        "站点账号无心跳权限",
+        client.post("/api/v1/stations/pump-02/heartbeat", headers=station_headers),
+        403,
+    )
+    contacts = expect("站点联系人", client.get("/api/v1/stations/pump-02/contacts", headers=station_headers), 200)
+    assert any(item["contact_type"] == "backup" for item in contacts)
 
     # CSV 接口分别检查完整有效行和缺字段场景，确认只校验、不落库。
     valid_csv = "station_id,observed_at,metric,value,unit\npump-02,2026-10-18T10:00:00Z,pressure,0.7,MPa\n"
@@ -641,6 +688,9 @@ def run_smoke_checks() -> None:
     alarm_id = alarms[0]["id"]
     acknowledged_alarm = expect("告警确认", client.post(f"/api/v1/alarms/{alarm_id}/ack", headers=operator_headers), 200)
     assert acknowledged_alarm["status"] == "confirmed"
+    # 详情接口才返回处理说明；列表接口刻意隐藏这两个字段，避免列表过宽。
+    alarm_detail = expect("告警详情", client.get(f"/api/v1/alarms/{alarm_id}", headers=operator_headers), 200)
+    assert alarm_detail["description"] and alarm_detail["suggested_action"]
 
     # 站点事件首次上报生成通知；相同指纹再次上报应合并而不是生成新事件。
     incident_payload = {
@@ -1003,6 +1053,17 @@ def run_smoke_checks() -> None:
     station_reports = expect("站点账号报告列表过滤", client.get("/api/v1/reports", headers=station_headers), 200)
     assert report["id"] not in {item["id"] for item in station_reports}
     expect("站点账号读取全站报告被拒绝", client.get(f"/api/v1/reports/{report['id']}", headers=station_headers), 403)
+    # 站点账号只有 read 权限：上报事件和确认告警都必须被拒绝，不能绕过 submit_scheme。
+    expect(
+        "站点账号不能上报事件",
+        client.post(
+            "/api/v1/stations/pump-02/incidents",
+            headers=station_headers,
+            json={"category": "smoke-scope", "level": "low", "description": "越权上报"},
+        ),
+        403,
+    )
+    expect("站点账号不能确认告警", client.post(f"/api/v1/alarms/{alarm_id}/ack", headers=station_headers), 403)
 
     # 管理员上传的其他站点照片不能出现在站点账号列表中；照片文件写入临时目录。
     from app.services import photo_store
