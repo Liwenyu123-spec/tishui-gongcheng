@@ -526,6 +526,12 @@ const formatLocalDateTime = (value: string) => {
         </div>
         <div v-if="m.role==='ai' && m.evidence" class="evidence" style="white-space:pre-line">{{m.evidence}}</div>
       </div>
+      <div class="agent-toolbar">
+        <span :class="['agent-status', `agent-status--${agentRequestState}`]">
+          <i></i>{{ agentStatusText }}
+        </span>
+        <el-button class="button-stable button-stable--md" size="small" plain :disabled="agentLoading" @click="resetConversation">新建会话</el-button>
+      </div>
       <div style="padding:12px 18px 0;display:flex;gap:8px;align-items:center">
         <span class="muted" style="font-size:13px;white-space:nowrap">分析站点</span>
         <el-select v-model="selectedStationId" clearable filterable placeholder="按问题内容识别" style="width:210px">
@@ -535,7 +541,7 @@ const formatLocalDateTime = (value: string) => {
       <div style="padding:12px 18px;display:flex;gap:8px">
         <el-input v-model="input" :disabled="agentLoading" placeholder="例如：过去 2 小时哪个泵站压力波动最大？" @keyup.enter="ask()" />
         <el-button type="primary" :loading="agentLoading" :disabled="agentLoading" @click="ask()">发送</el-button>
-        <el-button v-if="agentLoading" type="warning" plain @click="cancelAgent">停止分析</el-button>
+        <el-button v-if="agentLoading" class="button-stable button-stable--md" type="warning" plain :loading="agentRequestState === 'cancelling'" :disabled="agentRequestState === 'cancelling'" @click="cancelAgent">停止分析</el-button>
       </div>
     </div>
 
@@ -600,4 +606,11 @@ const formatLocalDateTime = (value: string) => {
 .analysis-steps { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; align-items:center; }
 .analysis-steps__title { color:#5be0ca; font-size:13px; }
 .analysis-step { padding:3px 7px; border:1px solid #265464; border-radius:999px; color:#9bc5ca; background:#0b2431; font-size:12px; }
+.agent-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 18px 0; }
+.agent-status { display:flex; align-items:center; gap:7px; min-height:28px; color:#91abbc; font-size:13px; }
+.agent-status i { width:7px; height:7px; border-radius:50%; background:#7f9aab; }
+.agent-status--loading i, .agent-status--cancelling i { background:#f3b664; box-shadow:0 0 8px rgba(243,182,100,.55); }
+.agent-status--error { color:#ffadad; }
+.agent-status--error i { background:#f37878; }
+.agent-status--idle i { background:#49d59e; }
 </style>
