@@ -176,9 +176,19 @@ const ask = async (q = input.value) => {
       return
     }
     if (eventName === 'agent') {
-      const agent = JSON.parse(data) as { agent?: string; role?: string; summary?: string; status?: string }
+      const agent = JSON.parse(data) as {
+        agent?: string
+        role?: string
+        summary?: string
+        status?: string
+        depends_on?: string[]
+        shared_evidence_count?: number
+      }
       if (agent.agent && agent.status && agent.status !== 'skipped') {
-        const step = `${agent.role || agent.agent}：${agent.summary || agent.status}`
+        const handoff = agent.depends_on?.length
+          ? `；交接自 ${agent.depends_on.join('、')}，共享证据 ${agent.shared_evidence_count || 0} 条`
+          : ''
+        const step = `${agent.role || agent.agent}：${agent.summary || agent.status}${handoff}`
         aiMessage.steps = [...(aiMessage.steps || []), step]
         aiMessage.evidence = `专业 Agent 协作：${aiMessage.steps.join(' → ')}`
       }

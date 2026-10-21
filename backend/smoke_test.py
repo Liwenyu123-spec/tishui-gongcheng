@@ -707,6 +707,7 @@ def run_smoke_checks() -> None:
             assert "规程说明" in agent_response.text or '"protocol_explanation"' in agent_response.text
             assert "mock-knowledge-flow-v1.2" in agent_response.text
         assert '"coordinator": "dispatch_coordinator"' in agent_response.text
+        assert '"shared_state": true' in agent_response.text
         assert '"allowed_tools":' in agent_response.text
         assert '"planning_source": "rule"' in agent_response.text
         assert '"read_only": true' in agent_response.text
@@ -734,6 +735,11 @@ def run_smoke_checks() -> None:
     assert diagnosis_tools.text.find('"name": "read_alarms"') < diagnosis_tools.text.find('"name": "search_knowledge"')
     assert diagnosis_tools.text.find('"name": "search_knowledge"') < diagnosis_tools.text.find('"name": "explain_protocol"')
     assert "已整理规程说明" in diagnosis_tools.text
+    # 多 Agent 必须通过不可变共享状态交接前序证据，安全复核也必须看到完整协作链。
+    assert '"depends_on": ["dispatch_coordinator"]' in diagnosis_tools.text
+    assert '"shared_evidence_count": 1' in diagnosis_tools.text
+    assert "已接收 1 条共享证据" in diagnosis_tools.text
+    assert "已复核 3 个 Agent 的共享证据" in diagnosis_tools.text
     procedure_question = client.post("/api/v1/chat/stream", headers=admin_headers, json={"message": "二泵站按规程应该怎么核查？"})
     assert procedure_question.status_code == 200
     assert procedure_question.text.find('"name": "search_knowledge"') < procedure_question.text.find('"name": "explain_protocol"')
