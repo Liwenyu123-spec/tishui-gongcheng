@@ -9,6 +9,16 @@ interface HealthResponse {
   service: string
   environment: string
   timestamp: string
+  startup?: StartupStatus | null
+}
+
+interface StartupStatus {
+  status: 'not_started' | 'starting' | 'ready' | 'degraded' | 'failed' | string
+  mode?: string | null
+  phase?: string | null
+  message?: string | null
+  elapsed_seconds?: number | null
+  error?: string | null
 }
 
 interface StationSummary {
@@ -47,6 +57,10 @@ interface TelemetryPoint {
 const router = useRouter()
 const refresh = ref('未检查')
 const healthStatus = ref('检查中')
+const startupStatus = ref<StartupStatus>({
+  status: 'not_started',
+  message: '尚未读取单地址启动状态',
+})
 const healthLoading = ref(false)
 const sourceLabel = ref('本地示例')
 const stationRows = ref<StationSummary[]>([])
@@ -85,6 +99,33 @@ const flowStations = computed(() => stationRows.value.length
   ? stationRows.value.map(item => ({ name: item.name, status: item.status }))
   : localStations.map(name => ({ name, status: 'running' })))
 
+const startupStatusNames: Record<string, string> = {
+  not_started: '未开始',
+  starting: '准备中',
+  ready: '已就绪',
+  degraded: '已降级',
+  failed: '准备失败',
+}
+
+const startupPhaseNames: Record<string, string> = {
+  idle: '等待启动任务',
+  initializing: '初始化',
+  warmup: '模型预热',
+  reindex: '重建知识索引',
+  completed: '已完成',
+  failed: '失败',
+}
+
+const startupLabel = computed(() => startupStatusNames[startupStatus.value.status] || startupStatus.value.status)
+const startupPhaseLabel = computed(() => startupPhaseNames[startupStatus.value.phase || ''] || startupStatus.value.phase || '未知阶段')
+const startupTagClass = computed(() => {
+  if (startupStatus.value.status === 'ready') return 'tag-green'
+  if (startupStatus.value.status === 'failed') return 'tag-red'
+  if (startupStatus.value.status === 'degraded') return 'tag-amber'
+  return 'tag-amber'
+})
+const startupNeedsAttention = computed(() => ['starting', 'degraded', 'failed'].includes(startupStatus.value.status))
+
 // 一次刷新总览所需的健康检查、站点、告警、供需和代表性遥测数据。
 const loadDashboard = async () => {
   healthLoading.value = true
@@ -99,9 +140,18 @@ const loadDashboard = async () => {
   if (health.status === 'fulfilled') {
     healthStatus.value = health.value.status === 'ok' ? '后端正常' : health.value.status
     refresh.value = health.value.timestamp.slice(11, 19)
+    startupStatus.value = health.value.startup || {
+      status: 'not_started',
+      message: '后端未返回 RAG 启动状态',
+    }
   } else {
     healthStatus.value = '后端不可用'
     refresh.value = '失败'
+    startupStatus.value = {
+      status: 'failed',
+      phase: 'failed',
+      message: '无法读取后端启动状态',
+    }
   }
   if (results[1].status === 'fulfilled') stationRows.value = results[1].value
   if (results[2].status === 'fulfilled') {
@@ -121,7 +171,7 @@ onMounted(loadDashboard)
   <div class="page-title">
     <div>
       <h2>运行总览</h2>
-      <p>全链路运行状态 · 最近刷新 {{ refresh }} · 数据源：{{ sourceLabel }} · {{ healthStatus }}</p>
+      <p>全链路运行状态 · 最近刷新 {{ refresh }} · 数据源：{{ sourceLabel }} · {{ healthStatus }} · RAG：{{ startupLabel }}</p>
     </div>
     <el-button class="button-stable button-stable--md" type="primary" plain :loading="healthLoading" @click="loadDashboard">刷新数据</el-button>
   </div>
@@ -136,6 +186,16 @@ onMounted(loadDashboard)
 
   <div class="panel" style="margin-top:18px">
     <div class="panel-head"><h3>全链路健康度</h3><span>站点数据：{{ stationRows.length ? '后端 Mock' : '本地示例' }}</span></div>
+    <div v-if="startupNeedsAttention" class="warning" style="margin-bottom:14px">
+      <strong>RAG 启动状态：{{ startupLabel }}</strong>
+      <span> · {{ startupPhaseLabel }} · {{ startupStatus.message || '请稍后刷新状态' }}</span>
+      <span v-if="startupStatus.elapsed_seconds != null"> · 已耗时 {{ startupStatus.elapsed_seconds }} 秒</span>
+      <span v-if="startupStatus.error"> · 原因：{{ startupStatus.error }}</span>
+    </div>
+    <div v-else class="muted" style="margin-bottom:14px">
+      RAG 启动状态：<span :class="['tag', startupTagClass]">{{ startupLabel }}</span>
+      <span> · {{ startupPhaseLabel }}<span v-if="startupStatus.elapsed_seconds != null"> · 耗时 {{ startupStatus.elapsed_seconds }} 秒</span></span>
+    </div>
     <div class="flow">
       <template v-for="(station, i) in [{ name: '娘子关取水', status: 'running' }, ...flowStations, { name: '渠道自流', status: 'running' }]" :key="station.name">
         <div class="flow-node" @click="router.push('/station')">
