@@ -73,7 +73,8 @@ function Invoke-BoundedCommand {
 }
 
 try {
-    Invoke-BoundedCommand '前端生产构建' 'npm.cmd' @('run', 'build') $frontendDir $BuildTimeoutSeconds
+    # 通过 cmd 调用 npm.cmd，避免 ProcessStartInfo 误选 frontend/node_modules/.bin 下的 npm shim。
+    Invoke-BoundedCommand '前端生产构建' 'cmd.exe' @('/d', '/c', 'npm.cmd', 'run', 'build') $frontendDir $BuildTimeoutSeconds
     Invoke-BoundedCommand '后端编译' $pythonExe @('-m', 'compileall', '-q', 'app') $backendDir $BuildTimeoutSeconds
     Invoke-BoundedCommand 'Mock 冒烟回归' $pythonExe @('-u', 'smoke_test.py') $backendDir $SmokeTimeoutSeconds
     Invoke-BoundedCommand 'RAG 质量回归' $pythonExe @('rag_eval.py', '--provider', 'hash') $backendDir $RagTimeoutSeconds
