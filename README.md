@@ -145,8 +145,7 @@ Agent 流式接口：`POST /api/v1/chat/stream`
 常见 SSE 事件顺序为：`start → agent / tool（一个或多个）→ result → done`。
 
 - `start`：返回会话、模式和计划来源；
-- `agent`：返回协调、专业执行和安全复核节点；
-- `agent`：同时返回前序 Agent 依赖和当前节点看到的共享证据数量；
+- `agent`：返回协调、专业执行和安全复核节点，以及前序 Agent 依赖和当前节点看到的共享证据数量；
 - `tool`：返回实际执行 Agent、只读标记、摘要和引用编号；
 - `result`：返回事实、建议、引用、置信度、数据质量和待确认项；
 - `done`：表示本轮流式分析完成。
