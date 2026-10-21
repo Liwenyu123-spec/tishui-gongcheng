@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Menu as MenuIcon, Bell, UserFilled } from '@element-plus/icons-vue'
+import { Menu as MenuIcon, Bell, UserFilled, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { currentUser as currentUserApi, logout as logoutApi } from './api/auth'
 import { api } from './api/http'
+import { runPageRefresh, usePageRefresh } from './composables/pageRefresh'
 
 interface NotificationItem {
   id: string
@@ -214,6 +215,14 @@ watch(() => route.path, async () => {
   await loadNotifications()
 })
 
+// 顶栏「刷新本页」按钮：触发当前页面注册的刷新动作。
+// 按钮只在页面注册了刷新动作时可用，登录页会自动置灰。
+const { handler: pageRefreshHandler, refreshing: pageRefreshing } = usePageRefresh()
+const refreshCurrentPage = async () => {
+  const done = await runPageRefresh()
+  if (done) ElMessage.success('本页数据已刷新')
+}
+
 onMounted(() => {
   syncCurrentUser()
   loadNotifications()
@@ -234,7 +243,7 @@ onBeforeUnmount(() => {
       <div class="sidebar-foot"><span class="dot online"></span>只读分析模式</div>
     </aside>
     <main class="main-area">
-      <header class="topbar"><div><span class="eyebrow">WATER DISPATCH / OPERATIONS</span><h1>{{ title }}</h1></div><div class="top-actions"><span class="connection"><i></i> Mock 数据已连接</span><el-button text :icon="Bell" @click="openNotifications">通知 <b class="alarm-count">{{ unreadNotificationCount }}</b></el-button><el-avatar :size="32" :icon="UserFilled"/><span class="user-name">{{ userName }}</span><el-button class="button-stable button-stable--xs" text :loading="signingOut" @click="signOut">退出</el-button></div></header>
+      <header class="topbar"><div><span class="eyebrow">WATER DISPATCH / OPERATIONS</span><h1>{{ title }}</h1></div><div class="top-actions"><span class="connection"><i></i> Mock 数据已连接</span><el-button class="button-stable button-stable--xs" text :icon="Refresh" :loading="pageRefreshing" :disabled="!pageRefreshHandler" @click="refreshCurrentPage">刷新本页</el-button><el-button text :icon="Bell" @click="openNotifications">通知 <b class="alarm-count">{{ unreadNotificationCount }}</b></el-button><el-avatar :size="32" :icon="UserFilled"/><span class="user-name">{{ userName }}</span><el-button class="button-stable button-stable--xs" text :loading="signingOut" @click="signOut">退出</el-button></div></header>
       <section class="page-body"><router-view/></section>
     </main>
   </div>
