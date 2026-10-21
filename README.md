@@ -242,7 +242,7 @@ Agent 页面同一轮对话会自动携带进程内 `session_id`，支持“二�
 .\安装提交检查.ps1
 ```
 
-也可以用批处理双击安装：`安装提交检查.bat`。门禁依次执行后端编译、pytest 单元用例、Mock 冒烟和 `git diff --check`，约 1 分钟；只改文档的提交会自动跳过代码检查。临时绕过用 `git commit --no-verify` 或设置环境变量 `SKIP_PRECOMMIT=1`，需要卸载时执行 `.\安装提交检查.ps1 -卸载`。
+也可以用批处理双击安装：`安装提交检查.bat`。门禁依次执行后端编译、pytest 单元用例、Mock 冒烟和 `git diff --check`，约 1 分钟；只改文档的提交会自动跳过代码检查。检查未通过时会把失败记录追加到 `.test-temp\precommit_failures.log`（已在 `.gitignore` 中），便于后台自动同步被拦住后回查。临时绕过用 `git commit --no-verify` 或设置环境变量 `SKIP_PRECOMMIT=1`，需要卸载时执行 `.\安装提交检查.ps1 -卸载`。
 
 手工执行同一套检查：
 

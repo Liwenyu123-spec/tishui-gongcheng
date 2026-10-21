@@ -107,6 +107,24 @@ def changed_files() -> list[str]:
     return [line for line in output.stdout.decode("utf-8", errors="replace").splitlines() if line.strip()]
 
 
+def record_failure(names: list[str]) -> Path | None:
+    """把本次失败追加到 .test-temp 下的日志，返回日志路径。
+
+    自动同步是在后台静默执行的，门禁拦住它时终端输出看不到，
+    所以额外留一份可事后查看的记录；目录已被 .gitignore 忽略。
+    """
+
+    log_path = ROOT / ".test-temp" / "precommit_failures.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{stamp} 提交前检查未通过：{'、'.join(names)}\n")
+    except OSError:
+        return None
+    return log_path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="提交前快速回归检查")
     parser.add_argument("--full", action="store_true", help="额外执行 RAG 质量回归")
@@ -151,6 +169,9 @@ def main() -> int:
 
     if failures:
         print("\n提交前检查未通过：" + "、".join(failures), flush=True)
+        log_path = record_failure(failures)
+        if log_path is not None:
+            print(f"失败记录已追加到：{log_path}", flush=True)
         print("修复后重新提交；确实需要先提交时可用 git commit --no-verify。", flush=True)
         return 1
     print("\n提交前检查全部通过。", flush=True)
