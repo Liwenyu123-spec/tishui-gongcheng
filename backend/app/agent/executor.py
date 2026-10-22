@@ -414,6 +414,8 @@ def execute_tool(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
                     finished_at=datetime.now(timezone.utc),
                     duration_ms=max(0, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)),
                     error_code=execution.error_code,
+                    risk_level=tool.risk_level,
+                    required_permission=tool.required_permission,
                 )
                 # 统一做一次权限裁剪，防止单个工具实现遗漏时把越权编号发给前端。
                 filtered_ids = _filter_source_ids(tool.name, execution.source_ids, context)

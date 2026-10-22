@@ -77,8 +77,14 @@ def run_plan(
             executions, trace = DispatchWorkflow(plan).run(context)
     final_answer = reconcile_answer_with_tools(answer, executions)
     from ..services.agent_llm import generate_answer_from_evidence
+    from ..services.agent_limits import max_model_calls
 
-    generated_text = generate_answer_from_evidence(request.message, final_answer, executions)
+    # 第 2 次模型预算用于答案润色；预算不足时保留确定性规则答案。
+    generated_text = (
+        generate_answer_from_evidence(request.message, final_answer, executions)
+        if max_model_calls() >= 2
+        else None
+    )
     if generated_text:
         source = "llm-router+answer+mock" if "llm-router" in final_answer.source else "llm-answer+mock"
         final_answer = final_answer.model_copy(

@@ -29,6 +29,8 @@ class ReadOnlyTool:
     name: ToolName
     label: str
     description: str
+    risk_level: str = "low"
+    required_permission: str = "agent.read"
 
 
 @dataclass(frozen=True)
@@ -53,7 +55,10 @@ READ_ONLY_TOOLS: dict[ToolName, ReadOnlyTool] = {
         "基于已检索片段整理核查说明；不编造实时数字，不生成控制指令",
     ),
     "calculate_supply_balance": ReadOnlyTool("calculate_supply_balance", "计算供需差额和缺口片区", "使用确定性代码计算供水量减需求量"),
-    "apply_control_boundary": ReadOnlyTool("apply_control_boundary", "检查只读控制边界并拒绝控制指令", "识别控制请求并阻止任何现场写操作"),
+    "apply_control_boundary": ReadOnlyTool(
+        "apply_control_boundary", "检查只读控制边界并拒绝控制指令", "识别控制请求并阻止任何现场写操作",
+        risk_level="high", required_permission="agent.control.review",
+    ),
 }
 
 

@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-- 项目迭代：`v0.10.170`
+- 项目迭代：`v0.10.172`
 - 前端包版本：`0.2.0`
 - 当前模式：本地测试、Mock 数据、只读 Agent、多 Agent 专业节点协作
 - 前端目录：[frontend](./frontend)
@@ -334,3 +334,13 @@ Agent 的 `start` SSE 事件现在返回 `limits` 对象，包含 `max_tool_call
 ### SSE 生命周期运行追踪（v0.10.170）
 
 Agent 的 `agent`、`fallback` 和 `done` 事件现在也返回 `run_id`。同一轮请求的 `start`、`agent`、`tool`、`fallback`、`result` 和 `done` 事件可以通过同一个运行编号关联。
+
+
+### 模型调用预算生效（v0.10.171）
+
+`AGENT_MAX_MODEL_CALLS` 现在会实际控制模型调用：预算为 0 时跳过模型路由，预算低于 2 次时跳过答案润色，系统保留规则模式答案。
+
+
+### 工具风险和权限元数据（v0.10.172）
+
+只读工具目录现在声明 `risk_level` 和 `required_permission`。普通读取工具默认是 `low / agent.read`，控制边界检查工具是 `high / agent.control.review`，并会在工具 SSE 事件中返回。

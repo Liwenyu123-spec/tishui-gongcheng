@@ -539,7 +539,10 @@ def build_answer(payload: AgentChatRequest, user: dict) -> AgentAnswer:
     now = _now()
     intent = _intent(payload.message)
     model_route = None
-    if intent != "control_rejected":
+    from .agent_limits import max_model_calls
+
+    # 一次请求的第 1 次模型预算用于意图路由；预算为 0 时直接使用规则路径。
+    if intent != "control_rejected" and max_model_calls() >= 1:
         from .agent_llm import route_question
 
         model_route = route_question(
