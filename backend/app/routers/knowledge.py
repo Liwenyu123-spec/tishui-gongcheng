@@ -1,6 +1,7 @@
 """知识库文档列表和导入路由。"""
 
 from datetime import datetime, timezone
+import hashlib
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -353,6 +354,8 @@ def import_knowledge(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="失效时间必须晚于生效时间")
     now = datetime.now(timezone.utc)
     # 导入资料先进入待审状态，只有管理员将其设为现行后才会参与检索。
+    content_hash = hashlib.sha256(payload.content.encode("utf-8")).hexdigest()
+    file_hash = hashlib.sha256((payload.filename + "\0" + payload.content).encode("utf-8")).hexdigest()
     document = KnowledgeDocument(
         id=f"knowledge-{uuid4().hex[:10]}",
         filename=payload.filename,
@@ -365,6 +368,8 @@ def import_knowledge(
         station_ids=list(dict.fromkeys(payload.station_ids)),
         effective_from=payload.effective_from,
         effective_to=payload.effective_to,
+        file_hash=file_hash,
+        content_hash=content_hash,
     )
     # 保存元数据和正文；正文只通过检索命中摘要间接返回，不作为全文接口返回。
     _KNOWLEDGE[document.id] = document

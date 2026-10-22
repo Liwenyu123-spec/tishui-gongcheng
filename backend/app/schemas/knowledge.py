@@ -63,6 +63,10 @@ class KnowledgeDocument(BaseModel):
     approved_at: datetime | None = None
     # 数据来源标记。
     source: str = "mock"
+    # 原始文件内容指纹；JSON 导入场景使用文件名与正文的确定性组合计算。
+    file_hash: str = ""
+    # 正文指纹，用于正文去重和增量索引判断。
+    content_hash: str = ""
 
 
 class KnowledgeSearchHit(BaseModel):
