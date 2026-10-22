@@ -89,7 +89,10 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
         )
         # agent 事件展示专业节点的真实执行状态，不再只展示计划中的角色名称。
         for agent_run in trace.runs:
-            yield _sse_event("agent", {"request_id": answer.request_id, **agent_run.as_event()})
+            yield _sse_event(
+                "agent",
+                {"request_id": answer.request_id, "run_id": answer.run_id, **agent_run.as_event()},
+            )
         # tool 事件只描述确定性只读步骤，不代表调用了真实现场或外部系统。
         failed_tools = []
         for execution in executions:
@@ -153,6 +156,7 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
                 "fallback",
                 {
                     "request_id": answer.request_id,
+                    "run_id": answer.run_id,
                     "status": "degraded",
                     "message": "部分只读工具失败或超时，已降级为人工复核提示",
                     "failed_tools": [execution.tool.name for execution in failed_tools],
@@ -161,7 +165,7 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
         # result 事件只返回结构化答案，前端不需要解析自然语言日志。
         yield _sse_event("result", answer.model_dump(mode="json"))
         # done 事件表示本次 SSE 已完整结束，便于前端关闭 loading 状态。
-        yield _sse_event("done", {"request_id": answer.request_id})
+        yield _sse_event("done", {"request_id": answer.request_id, "run_id": answer.run_id})
 
     return StreamingResponse(
         events(),

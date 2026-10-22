@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-- 项目迭代：`v0.10.169`
+- 项目迭代：`v0.10.170`
 - 前端包版本：`0.2.0`
 - 当前模式：本地测试、Mock 数据、只读 Agent、多 Agent 专业节点协作
 - 前端目录：[frontend](./frontend)
@@ -329,3 +329,8 @@ Agent 现在支持进程内调用治理：`AGENT_MAX_TOOL_CALLS` 限制单次请
 ### Agent start 事件限额摘要（v0.10.169）
 
 Agent 的 `start` SSE 事件现在返回 `limits` 对象，包含 `max_tool_calls`、`max_model_calls` 和 `max_concurrency`，便于确认当前进程实际使用的限额配置。
+
+
+### SSE 生命周期运行追踪（v0.10.170）
+
+Agent 的 `agent`、`fallback` 和 `done` 事件现在也返回 `run_id`。同一轮请求的 `start`、`agent`、`tool`、`fallback`、`result` 和 `done` 事件可以通过同一个运行编号关联。
