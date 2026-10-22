@@ -32,6 +32,9 @@ def test_knowledge_search_returns_citable_result(client, admin_headers):
         },
     )
     assert imported.status_code == 200, imported.text
+    imported_body = imported.json()
+    assert len(imported_body["content_hash"]) == 64
+    assert len(imported_body["file_hash"]) == 64
     document_id = imported.json()["id"]
     # 新导入资料处于待审状态，只有批准为现行后才进入检索集合。
     approved = client.patch(
