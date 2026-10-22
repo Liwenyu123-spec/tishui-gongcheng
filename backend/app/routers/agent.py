@@ -13,6 +13,7 @@ from ..agent.orchestrator import run_plan
 from ..dependencies import require_roles
 from ..schemas.agent import AgentAnswer, AgentChatRequest
 from ..services.audit import record_audit
+from ..services.agent_limits import limits_summary
 from ..services.agent import build_answer
 from ..services.agent_session import prepare_request
 
@@ -82,6 +83,8 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
                 "primary_agent": plan.primary_agent,
                 "collaborating_agents": list(plan.collaborating_agents),
                 "allowed_tools": [tool.name for tool in plan.tools],
+                # 把本进程当前限额随 start 事件返回，便于前端和接口调试确认实际配置。
+                "limits": limits_summary(),
             },
         )
         # agent 事件展示专业节点的真实执行状态，不再只展示计划中的角色名称。

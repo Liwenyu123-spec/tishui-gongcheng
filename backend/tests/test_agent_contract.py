@@ -14,6 +14,8 @@ def test_agent_status_stream_has_structured_lifecycle(client, admin_headers):
     assert "event: done" in text
     assert '"intent": "status"' in text
     assert '"read_only": true' in text
+    assert '"limits"' in text
+    assert '"max_tool_calls"' in text
 
 
 def test_agent_control_request_stays_read_only(client, admin_headers):

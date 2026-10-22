@@ -204,6 +204,7 @@ class DispatchWorkflow:
         runs: list[SpecialistRun] = []
         safety_run: SpecialistRun | None = None
         tool_budget = max_tool_calls()
+        # 预算按整轮工作流累计，而不是每个专业 Agent 单独重新计数。
 
         for name in self._agent_order():
             # 每个节点只拿到前序结果的不可变快照；本节点新结果完成后再写回共享列表。
@@ -255,7 +256,11 @@ class DispatchWorkflow:
 
     @staticmethod
     def _budget_execution(execution: ToolExecution, completed_count: int, limit: int) -> ToolExecution:
-        """把跨专业节点的工具总调用数限制在本次请求预算内。"""
+        """把跨专业节点的工具总调用数限制在本次请求预算内。
+
+        超限步骤仍保留在执行列表中，便于 SSE 明确展示被拦截的工具和错误码，
+        但不会调用其实际 handler。
+        """
 
         if completed_count < limit:
             return execution
