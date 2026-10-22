@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
+import { registerPageRefresh } from '../composables/pageRefresh'
 
 interface ApiReview {
   id: string
@@ -148,6 +149,7 @@ const viewDetail = async (row: ReviewRow) => {
   }
 }
 
+registerPageRefresh(loadReviews)
 onMounted(loadReviews)
 </script>
 

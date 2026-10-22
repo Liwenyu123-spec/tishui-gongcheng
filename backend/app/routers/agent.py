@@ -96,12 +96,14 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
                     "retry",
                     {
                         "request_id": answer.request_id,
+                        "run_id": answer.run_id,
                         "name": tool.name,
                         "label": tool.label,
                         "agent": execution.agent,
                         "attempts": execution.attempts,
                         "status": execution.status,
                         "error": execution.error,
+                        "error_code": execution.error_code,
                     },
                 )
             if execution.status in {"failed", "timeout"}:
@@ -110,18 +112,21 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
                     "error",
                     {
                         "request_id": answer.request_id,
+                        "run_id": answer.run_id,
                         "name": tool.name,
                         "label": tool.label,
                         "agent": execution.agent,
                         "status": execution.status,
                         "attempts": execution.attempts,
                         "error": execution.error or execution.summary,
+                        "error_code": execution.error_code,
                     },
                 )
             yield _sse_event(
                 "tool",
                 {
                     "request_id": answer.request_id,
+                    "run_id": answer.run_id,
                     "name": tool.name,
                     "label": tool.label,
                     "agent": execution.agent,
@@ -131,6 +136,13 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
                     "read_only": execution.read_only,
                     "attempts": execution.attempts,
                     "error": execution.error,
+                    "tool_version": execution.tool_version,
+                    "risk_level": execution.risk_level,
+                    "required_permission": execution.required_permission,
+                    "started_at": execution.started_at.isoformat() if execution.started_at else None,
+                    "finished_at": execution.finished_at.isoformat() if execution.finished_at else None,
+                    "duration_ms": execution.duration_ms,
+                    "error_code": execution.error_code,
                 },
             )
         if failed_tools:

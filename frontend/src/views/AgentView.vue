@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
+import { registerPageRefresh } from '../composables/pageRefresh'
 
 interface WorkOrderDraft {
   id: string
@@ -476,6 +477,12 @@ const saveAssignment = async () => {
     assignmentSaving.value = false
   }
 }
+
+// 顶栏刷新只重新拉取工单列表和站点列表；当前对话内容和会话编号保持不变，
+// 避免用户为了刷新侧栏而丢掉正在进行的问答。
+registerPageRefresh(async () => {
+  await Promise.all([loadWorkOrders(), loadStations()])
+})
 
 // 页面进入时加载已生成的 Mock 工单。
 onMounted(() => {

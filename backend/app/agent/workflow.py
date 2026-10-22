@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 
 from ..schemas.agent import AgentAnswer
 from .executor import ToolContext, ToolExecution, execute_tool
+from ..services.agent_limits import max_tool_calls
 from .tools import AgentPlan, ReadOnlyTool
 
 
@@ -202,6 +203,7 @@ class DispatchWorkflow:
         executions: list[ToolExecution] = []
         runs: list[SpecialistRun] = []
         safety_run: SpecialistRun | None = None
+        tool_budget = max_tool_calls()
 
         for name in self._agent_order():
             # 每个节点只拿到前序结果的不可变快照；本节点新结果完成后再写回共享列表。
@@ -214,6 +216,10 @@ class DispatchWorkflow:
                 # 先执行控制边界工具（如果计划包含），再复核前面所有共享结果。
                 agent = SpecialistAgent(name)
                 tool_run, tool_executions = agent.run(self.plan, node_context)
+                tool_executions = tuple(
+                    self._budget_execution(item, len(executions) + index, tool_budget)
+                    for index, item in enumerate(tool_executions)
+                )
                 executions.extend(tool_executions)
                 safety_run = SafetyReviewAgent(name).review(
                     node_context.answer,
@@ -227,6 +233,10 @@ class DispatchWorkflow:
                 continue
 
             run, tool_executions = SpecialistAgent(name).run(self.plan, node_context)
+            tool_executions = tuple(
+                self._budget_execution(item, len(executions) + index, tool_budget)
+                for index, item in enumerate(tool_executions)
+            )
             executions.extend(tool_executions)
             # 未分配工具的澄清 Agent 也保留节点记录，方便前端说明流程为何结束。
             runs.append(run)
@@ -242,3 +252,21 @@ class DispatchWorkflow:
             runs.append(safety_run)
 
         return tuple(executions), CollaborationTrace(runs=tuple(runs))
+
+    @staticmethod
+    def _budget_execution(execution: ToolExecution, completed_count: int, limit: int) -> ToolExecution:
+        """把跨专业节点的工具总调用数限制在本次请求预算内。"""
+
+        if completed_count < limit:
+            return execution
+        return ToolExecution(
+            tool=execution.tool,
+            status="failed",
+            summary=f"工具调用已达到本次请求上限（{limit}）",
+            source_ids=(),
+            read_only=execution.read_only,
+            agent=execution.agent,
+            attempts=0,
+            error="工具调用预算已用尽",
+            error_code="TOOL_BUDGET_EXCEEDED",
+        )

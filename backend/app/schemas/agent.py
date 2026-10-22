@@ -50,6 +50,11 @@ class AgentAnswer(BaseModel):
     """规则分析返回的结构化答案。"""
 
     request_id: str
+    # 一次完整 Agent 编排运行的编号；当前阶段仅在进程内追踪。
+    run_id: str | None = None
+    # 可恢复任务的预留编号；当前阶段不做持久化。
+    task_id: str | None = None
+    thread_id: str | None = None
     intent: AgentIntent
     answer: str
     facts: list[str] = Field(default_factory=list)

@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import type { ECharts } from 'echarts'
 import { api } from '../api/http'
+import { registerPageRefresh } from '../composables/pageRefresh'
 import { telemetry, stations as mockStations } from '../mock'
 
 interface ApiStation {
@@ -235,6 +236,13 @@ const submitIncidentReport = async () => {
     reportSubmitting.value = false
   }
 }
+
+// 顶栏刷新：重新读取站点列表和当前站点的详情、遥测、联系人。
+// 不重置下拉框里已选的站点，避免刷新后跳回第一个站。
+registerPageRefresh(async () => {
+  await loadStations()
+  loadSelectedStation()
+})
 
 onMounted(async () => {
   chartInstance.value = echarts.init(chart.value!)

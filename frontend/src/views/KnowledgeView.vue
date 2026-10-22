@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/http'
+import { registerPageRefresh } from '../composables/pageRefresh'
 
 interface ApiKnowledgeDocument {
   id: string
@@ -522,6 +523,12 @@ const validateCsv = async () => {
     csvLoading.value = false
   }
 }
+
+// 顶栏刷新同时拉取文档列表和 RAG 引擎状态，避免只刷新一半。
+registerPageRefresh(async () => {
+  await loadKnowledge()
+  await loadEngineStatus()
+})
 
 onMounted(() => {
   loadKnowledge()

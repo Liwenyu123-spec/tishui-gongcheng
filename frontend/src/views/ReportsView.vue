@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
+import { registerPageRefresh } from '../composables/pageRefresh'
 
 interface ReportMetric {
   key: string
@@ -294,6 +295,8 @@ const downloadMarkdown = () => {
 const reportTime = (value: string) => value.slice(11, 16)
 const reportDateTime = (value?: string) => value ? value.replace('T', ' ').replace('Z', '') : '—'
 
+// 顶栏刷新复用列表加载逻辑；页面内的“刷新列表”“刷新报告详情”保持原样。
+registerPageRefresh(loadReports)
 // 页面进入报告中心时立即拉取后端列表。
 onMounted(loadReports)
 </script>

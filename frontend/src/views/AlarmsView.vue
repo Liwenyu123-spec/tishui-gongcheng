@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
+import { registerPageRefresh } from '../composables/pageRefresh'
 import { alarmRows } from '../mock'
 
 interface ApiAlarm {
@@ -50,7 +51,9 @@ const stationOptions = computed(() => [...new Set(rows.value.map(row => row.stat
 const filteredRows = computed(() => rows.value.filter(row => (!stationFilter.value || row.station === stationFilter.value) && (!levelFilter.value || row.level === levelFilter.value)))
 const unconfirmedCount = computed(() => rows.value.filter(row => row.status === '未确认').length)
 
-onMounted(async () => {
+// 告警列表加载独立成函数，供首次进入和顶栏「刷新本页」共用。
+// 接口不可用时保留本地示例，避免刷新把已有列表清空。
+const loadAlarms = async () => {
   loading.value = true
   try {
     const result = await api<ApiAlarm[]>('/api/v1/alarms')
@@ -71,7 +74,10 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-})
+}
+
+registerPageRefresh(loadAlarms)
+onMounted(loadAlarms)
 
 const ack = async (row: AlarmRow) => {
   if (row.id.startsWith('mock-')) {

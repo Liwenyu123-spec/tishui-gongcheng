@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
+import { registerPageRefresh } from '../composables/pageRefresh'
 import { areas as mockAreas } from '../mock'
 
 interface ApiSupplyArea {
@@ -83,6 +84,7 @@ const loadSupplyBalance = async () => {
   }
 }
 
+registerPageRefresh(loadSupplyBalance)
 onMounted(loadSupplyBalance)
 </script>
 

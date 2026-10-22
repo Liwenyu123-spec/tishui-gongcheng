@@ -7,6 +7,8 @@
 from .tools import AgentPlan, READ_ONLY_TOOLS, plan_for_question
 from .workflow import CollaborationTrace, DispatchWorkflow
 from ..schemas.agent import AgentAnswer
+from uuid import uuid4
+from ..services.agent_limits import agent_slot
 
 
 def coordinate(answer: AgentAnswer, message: str = "") -> AgentPlan:
@@ -52,9 +54,27 @@ def run_plan(
     from .executor import ToolContext
     from ..services.agent import reconcile_answer_with_tools
 
+    run_id = answer.run_id or f"run-{uuid4().hex[:16]}"
+    answer = answer.model_copy(update={"run_id": run_id, "thread_id": request.session_id})
     plan = coordinate(answer, request.message)
-    context = ToolContext(user=user, request=request, answer=answer)
-    executions, trace = DispatchWorkflow(plan).run(context)
+    context = ToolContext(user=user, request=request, answer=answer, run_id=run_id)
+    with agent_slot() as acquired:
+        if not acquired:
+            from ..agent.executor import ToolExecution
+
+            executions = tuple(
+                ToolExecution(
+                    tool=tool,
+                    status="failed",
+                    summary="当前 Agent 并发数已达到上限，请稍后重试",
+                    error="进程内并发槽位不足",
+                    error_code="AGENT_CAPACITY_EXCEEDED",
+                )
+                for tool in plan.tools
+            )
+            trace = CollaborationTrace(runs=())
+        else:
+            executions, trace = DispatchWorkflow(plan).run(context)
     final_answer = reconcile_answer_with_tools(answer, executions)
     from ..services.agent_llm import generate_answer_from_evidence
 

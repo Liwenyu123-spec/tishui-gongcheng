@@ -65,3 +65,12 @@
 .report-source-ids { font-size: 13px; }
 .login-page .recognized-role { font-size: 14px; }
 .login-page .login-note { font-size: 13px; }
+
+/* 顶栏「刷新本页」按钮。
+   不能套用 .button-stable：那套样式把宽度写死成 48px 用于防止按钮位移，
+   而这里有图标加四个字，会出现文字溢出白框的情况。这里只调整内边距和
+   图标间距，颜色沿用 Element Plus 的文字按钮默认值，与相邻「通知」保持一致。 */
+.refresh-page-button {
+  padding: 0 8px;
+  gap: 4px;
+}

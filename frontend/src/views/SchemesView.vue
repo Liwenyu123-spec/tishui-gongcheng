@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
+import { registerPageRefresh } from '../composables/pageRefresh'
 
 interface SchemeInput {
   scheme_id: string
@@ -108,6 +109,7 @@ const submitForReview = async () => {
   }
 }
 
+registerPageRefresh(loadComparison)
 onMounted(loadComparison)
 </script>
 

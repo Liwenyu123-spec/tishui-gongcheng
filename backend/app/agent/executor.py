@@ -6,6 +6,7 @@
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from ..data.repositories import get_data_source
 from ..dependencies import user_has_station_access
@@ -13,6 +14,7 @@ from ..schemas.agent import AgentAnswer, AgentChatRequest
 from ..services.analysis import compare_variation, metric_label
 from ..services.knowledge_search import search_rules
 from ..services.runtime_env import windows_env
+from ..services.agent_limits import max_tool_calls
 from .tools import AgentPlan, ReadOnlyTool, ToolName
 
 
@@ -44,6 +46,7 @@ class ToolContext:
     shared_executions: tuple["ToolExecution", ...] = ()
     # 已经完成或跳过的前序 Agent，供当前节点形成可追踪的交接关系。
     shared_agents: tuple[str, ...] = ()
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,13 @@ class ToolExecution:
     # 工具级超时/失败重试次数，便于 SSE 和审计区分一次请求是否经历过重试。
     attempts: int = 1
     error: str | None = None
+    tool_version: str = "1.0"
+    risk_level: str = "low"
+    required_permission: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    duration_ms: int | None = None
+    error_code: str | None = None
 
 
 def _tool_timeout_seconds() -> float:
@@ -369,8 +379,9 @@ def execute_tool(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
     """执行一个白名单工具，并提供超时、失败和有限重试保护。"""
 
     handler = _TOOL_HANDLERS.get(tool.name)
+    started_at = datetime.now(timezone.utc)
     if handler is None:
-        return ToolExecution(tool=tool, status="completed", summary="已完成只读工具检查", source_ids=())
+        return ToolExecution(tool=tool, status="failed", summary="工具未注册", source_ids=(), error_code="TOOL_NOT_FOUND")
     retry_limit = _tool_retry_limit()
     last_status = "failed"
     last_error = "未知工具错误"
@@ -399,6 +410,10 @@ def execute_tool(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
                     agent=execution.agent,
                     attempts=attempt,
                     error=execution.error,
+                    started_at=started_at,
+                    finished_at=datetime.now(timezone.utc),
+                    duration_ms=max(0, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)),
+                    error_code=execution.error_code,
                 )
                 # 统一做一次权限裁剪，防止单个工具实现遗漏时把越权编号发给前端。
                 filtered_ids = _filter_source_ids(tool.name, execution.source_ids, context)
@@ -411,6 +426,13 @@ def execute_tool(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
                     agent=execution.agent,
                     attempts=execution.attempts,
                     error=execution.error,
+                    tool_version=execution.tool_version,
+                    risk_level=execution.risk_level,
+                    required_permission=execution.required_permission,
+                    started_at=execution.started_at,
+                    finished_at=execution.finished_at,
+                    duration_ms=execution.duration_ms,
+                    error_code=execution.error_code,
                 )
             last_status = execution.status
             last_error = execution.error or execution.summary
@@ -432,10 +454,28 @@ def execute_tool(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
         read_only=True,
         attempts=attempts,
         error=last_error,
+        started_at=started_at,
+        finished_at=datetime.now(timezone.utc),
+        duration_ms=max(0, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)),
+        error_code="SOURCE_TIMEOUT" if last_status == "timeout" else "SOURCE_UNAVAILABLE",
     )
 
 
 def execute_plan(plan: AgentPlan, context: ToolContext) -> tuple[ToolExecution, ...]:
     """按协调器给出的顺序执行计划中的只读工具。"""
-
-    return tuple(execute_tool(tool, context) for tool in plan.tools)
+    limit = max_tool_calls()
+    executions: list[ToolExecution] = []
+    for index, tool in enumerate(plan.tools):
+        if index >= limit:
+            executions.append(
+                ToolExecution(
+                    tool=tool,
+                    status="failed",
+                    summary=f"工具调用已达到本次请求上限（{limit}）",
+                    error="工具调用预算已用尽",
+                    error_code="TOOL_BUDGET_EXCEEDED",
+                )
+            )
+            continue
+        executions.append(execute_tool(tool, context))
+    return tuple(executions)

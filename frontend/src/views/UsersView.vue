@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
+import { registerPageRefresh } from '../composables/pageRefresh'
 
 interface ApiUser {
   id: string
@@ -189,6 +190,8 @@ const viewAudit = async () => {
   }
 }
 
+// 顶栏刷新只重新读取用户列表，不会清空正在编辑的权限表单。
+registerPageRefresh(loadUsers)
 onMounted(loadUsers)
 </script>
 

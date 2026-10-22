@@ -243,7 +243,7 @@ onBeforeUnmount(() => {
       <div class="sidebar-foot"><span class="dot online"></span>只读分析模式</div>
     </aside>
     <main class="main-area">
-      <header class="topbar"><div><span class="eyebrow">WATER DISPATCH / OPERATIONS</span><h1>{{ title }}</h1></div><div class="top-actions"><span class="connection"><i></i> Mock 数据已连接</span><el-button class="button-stable button-stable--xs" text :icon="Refresh" :loading="pageRefreshing" :disabled="!pageRefreshHandler" @click="refreshCurrentPage">刷新本页</el-button><el-button text :icon="Bell" @click="openNotifications">通知 <b class="alarm-count">{{ unreadNotificationCount }}</b></el-button><el-avatar :size="32" :icon="UserFilled"/><span class="user-name">{{ userName }}</span><el-button class="button-stable button-stable--xs" text :loading="signingOut" @click="signOut">退出</el-button></div></header>
+      <header class="topbar"><div><span class="eyebrow">WATER DISPATCH / OPERATIONS</span><h1>{{ title }}</h1></div><div class="top-actions"><span class="connection"><i></i> Mock 数据已连接</span><el-button class="refresh-page-button" text :icon="Refresh" :loading="pageRefreshing" :disabled="!pageRefreshHandler" @click="refreshCurrentPage">刷新本页</el-button><el-button text :icon="Bell" @click="openNotifications">通知 <b class="alarm-count">{{ unreadNotificationCount }}</b></el-button><el-avatar :size="32" :icon="UserFilled"/><span class="user-name">{{ userName }}</span><el-button class="button-stable button-stable--xs" text :loading="signingOut" @click="signOut">退出</el-button></div></header>
       <section class="page-body"><router-view/></section>
     </main>
   </div>

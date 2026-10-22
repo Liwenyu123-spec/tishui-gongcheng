@@ -1,7 +1,8 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api/http'
+import { registerPageRefresh } from '../composables/pageRefresh'
 import { alarmRows as localAlarmRows, stations as localStations } from '../mock'
 
 interface HealthResponse {
@@ -164,6 +165,8 @@ const loadDashboard = async () => {
   healthLoading.value = false
 }
 
+// 顶栏「刷新本页」和页面内的「刷新数据」复用同一套加载逻辑，避免两种刷新行为不一致。
+registerPageRefresh(loadDashboard)
 onMounted(loadDashboard)
 </script>
 

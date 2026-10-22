@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
+import { registerPageRefresh } from '../composables/pageRefresh'
 
 interface TopologyNode {
   station_id: string
@@ -101,6 +102,8 @@ const selectNode = (id: string) => {
 
 const statusName: Record<string, string> = { running: '运行正常', attention: '关注', offline: '离线' }
 
+// 顶栏刷新会同时重新拉取拓扑和当前节点的详情、遥测。
+registerPageRefresh(loadTopology)
 onMounted(loadTopology)
 </script>
 
