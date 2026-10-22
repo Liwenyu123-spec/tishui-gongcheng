@@ -29,6 +29,10 @@ interface AgentCitation {
   source_id: string
   title: string
   detail: string
+  location?: string | null
+  chunk_index?: number | null
+  rerank?: number | null
+  rank?: number | null
 }
 
 interface AgentAnswer {
@@ -68,6 +72,7 @@ interface AgentMessage {
   modelMode?: string
   planningSource?: string
   runId?: string
+  workflowStatus?: string
   limits?: { max_tool_calls?: number; max_model_calls?: number; max_concurrency?: number }
   pending?: boolean
 }
@@ -95,6 +100,29 @@ const messages = ref<AgentMessage[]>([
     evidence: '当前模式：规则工具 + 可选大模型路由/答案整理 · 不生成现场控制指令',
   },
 ])
+const currentWorkflowStatus = computed(() => [...messages.value].reverse().find(item => item.role === 'ai' && item.workflowStatus)?.workflowStatus || '')
+const workflowStatusNames: Record<string, string> = {
+  running: '执行中', completed: '已完成', degraded: '已降级', timeout: '已超时', blocked: '已阻断', cancelled: '已取消', unknown: '未知',
+}
+const workflowStatusTypes: Record<string, 'success' | 'warning' | 'danger' | 'info'> = {
+  running: 'warning', completed: 'success', degraded: 'warning', timeout: 'danger', blocked: 'danger', cancelled: 'info', unknown: 'info',
+}
+const citationExcerptVisible = ref(false)
+const citationExcerptLoading = ref(false)
+const citationExcerpt = ref<{ title: string; version: string; location: string; chunk_index: number; excerpt: string } | null>(null)
+const viewCitationExcerpt = async (citation: AgentCitation) => {
+  if (citation.chunk_index === null || citation.chunk_index === undefined) return
+  citationExcerptVisible.value = true
+  citationExcerptLoading.value = true
+  citationExcerpt.value = null
+  try {
+    citationExcerpt.value = await api(`/api/v1/knowledge/${encodeURIComponent(citation.source_id)}/excerpt?chunk_index=${citation.chunk_index}`)
+  } catch {
+    ElMessage.error('原文片段读取失败，请稍后重试')
+  } finally {
+    citationExcerptLoading.value = false
+  }
+}
 const agentLoading = ref(false)
 const agentRequestState = ref<AgentRequestState>('idle')
 const agentStatusText = ref('可以开始提问')
@@ -217,11 +245,13 @@ const ask = async (q = input.value) => {
         planning_source?: string
         execution_mode?: string
         session_id?: string | null
+        workflow_status?: string
       }
       updateAgentSession(start.session_id)
       aiMessage.modelMode = start.mode || 'rule-mock'
       aiMessage.planningSource = start.planning_source || 'rule'
       aiMessage.runId = start.run_id || undefined
+      aiMessage.workflowStatus = start.workflow_status || 'running'
       aiMessage.limits = start.limits
       aiMessage.text = '已定位问题，正在整理事实和引用依据…'
       agentStatusText.value = '已连接，正在执行只读分析…'
@@ -261,8 +291,8 @@ const ask = async (q = input.value) => {
       return
     }
     if (eventName === 'retry') {
-      const retry = JSON.parse(data) as { label?: string; attempts?: number; status?: string; error?: string | null }
-      const step = `重试：${retry.label || '只读工具'}，已尝试 ${retry.attempts || 2} 次${retry.error ? `（${retry.error}）` : ''}`
+      const retry = JSON.parse(data) as { label?: string; attempts?: number; status?: string; error?: string | null; retryable?: boolean }
+      const step = `重试：${retry.label || '只读工具'}，已尝试 ${retry.attempts || 2} 次${retry.retryable === false ? '（不可继续重试）' : ''}${retry.error ? `（${retry.error}）` : ''}`
       aiMessage.steps = [...(aiMessage.steps || []), step]
       aiMessage.evidence = `分析步骤：${aiMessage.steps.join(' → ')}`
       agentStatusText.value = step
@@ -285,6 +315,14 @@ const ask = async (q = input.value) => {
       agentStatusText.value = step
       return
     }
+    if (eventName === 'done') {
+      const done = JSON.parse(data) as { workflow_status?: string }
+      if (done.workflow_status) {
+        aiMessage.workflowStatus = done.workflow_status
+        agentStatusText.value = `运行结束：${done.workflow_status}`
+      }
+      return
+    }
     if (eventName !== 'result') return
     const answer = JSON.parse(data) as AgentAnswer
     updateAgentSession(answer.session_id)
@@ -293,6 +331,7 @@ const ask = async (q = input.value) => {
       ...(aiMessage.modelMode ? [`模型参与：${aiMessage.modelMode}`] : []),
       ...(aiMessage.planningSource ? [`计划来源：${aiMessage.planningSource}`] : []),
       ...(aiMessage.runId ? [`运行编号：${aiMessage.runId}`] : []),
+      ...(aiMessage.workflowStatus ? [`工作流状态：${aiMessage.workflowStatus}`] : []),
       ...(aiMessage.limits ? [`运行限额：工具 ${aiMessage.limits.max_tool_calls ?? '—'} · 模型 ${aiMessage.limits.max_model_calls ?? '—'} · 并发 ${aiMessage.limits.max_concurrency ?? '—'}`] : []),
       ...(answer.effective_question ? [`本轮合并问句：${answer.effective_question}`] : []),
       ...(aiMessage.steps?.length ? [`分析步骤：${aiMessage.steps.join(' → ')}`] : []),
@@ -300,7 +339,7 @@ const ask = async (q = input.value) => {
       ...answer.recommendations.map(item => `建议：${item}`),
       ...(answer.protocol_explanation ? [`规程说明：${answer.protocol_explanation}`] : []),
       ...answer.citations.filter(citation => ['telemetry', 'alarm', 'supply', 'incident', 'notification'].includes(citation.source_type)).map(citation => `数据引用：${citation.title} · ${citation.detail}`),
-      ...answer.citations.filter(citation => ['knowledge', 'policy'].includes(citation.source_type)).map(citation => `规程引用：${citation.title} · ${citation.detail}`),
+      ...answer.citations.filter(citation => ['knowledge', 'policy'].includes(citation.source_type)).map(citation => `规程引用${citation.rank ? ` ${citation.rank}` : ''}：${citation.title} · ${citation.detail}${citation.location ? ` · ${citation.location}` : ''}${citation.chunk_index !== null && citation.chunk_index !== undefined ? ` · 分片 ${citation.chunk_index + 1}` : ''}${citation.rerank !== null && citation.rerank !== undefined ? ` · 重排 ${citation.rerank}` : ''}`),
       `数据质量：${answer.data_quality || 'mock'}`,
       ...(answer.limitations || []).map(item => `限制：${item}`),
       `置信度：${confidenceNames[answer.confidence || 'medium'] || answer.confidence || '中'}`,
@@ -314,6 +353,13 @@ const ask = async (q = input.value) => {
     aiMessage.evidence = evidence
     aiMessage.pending = false
     agentStatusText.value = '分析完成，可以继续追问'
+    if (aiMessage.runId) {
+      void api<{ status?: string }>(`/api/v1/agent/runs/${encodeURIComponent(aiMessage.runId)}`)
+        .then(status => {
+          if (status.status) aiMessage.workflowStatus = status.status
+        })
+        .catch(() => undefined)
+    }
   }
 
   try {
@@ -373,12 +419,16 @@ const ask = async (q = input.value) => {
   }
 }
 
-// 中止当前 SSE 请求；后端不会把未完成的回答当作有效结论保存。
+// 同时通知后端并中止当前 SSE，请求在下一个 Agent 节点边界停止。
 const cancelAgent = () => {
   if (!agentAbortController || !agentLoading.value) return
   agentCancelRequested.value = true
   agentRequestState.value = 'cancelling'
   agentStatusText.value = '正在停止当前分析…'
+  const active = messages.value.find(item => item.pending && item.runId)
+  if (active?.runId) {
+    void fetch(`/api/v1/agent/runs/${encodeURIComponent(active.runId)}/cancel`, { method: 'POST' })
+  }
   agentAbortController.abort()
 }
 
@@ -543,11 +593,15 @@ const formatLocalDateTime = (value: string) => {
           </span>
         </div>
         <div v-if="m.role==='ai' && m.evidence" class="evidence" style="white-space:pre-line">{{m.evidence}}</div>
+        <div v-if="m.role==='ai' && m === messages[messages.length - 1] && latestAgentAnswer?.citations.some(c => c.source_type === 'knowledge' && c.chunk_index !== null && c.chunk_index !== undefined)" class="evidence">
+          <el-button v-for="citation in latestAgentAnswer.citations.filter(c => c.source_type === 'knowledge' && c.chunk_index !== null && c.chunk_index !== undefined)" :key="citation.source_id" link type="primary" size="small" @click="viewCitationExcerpt(citation)">查看 {{ citation.title }} 原文</el-button>
+        </div>
       </div>
       <div class="agent-toolbar">
         <span :class="['agent-status', `agent-status--${agentRequestState}`]">
           <i></i>{{ agentStatusText }}
         </span>
+        <el-tag v-if="currentWorkflowStatus" size="small" effect="plain" :type="workflowStatusTypes[currentWorkflowStatus] || 'info'">工作流：{{ workflowStatusNames[currentWorkflowStatus] || currentWorkflowStatus }}</el-tag>
         <el-button class="button-stable button-stable--md" size="small" plain :disabled="agentLoading" @click="resetConversation">新建会话</el-button>
       </div>
       <div style="padding:12px 18px 0;display:flex;gap:8px;align-items:center">
@@ -600,6 +654,16 @@ const formatLocalDateTime = (value: string) => {
       </div>
     </div>
   </div>
+
+  <el-dialog v-model="citationExcerptVisible" title="Agent 引用原文片段" width="720px">
+    <div v-loading="citationExcerptLoading">
+      <template v-if="citationExcerpt">
+        <p class="muted">{{ citationExcerpt.title }} · {{ citationExcerpt.version }} · {{ citationExcerpt.location }} · 分片 {{ citationExcerpt.chunk_index + 1 }}</p>
+        <pre class="evidence">{{ citationExcerpt.excerpt }}</pre>
+      </template>
+    </div>
+    <template #footer><el-button @click="citationExcerptVisible = false">关闭</el-button></template>
+  </el-dialog>
 
   <el-dialog v-model="assignmentVisible" title="补充工单处理信息" width="520px">
     <el-form label-width="90px">

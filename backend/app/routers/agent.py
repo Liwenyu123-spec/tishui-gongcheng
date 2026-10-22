@@ -16,9 +16,23 @@ from ..services.audit import record_audit
 from ..services.agent_limits import limits_summary
 from ..services.agent import build_answer
 from ..services.agent_session import prepare_request
+from ..services.agent_runs import cancel_run, run_status
 
 
 router = APIRouter(prefix="/api/v1", tags=["Agent"])
+
+
+@router.post("/agent/runs/{run_id}/cancel")
+def cancel_agent_run(run_id: str, user: dict = Depends(require_roles("admin", "operator", "reviewer"))) -> dict:
+    """标记进程内 Agent 运行取消；工作流在下一个节点边界停止。"""
+    cancel_run(run_id)
+    return {"run_id": run_id, "status": "cancelled"}
+
+
+@router.get("/agent/runs/{run_id}")
+def get_agent_run(run_id: str, user: dict = Depends(require_roles("admin", "operator", "reviewer"))) -> dict:
+    """查询当前进程内 Agent 运行状态。"""
+    return run_status(run_id)
 
 
 def _sse_event(event: str, data: object) -> str:
@@ -81,6 +95,7 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
                 "coordinator": "dispatch_coordinator",
                 "execution_mode": trace.execution_mode,
                 "shared_state": trace.shared_state,
+                "workflow_status": trace.status,
                 "primary_agent": plan.primary_agent,
                 "collaborating_agents": list(plan.collaborating_agents),
                 "allowed_tools": [tool.name for tool in plan.tools],
@@ -111,6 +126,7 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
                         "status": execution.status,
                         "error": execution.error,
                         "error_code": execution.error_code,
+                        "retryable": execution.retryable,
                     },
                 )
             if execution.status in {"failed", "timeout"}:
@@ -150,6 +166,7 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
                     "finished_at": execution.finished_at.isoformat() if execution.finished_at else None,
                     "duration_ms": execution.duration_ms,
                     "error_code": execution.error_code,
+                    "retryable": execution.retryable,
                 },
             )
         if failed_tools:
@@ -166,7 +183,7 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
         # result 事件只返回结构化答案，前端不需要解析自然语言日志。
         yield _sse_event("result", answer.model_dump(mode="json"))
         # done 事件表示本次 SSE 已完整结束，便于前端关闭 loading 状态。
-        yield _sse_event("done", {"request_id": answer.request_id, "run_id": answer.run_id})
+        yield _sse_event("done", {"request_id": answer.request_id, "run_id": answer.run_id, "workflow_status": trace.status})
 
     return StreamingResponse(
         events(),

@@ -102,3 +102,44 @@ def test_knowledge_search_returns_citable_result(client, admin_headers):
     first = results[0]
     assert first.get("source_id")
     assert first.get("title")
+
+
+def test_knowledge_version_compare_returns_diff(client, admin_headers):
+    """同标题新版本应能返回正文差异摘要。"""
+    first = client.post("/api/v1/knowledge/import", headers=admin_headers, json={
+        "filename": "version-1.md", "title": "版本对比规程", "version": "1.0",
+        "category": "规程", "content": "第一条：先检查压力。", "station_ids": [],
+    }).json()
+    client.patch(f"/api/v1/knowledge/{first['id']}/status", headers=admin_headers, json={"status": "valid"})
+    second = client.post("/api/v1/knowledge/import", headers=admin_headers, json={
+        "filename": "version-2.md", "title": "版本对比规程", "version": "2.0",
+        "category": "规程", "content": "第一条：先检查压力，再检查电流。", "station_ids": [],
+    }).json()
+    result = client.get(f"/api/v1/knowledge/{second['id']}/compare", headers=admin_headers)
+    assert result.status_code == 200
+    assert result.json()["changed"] is True
+    assert result.json()["compared_version"] == "1.0"
+
+
+def test_knowledge_search_rejects_unavailable_station(client, station_headers):
+    """站点账号请求无权站点时，检索接口必须直接拒绝。"""
+    response = client.get(
+        "/api/v1/knowledge/search",
+        headers=station_headers,
+        params={"q": "压力异常", "station_id": "pump-04"},
+    )
+    assert response.status_code == 403
+
+
+def test_expired_knowledge_is_excluded_from_search(client, admin_headers):
+    """超过 effective_to 的文档即使已批准，也不能被检索。"""
+    imported = client.post("/api/v1/knowledge/import", headers=admin_headers, json={
+        "filename": "expired.md", "title": "已过期规程", "version": "1.0",
+        "category": "规程", "content": "压力异常过期处理办法", "station_ids": [],
+        "effective_to": "2020-01-01T00:00:00Z",
+    })
+    assert imported.status_code == 200
+    document_id = imported.json()["id"]
+    assert client.patch(f"/api/v1/knowledge/{document_id}/status", headers=admin_headers, json={"status": "valid"}).status_code == 200
+    results = client.get("/api/v1/knowledge/search", headers=admin_headers, params={"q": "压力异常过期处理办法"}).json()["results"]
+    assert all(item["source_id"] != document_id for item in results)

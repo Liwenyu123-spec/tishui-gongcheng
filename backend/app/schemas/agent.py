@@ -29,6 +29,10 @@ class AgentCitation(BaseModel):
     source_id: str
     title: str
     detail: str
+    location: str | None = None
+    chunk_index: int | None = None
+    rerank: float | None = None
+    rank: int | None = None
 
 
 class AgentWorkOrderSuggestion(BaseModel):

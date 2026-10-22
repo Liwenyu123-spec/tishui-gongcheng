@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
-from app.agent.tools import AgentPlan, READ_ONLY_TOOLS
+from app.agent.tools import AgentPlan, READ_ONLY_TOOLS, ReadOnlyTool
+from app.agent.executor import execute_tool
 from app.agent.workflow import DispatchWorkflow
 from app.agent.executor import ToolContext
 from app.schemas.agent import AgentAnswer, AgentChatRequest
@@ -31,4 +32,23 @@ def test_tool_budget_blocks_steps_after_limit(monkeypatch):
     assert len(executions) == 2
     assert executions[0].status == "completed"
     assert executions[1].error_code == "TOOL_BUDGET_EXCEEDED"
+
+
+def test_unknown_tool_returns_structured_error():
+    """未注册工具不能抛出异常，必须返回不可重试错误码。"""
+    tool = ReadOnlyTool(name="not_registered", label="未知工具", description="测试")
+    result = execute_tool(tool, _context())
+    assert result.status == "failed"
+    assert result.error_code == "TOOL_NOT_FOUND"
+    assert result.retryable is False
+
+
+def test_source_failure_is_retryable(monkeypatch):
+    """数据源异常耗尽重试后应返回 SOURCE_UNAVAILABLE 且可重试。"""
+    tool = READ_ONLY_TOOLS["read_telemetry"]
+    monkeypatch.setattr("app.agent.executor._tool_retry_limit", lambda: 0)
+    monkeypatch.setitem(__import__("app.agent.executor", fromlist=["_TOOL_HANDLERS"])._TOOL_HANDLERS, tool.name, lambda *_: (_ for _ in ()).throw(RuntimeError("mock source down")))
+    result = execute_tool(tool, _context())
+    assert result.error_code == "SOURCE_UNAVAILABLE"
+    assert result.retryable is True
 

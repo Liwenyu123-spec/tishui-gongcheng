@@ -70,6 +70,8 @@ class ToolExecution:
     finished_at: datetime | None = None
     duration_ms: int | None = None
     error_code: str | None = None
+    # 是否允许上层在相同错误下再次尝试；预算、权限和未注册工具不可重试。
+    retryable: bool = False
 
 
 def _tool_timeout_seconds() -> float:
@@ -462,6 +464,7 @@ def execute_tool(tool: ReadOnlyTool, context: ToolContext) -> ToolExecution:
         finished_at=datetime.now(timezone.utc),
         duration_ms=max(0, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)),
         error_code="SOURCE_TIMEOUT" if last_status == "timeout" else "SOURCE_UNAVAILABLE",
+            retryable=True,
     )
 
 

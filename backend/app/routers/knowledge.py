@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 import hashlib
+import difflib
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -15,7 +16,7 @@ from ..services.audit import record_audit
 from ..services.document_extract import extract_text, suggested_title
 from ..services.knowledge_generate import ask_with_retrieval, generation_status
 from ..services.knowledge_search import search_rules
-from ..services.rag_chroma import ChromaRagStore, get_rag_store, rag_store_status
+from ..services.rag_chroma import ChromaRagStore, get_rag_store, rag_store_status, split_structured
 from ..services.rag_diagnose import diagnose
 from ..services.runtime_env import env_summary
 
@@ -313,6 +314,54 @@ def knowledge_detail(document_id: str, user: dict = Depends(get_current_user)) -
     if document.station_ids and not set(document.station_ids).intersection(visible_station_ids):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权查看该站点资料")
     return document
+
+
+@router.get("/knowledge/{document_id}/excerpt")
+def knowledge_excerpt(
+    document_id: str,
+    chunk_index: int = Query(default=0, ge=0, le=10000),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """按文档和分片编号返回有限原文片段，供引用核对。"""
+    document = _KNOWLEDGE.get(document_id)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识文档不存在")
+    visible_station_ids = {station["id"] for station in data_source.stations.list() if user_has_station_access(user, station["id"])}
+    if document.station_ids and not set(document.station_ids).intersection(visible_station_ids):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权查看该站点资料")
+    pieces = split_structured(_KNOWLEDGE_CONTENT.get(document_id, ""))
+    if chunk_index >= len(pieces):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档分片不存在")
+    piece = pieces[chunk_index]
+    return {
+        "document_id": document_id,
+        "title": document.title,
+        "version": document.version,
+        "chunk_index": chunk_index,
+        "location": piece.get("section_path") or f"分片 {chunk_index + 1}",
+        "excerpt": piece.get("text", "")[:2000],
+    }
+
+
+@router.get("/knowledge/{document_id}/compare")
+def compare_knowledge_version(document_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """返回同标题文档的相邻版本差异摘要，正文仅用于当前进程内对比。"""
+    document = _KNOWLEDGE.get(document_id)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识文档不存在")
+    visible = {station["id"] for station in data_source.stations.list() if user_has_station_access(user, station["id"])}
+    if document.station_ids and not set(document.station_ids).intersection(visible):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权查看该站点资料")
+    candidates = [item for item in _KNOWLEDGE.values() if item.id != document.id and item.title == document.title and item.category == document.category]
+    previous = sorted(candidates, key=lambda item: item.imported_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)[0] if candidates else None
+    if previous is None:
+        return {"document_id": document.id, "version": document.version, "compared_to": None, "changed": False, "diff": []}
+    diff = list(difflib.unified_diff(
+        _KNOWLEDGE_CONTENT.get(previous.id, "").splitlines(),
+        _KNOWLEDGE_CONTENT.get(document.id, "").splitlines(),
+        fromfile=f"{previous.version}", tofile=f"{document.version}", lineterm="",
+    ))
+    return {"document_id": document.id, "version": document.version, "compared_to": previous.id, "compared_version": previous.version, "changed": bool(diff), "diff": diff[:200]}
 
 
 @router.post("/knowledge/extract")

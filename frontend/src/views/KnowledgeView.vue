@@ -44,6 +44,7 @@ interface SearchHit {
   confidence: string
   // 检索接口会带重排概率；rag/ask 的 sources 目前不带，故声明为可选。
   rerank?: number | null
+  rank?: number
 }
 
 interface KnowledgeRow {
@@ -150,6 +151,13 @@ const csvLoading = ref(false)
 const csvResult = ref<CsvImportResponse | null>(null)
 const csvForm = reactive({ filename: 'telemetry.csv', content: 'station_id,observed_at,metric,value,unit\npump-02,2026-10-16T10:00:00Z,flow,1080,m³/h' })
 const statusUpdatingId = ref('')
+const compareVisible = ref(false)
+const compareLoading = ref(false)
+const compareTitle = ref('')
+const compareResult = ref<{ version: string; compared_version?: string; changed: boolean; diff: string[] } | null>(null)
+const excerptVisible = ref(false)
+const excerptLoading = ref(false)
+const excerptResult = ref<{ title: string; version: string; location: string; chunk_index: number; excerpt: string } | null>(null)
 const isAdmin = computed(() => {
   try {
     return JSON.parse(localStorage.getItem('current_user') || '{}').role === 'admin'
@@ -455,6 +463,41 @@ const preview = (row: KnowledgeRow) => {
   ElMessage.info(`${row.title} · ${row.version} · 当前仅展示文档元数据`)
 }
 
+const compareVersion = async (row: KnowledgeRow) => {
+  if (row.id.startsWith('local-')) {
+    ElMessage.info('示例资料没有后端版本记录，请先导入同标题的多版本文档')
+    return
+  }
+  compareTitle.value = `${row.title} · ${row.version}`
+  compareVisible.value = true
+  compareLoading.value = true
+  compareResult.value = null
+  try {
+    compareResult.value = await api(`/api/v1/knowledge/${encodeURIComponent(row.id)}/compare`)
+  } catch {
+    ElMessage.error('版本对比失败，请稍后重试')
+  } finally {
+    compareLoading.value = false
+  }
+}
+
+const viewExcerpt = async (source: SearchHit) => {
+  if (source.chunk_index === null || source.chunk_index === undefined || source.source.startsWith('mock')) {
+    ElMessage.info('该引用没有可定位的后端分片')
+    return
+  }
+  excerptVisible.value = true
+  excerptLoading.value = true
+  excerptResult.value = null
+  try {
+    excerptResult.value = await api(`/api/v1/knowledge/${encodeURIComponent(source.source_id)}/excerpt?chunk_index=${source.chunk_index}`)
+  } catch {
+    ElMessage.error('原文片段读取失败，请稍后重试')
+  } finally {
+    excerptLoading.value = false
+  }
+}
+
 const updateStatus = async (row: KnowledgeRow, displayStatus: string) => {
   if (!isAdmin.value || row.id.startsWith('local-')) {
     ElMessage.info('当前示例资料不能修改状态，请先导入后端文档')
@@ -653,7 +696,7 @@ onMounted(() => {
       <p v-if="askRetrievalGate" class="muted">{{ askRetrievalGate }}</p>
       <p v-if="askCompression" class="muted">{{ askCompression }}</p>
       <p v-if="askGroundedness" class="muted">{{ askGroundedness }}</p>
-      <p v-for="source in askSources" :key="source.source_id" class="muted">引用：{{ source.title }} · {{ source.location }}</p>
+      <p v-for="source in askSources" :key="source.source_id" class="muted">引用{{ source.rank ? ` ${source.rank}` : '' }}：{{ source.title }} · {{ source.location }}<template v-if="source.chunk_index !== null && source.chunk_index !== undefined"> · 分片 {{ source.chunk_index + 1 }}</template><template v-if="source.rerank !== null && source.rerank !== undefined"> · 重排 {{ source.rerank }}</template><el-button v-if="source.chunk_index !== null && source.chunk_index !== undefined" link type="primary" size="small" @click="viewExcerpt(source)">查看原文</el-button></p>
     </div>
     <div v-if="askNeedsClarification && (askRetrievalGate || askSources.length)" style="margin-top:8px">
       <p v-if="askRetrievalGate" class="muted">{{ askRetrievalGate }}</p>
@@ -694,6 +737,7 @@ onMounted(() => {
         <el-table-column label="操作" width="290">
           <template #default="s">
             <el-button link type="primary" @click="preview(s.row)">预览引用</el-button>
+            <el-button v-if="!s.row.id.startsWith('local-')" link type="primary" @click="compareVersion(s.row)">版本对比</el-button>
             <template v-if="isAdmin && !s.row.id.startsWith('local-')">
               <el-button link type="success" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '现行')">现行</el-button>
               <el-button link type="warning" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '待审')">待审</el-button>
@@ -705,6 +749,27 @@ onMounted(() => {
       </el-table>
     </div>
   </div>
+
+  <el-dialog v-model="compareVisible" :title="`版本对比：${compareTitle}`" width="720px">
+    <div v-loading="compareLoading">
+      <p v-if="compareResult && !compareResult.compared_version" class="muted">没有找到同标题的其他版本。</p>
+      <template v-else-if="compareResult">
+        <p class="muted">当前版本 {{ compareResult.version }} · 对比版本 {{ compareResult.compared_version }} · {{ compareResult.changed ? '正文有变化' : '正文无变化' }}</p>
+        <pre v-if="compareResult.diff.length" class="diff-preview">{{ compareResult.diff.join('\n') }}</pre>
+      </template>
+    </div>
+    <template #footer><el-button @click="compareVisible = false">关闭</el-button></template>
+  </el-dialog>
+
+  <el-dialog v-model="excerptVisible" title="引用原文片段" width="720px">
+    <div v-loading="excerptLoading">
+      <template v-if="excerptResult">
+        <p class="muted">{{ excerptResult.title }} · {{ excerptResult.version }} · {{ excerptResult.location }} · 分片 {{ excerptResult.chunk_index + 1 }}</p>
+        <pre class="diff-preview">{{ excerptResult.excerpt }}</pre>
+      </template>
+    </div>
+    <template #footer><el-button @click="excerptVisible = false">关闭</el-button></template>
+  </el-dialog>
 
   <el-dialog v-model="importVisible" title="导入知识资料" width="520px">
     <el-form label-width="90px">

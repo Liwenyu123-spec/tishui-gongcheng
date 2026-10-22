@@ -223,8 +223,8 @@ def _protocol_explanation(alarm: dict, message: str) -> tuple[str | None, list[A
         return None, [citation]
 
     citations = [
-        AgentCitation(source_type="knowledge", source_id=hit.source_id, title=hit.title, detail=hit.detail)
-        for hit in strong[:3]
+        AgentCitation(source_type="knowledge", source_id=hit.source_id, title=hit.title, detail=hit.detail, location=hit.location, chunk_index=hit.chunk_index, rerank=hit.rerank, rank=index + 1)
+        for index, hit in enumerate(strong[:3])
     ]
     status = generation_status()
     metric_name = metric_label(alarm["metric"])
@@ -487,8 +487,8 @@ def _answer_for_knowledge(
         )
     top = strong[0]
     citations = [
-        AgentCitation(source_type="knowledge", source_id=hit.source_id, title=hit.title, detail=hit.detail)
-        for hit in strong[:3]
+        AgentCitation(source_type="knowledge", source_id=hit.source_id, title=hit.title, detail=hit.detail, location=hit.location, chunk_index=hit.chunk_index, rerank=hit.rerank, rank=index + 1)
+        for index, hit in enumerate(strong[:3])
     ]
     explanation = f"依据《{top.title}》：{top.detail}"
     return AgentAnswer(
@@ -692,4 +692,5 @@ def reconcile_answer_with_tools(answer: AgentAnswer, executions: tuple[object, .
         ]
 
     return answer.model_copy(update=updates)
+
 

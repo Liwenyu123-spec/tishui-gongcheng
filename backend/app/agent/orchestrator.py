@@ -55,6 +55,8 @@ def run_plan(
     from ..services.agent import reconcile_answer_with_tools
 
     run_id = answer.run_id or f"run-{uuid4().hex[:16]}"
+    from ..services.agent_runs import set_run_status
+    set_run_status(run_id, "running")
     answer = answer.model_copy(update={"run_id": run_id, "thread_id": request.session_id})
     plan = coordinate(answer, request.message)
     context = ToolContext(user=user, request=request, answer=answer, run_id=run_id)
@@ -76,6 +78,7 @@ def run_plan(
         else:
             executions, trace = DispatchWorkflow(plan).run(context)
     final_answer = reconcile_answer_with_tools(answer, executions)
+    set_run_status(run_id, trace.status)
     from ..services.agent_llm import generate_answer_from_evidence
     from ..services.agent_limits import max_model_calls
 

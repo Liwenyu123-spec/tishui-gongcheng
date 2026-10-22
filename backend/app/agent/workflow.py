@@ -56,6 +56,8 @@ class CollaborationTrace:
     runs: tuple[SpecialistRun, ...]
     execution_mode: str = "specialist-pipeline"
     shared_state: bool = True
+    # 工作流级状态，供 SSE 和前端统一展示；当前运行在进程内同步完成。
+    status: str = "completed"
 
     def as_events(self) -> list[dict[str, object]]:
         return [run.as_event() for run in self.runs]
@@ -207,6 +209,10 @@ class DispatchWorkflow:
         # 预算按整轮工作流累计，而不是每个专业 Agent 单独重新计数。
 
         for name in self._agent_order():
+            from ..services.agent_runs import is_cancelled
+            if is_cancelled(context.run_id):
+                runs.append(SpecialistRun(agent=name, role=_AGENT_ROLES.get(name, name), status="cancelled", summary="运行已被用户取消"))
+                break
             # 每个节点只拿到前序结果的不可变快照；本节点新结果完成后再写回共享列表。
             node_context = replace(
                 context,
@@ -252,7 +258,16 @@ class DispatchWorkflow:
             )
             runs.append(safety_run)
 
-        return tuple(executions), CollaborationTrace(runs=tuple(runs))
+        workflow_status = "completed"
+        if any(run.status == "cancelled" for run in runs):
+            workflow_status = "cancelled"
+        elif any(item.status == "timeout" for item in executions):
+            workflow_status = "timeout"
+        elif any(run.status == "blocked" for run in runs):
+            workflow_status = "blocked"
+        elif any(run.status in {"partial", "failed"} for run in runs):
+            workflow_status = "degraded"
+        return tuple(executions), CollaborationTrace(runs=tuple(runs), status=workflow_status)
 
     @staticmethod
     def _budget_execution(execution: ToolExecution, completed_count: int, limit: int) -> ToolExecution:
