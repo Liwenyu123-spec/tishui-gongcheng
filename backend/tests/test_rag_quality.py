@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from app.services.knowledge_generate import clean_query
+
 # 检索问句刻意使用资料原文里的关键词，避免依赖语义模型才能命中。
 _QUERY = "通知失败后怎么重试"
 # 正文按规程条款组织，与现场资料的导入形态一致。
@@ -14,6 +16,15 @@ _CONTENT = (
     "第二条 通知失败后在通知中心点击重试，重试成功后通知状态恢复为待确认。\n"
     "第三条 连续重试三次仍失败时，电话联系值班负责人，并保留人工兜底记录。"
 )
+
+
+def test_water_query_terms_are_normalized():
+    """常见水务口语应归一化为规程术语，便于关键词和向量检索共同使用。"""
+
+    normalized = clean_query("请问二泵压强和电流过高怎么查？")
+    assert "二泵站" in normalized
+    assert "压力" in normalized
+    assert "运行电流超限" in normalized
 
 
 def test_knowledge_search_returns_citable_result(client, admin_headers):
