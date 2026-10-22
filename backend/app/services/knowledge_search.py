@@ -209,13 +209,16 @@ def search_rules(
             # 只写一条会与实际依据不符。旧索引没有这些字段时退回分片序号。
             section_path = str(metadata.get("section_path") or "").strip()
             context_label = str(item.get("context_label") or "").strip()
+            # Chroma 负责语义召回，关键词重合度补足泵站编号、告警编码和专业术语的精确匹配。
+            chunk_searchable = f"{metadata.get('title', '')} {metadata.get('filename', '')} {item.get('text', '')}".lower()
+            keyword_bonus = sum(1 for term in query_terms if term and term in chunk_searchable)
             hits.append(
                 KnowledgeHit(
                     source_id=document_id,
                     title=f"{metadata.get('title') or metadata.get('filename') or document_id} {metadata.get('version', '')}".strip(),
                     version=str(metadata.get("version") or "1.0"),
                     detail=str(item["text"]).replace("\r", " ").replace("\n", " ")[:500],
-                    score=int(item["score"]),
+                    score=int(item["score"]) + keyword_bonus,
                     source="chroma-document",
                     filename=str(metadata.get("filename") or ""),
                     station_ids=station_ids,

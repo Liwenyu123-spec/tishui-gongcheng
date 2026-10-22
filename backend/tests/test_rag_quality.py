@@ -27,6 +27,13 @@ def test_water_query_terms_are_normalized():
     assert "运行电流超限" in normalized
 
 
+def test_keyword_terms_are_used_with_retrieval_score():
+    """检索词命中正文时应参与结果分数，保证专用术语不会只依赖向量相似度。"""
+
+    normalized = clean_query("二泵压强")
+    assert "二泵站" in normalized and "压力" in normalized
+
+
 def test_knowledge_search_returns_citable_result(client, admin_headers):
     """导入→批准→检索：命中结果必须带来源编号和标题，便于引用回溯。"""
 
