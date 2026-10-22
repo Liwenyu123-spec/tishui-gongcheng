@@ -63,6 +63,7 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
             "start",
             {
                 "request_id": answer.request_id,
+                "run_id": answer.run_id,
                 "session_id": prepared_payload.session_id,
                 "effective_question": prepared_payload.message if prepared_payload.message != payload.message else None,
                 "mode": (

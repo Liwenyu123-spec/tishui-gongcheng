@@ -67,6 +67,8 @@ interface AgentMessage {
   steps?: string[]
   modelMode?: string
   planningSource?: string
+  runId?: string
+  limits?: { max_tool_calls?: number; max_model_calls?: number; max_concurrency?: number }
   pending?: boolean
 }
 
@@ -210,6 +212,8 @@ const ask = async (q = input.value) => {
     if (eventName === 'start') {
       const start = JSON.parse(data) as {
         mode?: string
+        run_id?: string | null
+        limits?: { max_tool_calls?: number; max_model_calls?: number; max_concurrency?: number }
         planning_source?: string
         execution_mode?: string
         session_id?: string | null
@@ -217,6 +221,8 @@ const ask = async (q = input.value) => {
       updateAgentSession(start.session_id)
       aiMessage.modelMode = start.mode || 'rule-mock'
       aiMessage.planningSource = start.planning_source || 'rule'
+      aiMessage.runId = start.run_id || undefined
+      aiMessage.limits = start.limits
       aiMessage.text = '已定位问题，正在整理事实和引用依据…'
       agentStatusText.value = '已连接，正在执行只读分析…'
       return
@@ -286,6 +292,8 @@ const ask = async (q = input.value) => {
     const evidence = [
       ...(aiMessage.modelMode ? [`模型参与：${aiMessage.modelMode}`] : []),
       ...(aiMessage.planningSource ? [`计划来源：${aiMessage.planningSource}`] : []),
+      ...(aiMessage.runId ? [`运行编号：${aiMessage.runId}`] : []),
+      ...(aiMessage.limits ? [`运行限额：工具 ${aiMessage.limits.max_tool_calls ?? '—'} · 模型 ${aiMessage.limits.max_model_calls ?? '—'} · 并发 ${aiMessage.limits.max_concurrency ?? '—'}`] : []),
       ...(answer.effective_question ? [`本轮合并问句：${answer.effective_question}`] : []),
       ...(aiMessage.steps?.length ? [`分析步骤：${aiMessage.steps.join(' → ')}`] : []),
       ...answer.facts.map(fact => `事实：${fact}`),
