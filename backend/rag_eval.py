@@ -11,6 +11,8 @@
 
 指标：
 - Recall@K：正确文档是否出现在前 K 名（只统计可回答问句）。
+- Precision@K：前 K 个结果中相关文档所占比例。
+- nDCG@K：按相关文档排名折损后的排序质量。
 - MRR@5：正确文档排名的倒数均值，越接近 1 说明排得越靠前。
 - 门控：无答案问句是否被 `RAG_ASK_MIN_SCORE` 拦住（abstain accuracy），
   以及可回答问句是否被误拦（误拒率）。这一对指标必须同时看，
@@ -45,6 +47,26 @@ if str(BACKEND_DIR) not in sys.path:
 DEFAULT_CORPUS = BACKEND_DIR / "data" / "rag_eval_corpus.json"
 DEFAULT_CASES = BACKEND_DIR / "data" / "rag_eval.jsonl"
 DEFAULT_MIN_SCORE = 8
+
+
+def precision_at_k(result_ids: list[str], expected_ids: set[str], k: int) -> float:
+    """计算单条问句的 Precision@K，分母固定为 K。"""
+
+    if k <= 0:
+        return 0.0
+    return sum(item in expected_ids for item in result_ids[:k]) / k
+
+
+def ndcg_at_k(result_ids: list[str], expected_ids: set[str], k: int) -> float:
+    """计算二值相关性 nDCG@K；正确文档越靠前得分越高。"""
+
+    import math
+
+    if k <= 0 or not expected_ids:
+        return 0.0
+    dcg = sum(1.0 / math.log2(index + 2) for index, item in enumerate(result_ids[:k]) if item in expected_ids)
+    ideal = sum(1.0 / math.log2(index + 2) for index in range(min(len(expected_ids), k)))
+    return dcg / ideal if ideal else 0.0
 
 
 def load_corpus(path: Path) -> list[dict[str, Any]]:
@@ -106,6 +128,8 @@ def evaluate(
     """跑完所有问句并汇总指标。"""
 
     rank_hits = {1: 0, 3: 0, 5: 0}
+    precision_sum = {1: 0.0, 3: 0.0, 5: 0.0}
+    ndcg_sum = {3: 0.0, 5: 0.0}
     reciprocal_sum = 0.0
     answerable = 0
     abstain_total = 0
@@ -155,6 +179,7 @@ def evaluate(
     for case in cases:
         query = case["query"]
         expected = case.get("expected")
+        expected_ids = {str(item) for item in expected} if isinstance(expected, list) else ({str(expected)} if expected is not None else set())
         hits, effective_query = search_variants(query)
         ids = [hit["document_id"] for hit in hits]
         top_score = hits[0]["score"] if hits else 0
@@ -201,7 +226,7 @@ def evaluate(
             row["result"] = "abstain_ok" if gated_live else f"abstain_fail(top={ids[0] if ids else None})"
         else:
             answerable += 1
-            rank = ids.index(expected) + 1 if expected in ids else None
+            rank = min((ids.index(item) + 1 for item in expected_ids if item in ids), default=None)
             row["rank"] = rank
             if rank is None:
                 row["result"] = "miss"
@@ -221,6 +246,9 @@ def evaluate(
             for cutoff in rank_hits:
                 if rank is not None and rank <= cutoff:
                     rank_hits[cutoff] += 1
+                precision_sum[cutoff] += precision_at_k(ids, expected_ids, cutoff)
+            for cutoff in ndcg_sum:
+                ndcg_sum[cutoff] += ndcg_at_k(ids, expected_ids, cutoff)
             if rank is not None and rank <= 5:
                 reciprocal_sum += 1.0 / rank
         rows.append(row)
@@ -235,6 +263,11 @@ def evaluate(
         "recall_at_1": ratio(rank_hits[1], answerable),
         "recall_at_3": ratio(rank_hits[3], answerable),
         "recall_at_5": ratio(rank_hits[5], answerable),
+        "precision_at_1": round(precision_sum[1] / answerable, 4) if answerable else 0.0,
+        "precision_at_3": round(precision_sum[3] / answerable, 4) if answerable else 0.0,
+        "precision_at_5": round(precision_sum[5] / answerable, 4) if answerable else 0.0,
+        "ndcg_at_3": round(ndcg_sum[3] / answerable, 4) if answerable else 0.0,
+        "ndcg_at_5": round(ndcg_sum[5] / answerable, 4) if answerable else 0.0,
         "mrr_at_5": round(reciprocal_sum / answerable, 4) if answerable else 0.0,
         "abstain_accuracy": ratio(abstain_correct["live"], abstain_total),
         "false_reject_rate": ratio(false_reject["live"], answerable),
@@ -254,6 +287,8 @@ def print_report(summary: dict[str, Any], *, verbose: bool) -> None:
     print(f"问句总数 {summary['cases']}｜可回答 {summary['answerable']}｜无答案 {summary['abstain_cases']}")
     print(f"Recall@1 {summary['recall_at_1']:.2%}   Recall@3 {summary['recall_at_3']:.2%}   "
           f"Recall@5 {summary['recall_at_5']:.2%}   MRR@5 {summary['mrr_at_5']:.4f}")
+    print(f"Precision@1 {summary['precision_at_1']:.2%}   Precision@3 {summary['precision_at_3']:.2%}   "
+          f"Precision@5 {summary['precision_at_5']:.2%}   nDCG@3 {summary['ndcg_at_3']:.4f}   nDCG@5 {summary['ndcg_at_5']:.4f}")
     print(f"门控阈值 score>={summary['min_score']}"
           f"｜rerank>={summary['min_rerank'] if summary['min_rerank'] is not None else '未启用'}")
     print(f"  线上门控：无答案正确弃答 {summary['abstain_accuracy']:.2%}，可回答误拒 {summary['false_reject_rate']:.2%}")
@@ -348,6 +383,8 @@ def main() -> int:
         # 所以和弃答准确率一起卡，避免用降低阈值的方式刷高召回。
         return 0 if (
             summary["recall_at_3"] >= 0.9
+            and summary["precision_at_1"] >= 0.8
+            and summary["ndcg_at_3"] >= 0.8
             and summary["abstain_accuracy"] >= 0.75
             and summary["false_reject_rate"] <= 0.1
             and summary["citation_coverage"] >= 0.9

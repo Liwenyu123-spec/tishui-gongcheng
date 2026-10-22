@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.services.knowledge_generate import clean_query
+from rag_eval import ndcg_at_k, precision_at_k
 
 # 检索问句刻意使用资料原文里的关键词，避免依赖语义模型才能命中。
 _QUERY = "通知失败后怎么重试"
@@ -32,6 +35,17 @@ def test_keyword_terms_are_used_with_retrieval_score():
 
     normalized = clean_query("二泵压强")
     assert "二泵站" in normalized and "压力" in normalized
+
+
+def test_offline_rag_ranking_metrics():
+    """离线评测指标应反映命中数量和排序位置。"""
+
+    result_ids = ["doc-b", "doc-a", "doc-c"]
+    expected = {"doc-a"}
+    assert precision_at_k(result_ids, expected, 1) == 0.0
+    assert precision_at_k(result_ids, expected, 3) == pytest.approx(1 / 3)
+    assert ndcg_at_k(["doc-a", "doc-b"], expected, 3) == 1.0
+    assert 0.0 < ndcg_at_k(result_ids, expected, 3) < 1.0
 
 
 def test_knowledge_search_returns_citable_result(client, admin_headers):

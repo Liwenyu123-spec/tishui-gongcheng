@@ -294,6 +294,7 @@ def _execute_search_knowledge(tool: ReadOnlyTool, context: ToolContext) -> ToolE
     visible = _visible_station_ids(context.user)
     hits = search_rules(
         query,
+        original_query=context.request.message,
         metric=metric,
         limit=3,
         station_id=station["id"] if station else None,
@@ -302,6 +303,7 @@ def _execute_search_knowledge(tool: ReadOnlyTool, context: ToolContext) -> ToolE
     if not hits and metric:
         hits = search_rules(
             f"{metric} 异常核查",
+            original_query=context.request.message,
             metric=metric,
             limit=3,
             station_id=station["id"] if station else None,

@@ -143,6 +143,7 @@ def _document_applies(document, *, station_id: str | None, visible_station_ids: 
 def search_rules(
     query: str,
     *,
+    original_query: str | None = None,
     metric: str | None = None,
     limit: int = 5,
     station_id: str | None = None,
@@ -152,7 +153,8 @@ def search_rules(
     """按关键词、状态、有效期和站点检索内置规则及已批准导入文档。"""
 
     normalized = query.strip().lower()
-    query_terms = _terms(normalized)
+    # 同时保留原始问句和归一化问句的词项，避免术语替换误伤站点编号或告警编码。
+    query_terms = tuple(dict.fromkeys((*_terms(normalized), *_terms((original_query or "").lower()))))
     current_time = now or datetime.now(timezone.utc)
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=timezone.utc)
