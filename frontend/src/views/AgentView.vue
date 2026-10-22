@@ -242,9 +242,12 @@ const ask = async (q = input.value) => {
       return
     }
     if (eventName === 'tool') {
-      const tool = JSON.parse(data) as { label?: string; summary?: string; status?: string; attempts?: number; error?: string | null }
+      const tool = JSON.parse(data) as { label?: string; summary?: string; status?: string; attempts?: number; error?: string | null; risk_level?: string; required_permission?: string }
       if (tool.label && tool.status === 'completed') {
-        const step = tool.summary ? `${tool.label}：${tool.summary}` : tool.label
+        const metadata = tool.risk_level || tool.required_permission
+          ? `（风险：${tool.risk_level || '未知'}；权限：${tool.required_permission || '未声明'}）`
+          : ''
+        const step = tool.summary ? `${tool.label}${metadata}：${tool.summary}` : `${tool.label}${metadata}`
         aiMessage.steps = [...(aiMessage.steps || []), step]
         aiMessage.evidence = `分析步骤：${aiMessage.steps.join(' → ')}`
         agentStatusText.value = tool.summary ? `${tool.label}：${tool.summary}` : `正在执行：${tool.label}`

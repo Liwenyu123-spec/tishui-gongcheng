@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-- 项目迭代：`v0.10.172`
+- 项目迭代：`v0.10.173`
 - 前端包版本：`0.2.0`
 - 当前模式：本地测试、Mock 数据、只读 Agent、多 Agent 专业节点协作
 - 前端目录：[frontend](./frontend)
@@ -344,3 +344,8 @@ Agent 的 `agent`、`fallback` 和 `done` 事件现在也返回 `run_id`。同�
 ### 工具风险和权限元数据（v0.10.172）
 
 只读工具目录现在声明 `risk_level` 和 `required_permission`。普通读取工具默认是 `low / agent.read`，控制边界检查工具是 `high / agent.control.review`，并会在工具 SSE 事件中返回。
+
+
+### Agent 前端显示工具风险和权限（v0.10.173）
+
+Agent 分析步骤现在会显示工具的风险等级和所需权限，例如“风险：low；权限：agent.read”。这只是执行契约的可视化，不会改变工具权限。
