@@ -356,6 +356,13 @@ def import_knowledge(
     # 导入资料先进入待审状态，只有管理员将其设为现行后才会参与检索。
     content_hash = hashlib.sha256(payload.content.encode("utf-8")).hexdigest()
     file_hash = hashlib.sha256((payload.filename + "\0" + payload.content).encode("utf-8")).hexdigest()
+    # 文件名和正文相同，或正文指纹相同，都视为重复导入；直接返回已有记录保持幂等。
+    duplicate = next(
+        (item for item in _KNOWLEDGE.values() if item.file_hash == file_hash or item.content_hash == content_hash),
+        None,
+    )
+    if duplicate is not None:
+        return duplicate
     document = KnowledgeDocument(
         id=f"knowledge-{uuid4().hex[:10]}",
         filename=payload.filename,

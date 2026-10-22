@@ -36,6 +36,20 @@ def test_knowledge_search_returns_citable_result(client, admin_headers):
     assert len(imported_body["content_hash"]) == 64
     assert len(imported_body["file_hash"]) == 64
     document_id = imported.json()["id"]
+    duplicate = client.post(
+        "/api/v1/knowledge/import",
+        headers=admin_headers,
+        json={
+            "filename": "renamed-copy.md",
+            "title": "同正文副本",
+            "version": "1.0",
+            "category": "规程",
+            "content": _CONTENT,
+            "station_ids": ["pump-02"],
+        },
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["id"] == document_id
     # 新导入资料处于待审状态，只有批准为现行后才进入检索集合。
     approved = client.patch(
         f"/api/v1/knowledge/{document_id}/status",
