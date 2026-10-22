@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-- 项目迭代：`v0.10.166`
+- 项目迭代：`v0.10.167`
 - 前端包版本：`0.2.0`
 - 当前模式：本地测试、Mock 数据、只读 Agent、多 Agent 专业节点协作
 - 前端目录：[frontend](./frontend)
@@ -314,3 +314,8 @@ Agent 的 `tool`、`retry` 和 `error` SSE 事件现在也会返回本次 `run_i
 
 Agent 现在支持进程内调用治理：`AGENT_MAX_TOOL_CALLS` 限制单次请求工具调用数，`AGENT_MAX_MODEL_CALLS` 记录模型调用预算配置，`AGENT_MAX_CONCURRENCY` 限制同时运行的 Agent 请求数。超过工具预算返回 `TOOL_BUDGET_EXCEEDED`，并发槽位不足返回 `AGENT_CAPACITY_EXCEEDED`。这些限制当前只在单个后端进程内生效。
 
+
+
+### Agent 预算回归测试（v0.10.167）
+
+后端新增 Agent 限额回归测试，验证工具步骤超过 `AGENT_MAX_TOOL_CALLS` 时返回 `TOOL_BUDGET_EXCEEDED`。当前后端测试共 8 项。
