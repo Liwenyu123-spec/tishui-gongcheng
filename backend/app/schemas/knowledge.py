@@ -97,6 +97,8 @@ class KnowledgeSearchResponse(BaseModel):
     # 本次检索覆盖的去重文档来源，便于多文档联合引用时展示来源范围。
     source_ids: list[str] = Field(default_factory=list)
     document_count: int = 0
+    # 多份资料对同一主题给出相反约束时返回冲突摘要，先提示人工核对，不自动裁决。
+    conflicts: list[dict] = Field(default_factory=list)
 
 
 class KnowledgeRagAskRequest(BaseModel):

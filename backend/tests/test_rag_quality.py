@@ -139,6 +139,28 @@ def test_knowledge_search_reports_multiple_document_sources(client, admin_header
     body = response.json()
     assert body["document_count"] >= 2
     assert len(body["source_ids"]) == body["document_count"]
+    assert body["conflicts"] == []
+
+
+def test_knowledge_search_reports_conflicting_constraints(client, admin_headers):
+    """同主题资料出现正反约束时，检索响应应提示人工核对来源。"""
+    documents = (
+        ("conflict-allow.md", "有限空间作业甲", "有限空间作业可以单人进入，进入前检查通风。"),
+        ("conflict-deny.md", "有限空间作业乙", "有限空间作业必须两人以上，禁止单人进入。"),
+    )
+    for filename, title, content in documents:
+        imported = client.post("/api/v1/knowledge/import", headers=admin_headers, json={
+            "filename": filename, "title": title, "version": "1.0", "category": "规程",
+            "content": content, "station_ids": ["pump-02"],
+        })
+        assert imported.status_code == 200, imported.text
+        client.patch(f"/api/v1/knowledge/{imported.json()['id']}/status", headers=admin_headers, json={"status": "valid"})
+    response = client.get("/api/v1/knowledge/search", headers=admin_headers, params={
+        "q": "有限空间作业 单人进入", "station_id": "pump-02", "limit": 10,
+    })
+    assert response.status_code == 200
+    conflicts = response.json()["conflicts"]
+    assert conflicts and set(conflicts[0]["source_ids"]) <= set(response.json()["source_ids"])
 
 
 def test_knowledge_version_compare_returns_diff(client, admin_headers):

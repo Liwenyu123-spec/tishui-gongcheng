@@ -276,3 +276,36 @@ def search_rules(
             )
     hits.sort(key=lambda hit: (-hit.score, hit.source_id))
     return hits[: max(1, min(limit, 10))]
+
+
+_CONFLICT_POSITIVE = ("可以", "允许", "无需", "不必", "可直接")
+_CONFLICT_NEGATIVE = ("必须", "不得", "禁止", "不可", "不能")
+
+
+def detect_conflicts(hits: list[KnowledgeHit]) -> list[dict]:
+    """识别同一轮结果中明显相反的约束表述。
+
+    这是保守的提示层：只在不同来源同时出现正反约束且共享主题词时报告，
+    不替用户决定哪份规程优先。
+    """
+    conflicts: list[dict] = []
+    for index, left in enumerate(hits):
+        left_text = f"{left.title} {left.detail}"
+        left_positive = any(word in left_text for word in _CONFLICT_POSITIVE)
+        left_negative = any(word in left_text for word in _CONFLICT_NEGATIVE)
+        for right in hits[index + 1 :]:
+            if left.source_id == right.source_id:
+                continue
+            right_text = f"{right.title} {right.detail}"
+            right_positive = any(word in right_text for word in _CONFLICT_POSITIVE)
+            right_negative = any(word in right_text for word in _CONFLICT_NEGATIVE)
+            opposite = (left_positive and right_negative) or (left_negative and right_positive)
+            shared_terms = set(_terms(left.title)) & set(_terms(right.title))
+            if not opposite or len(shared_terms) < 1:
+                continue
+            conflicts.append({
+                "source_ids": [left.source_id, right.source_id],
+                "reason": "不同来源对同一主题给出了相反约束，请核对版本、生效时间和适用范围。",
+                "details": [left.detail, right.detail],
+            })
+    return conflicts

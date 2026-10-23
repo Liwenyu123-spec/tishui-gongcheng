@@ -15,7 +15,7 @@ from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, Knowl
 from ..services.audit import record_audit
 from ..services.document_extract import extract_text, suggested_title
 from ..services.knowledge_generate import ask_with_retrieval, generation_status
-from ..services.knowledge_search import search_rules
+from ..services.knowledge_search import detect_conflicts, search_rules
 from ..services.rag_chroma import ChromaRagStore, get_rag_store, rag_store_status, split_structured
 from ..services.rag_diagnose import diagnose
 from ..services.runtime_env import env_summary
@@ -210,6 +210,7 @@ def search_knowledge(
         results=results,
         source_ids=source_ids,
         document_count=len(source_ids),
+        conflicts=detect_conflicts(hits),
     )
 
 
