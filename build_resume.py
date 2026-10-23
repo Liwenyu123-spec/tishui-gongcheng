@@ -12,15 +12,15 @@ styles=getSampleStyleSheet()
 navy=colors.HexColor('#123B5D'); blue=colors.HexColor('#2F6B8A'); gray=colors.HexColor('#5B6570')
 styles.add(ParagraphStyle('Name',fontName='Noto',fontSize=22,leading=27,textColor=navy,alignment=TA_CENTER,spaceAfter=3))
 styles.add(ParagraphStyle('Sub',fontName='Noto',fontSize=10,leading=15,textColor=gray,alignment=TA_CENTER))
-styles.add(ParagraphStyle('H',fontName='Noto',fontSize=12.5,leading=18,textColor=navy,spaceBefore=7,spaceAfter=4))
-styles.add(ParagraphStyle('Body',fontName='Noto',fontSize=9.2,leading=14,textColor=colors.HexColor('#20262D'),spaceAfter=2))
+styles.add(ParagraphStyle('H',fontName='Noto',fontSize=12.5,leading=18,textColor=navy,spaceBefore=5,spaceAfter=3))
+styles.add(ParagraphStyle('Body',fontName='Noto',fontSize=8.7,leading=12.5,textColor=colors.HexColor('#20262D'),spaceAfter=2))
 styles.add(ParagraphStyle('Small',fontName='Noto',fontSize=8.5,leading=12.5,textColor=gray))
 styles.add(ParagraphStyle('Proj',fontName='Noto',fontSize=10,leading=14,textColor=navy,spaceAfter=1))
 
 def P(t,s='Body'): return Paragraph(t,styles[s])
 def bullet(t): return P('• '+t)
 
-doc=SimpleDocTemplate(out,pagesize=A4,rightMargin=16*mm,leftMargin=16*mm,topMargin=12*mm,bottomMargin=12*mm)
+doc=SimpleDocTemplate(out,pagesize=A4,rightMargin=14*mm,leftMargin=14*mm,topMargin=9*mm,bottomMargin=9*mm)
 story=[]
 story += [P('李文聿','Name'), P('求职方向：AI 应用开发 / RAG 应用开发','Sub'), P('24岁  |  18335367635  |  18335367635@163.com','Sub'), Spacer(1,5)]
 # summary
@@ -56,3 +56,4 @@ for t in ['参加校级创新创业类活动，完成项目方案撰写与展示
 story += [P('自我评价','H'), P('学习主动，能快速阅读项目代码与文档并定位问题；重视可验证的功能边界、日志与测试，能够将 RAG 能力落到具体业务流程中。')]
 doc.build(story)
 print(out)
+
