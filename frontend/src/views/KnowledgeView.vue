@@ -134,6 +134,7 @@ const query = ref('')
 const statusFilter = ref('')
 const loading = ref(false)
 const searchHits = ref<SearchHit[]>([])
+const searchConflicts = ref<SearchConflict[]>([])
 const searchMessage = ref('')
 const sourceLabel = ref('本地示例')
 const importVisible = ref(false)
@@ -271,6 +272,7 @@ const searchKnowledge = async () => {
   const keyword = query.value.trim()
   if (!keyword) {
     searchHits.value = []
+    searchConflicts.value = []
     searchMessage.value = ''
     await loadKnowledge()
     return
@@ -283,6 +285,7 @@ const searchKnowledge = async () => {
     searchMessage.value = result.results.length ? `检索到 ${result.results.length} 条来源` : '没有命中现行资料或内置规程'
   } catch {
     searchHits.value = []
+    searchConflicts.value = []
     searchMessage.value = '检索接口暂不可用'
     ElMessage.warning('检索接口暂不可用')
   } finally {
@@ -722,6 +725,10 @@ onMounted(() => {
     </div>
     <div v-if="searchMessage" style="padding:12px 18px 0">
       <p class="muted">{{ searchMessage }}</p>
+      <div v-if="searchConflicts.length" class="panel" style="margin-top:8px;padding:12px 14px;border:1px solid #d97706">
+        <strong style="color:#d97706">发现引用冲突，请人工核对</strong>
+        <p v-for="(conflict, index) in searchConflicts" :key="`${conflict.source_ids.join('-')}-${index}`" class="muted">{{ conflict.reason }} 来源：{{ conflict.source_ids.join('、') }}</p>
+      </div>
       <div v-for="hit in searchHits" :key="`${hit.source_id}-${hit.chunk_index}`" class="panel" style="margin-top:8px;padding:12px 14px">
         <strong>{{ hit.title }}</strong>
         <p class="muted">{{ hit.category || '规程' }} · {{ hit.filename || '无文件名' }} · {{ hit.version }} · {{ hit.location }} · {{ hit.station_ids.length ? hit.station_ids.join('、') : '全局' }} · 相关度 {{ hit.score }}<template v-if="hit.rerank !== null && hit.rerank !== undefined"> · 重排 {{ hit.rerank }}</template> · {{ hit.confidence === 'low' ? '低置信' : '可引用' }}</p>
