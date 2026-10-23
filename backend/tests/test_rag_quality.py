@@ -102,6 +102,43 @@ def test_knowledge_search_returns_citable_result(client, admin_headers):
     first = results[0]
     assert first.get("source_id")
     assert first.get("title")
+    assert response.json()["source_ids"] == [first["source_id"]]
+    assert response.json()["document_count"] == 1
+
+
+def test_knowledge_search_reports_multiple_document_sources(client, admin_headers):
+    """联合检索多个有效文档时，响应应汇总去重后的文档来源。"""
+    for index, title in enumerate(("联合引用规程甲", "联合引用规程乙"), start=1):
+        imported = client.post(
+            "/api/v1/knowledge/import",
+            headers=admin_headers,
+            json={
+                "filename": f"joint-{index}.md",
+                "title": title,
+                "version": "1.0",
+                "category": "规程",
+                "content": f"联合引用测试：压力异常时执行第{index}步检查，并记录压力异常处理。",
+                "station_ids": ["pump-02"],
+            },
+        )
+        assert imported.status_code == 200, imported.text
+        document_id = imported.json()["id"]
+        approved = client.patch(
+            f"/api/v1/knowledge/{document_id}/status",
+            headers=admin_headers,
+            json={"status": "valid"},
+        )
+        assert approved.status_code == 200, approved.text
+
+    response = client.get(
+        "/api/v1/knowledge/search",
+        headers=admin_headers,
+        params={"q": "压力异常处理", "station_id": "pump-02", "limit": 10},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["document_count"] >= 2
+    assert len(body["source_ids"]) == body["document_count"]
 
 
 def test_knowledge_version_compare_returns_diff(client, admin_headers):

@@ -94,6 +94,9 @@ class KnowledgeSearchResponse(BaseModel):
     query: str
     results: list[KnowledgeSearchHit]
     data_quality: Literal["mock"] = "mock"
+    # 本次检索覆盖的去重文档来源，便于多文档联合引用时展示来源范围。
+    source_ids: list[str] = Field(default_factory=list)
+    document_count: int = 0
 
 
 class KnowledgeRagAskRequest(BaseModel):

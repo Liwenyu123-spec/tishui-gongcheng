@@ -204,7 +204,13 @@ def search_knowledge(
         payload = hit.__dict__.copy()
         payload["station_ids"] = list(hit.station_ids)
         results.append(KnowledgeSearchHit(**payload))
-    return KnowledgeSearchResponse(query=q, results=results)
+    source_ids = list(dict.fromkeys(hit.source_id for hit in hits))
+    return KnowledgeSearchResponse(
+        query=q,
+        results=results,
+        source_ids=source_ids,
+        document_count=len(source_ids),
+    )
 
 
 @router.get("/knowledge/rag/status")
