@@ -278,6 +278,20 @@ def search_rules(
     return hits[: max(1, min(limit, 10))]
 
 
+def build_context_excerpt(hit: KnowledgeHit, query: str, radius: int = 120) -> tuple[list[str], str]:
+    """返回命中词和以首个命中词为中心的有限上下文。"""
+    terms = [term for term in _terms(query) if len(term) >= 2 and term in hit.detail]
+    terms = list(dict.fromkeys(terms))[:12]
+    text = hit.context or hit.detail
+    if not text:
+        return terms, ""
+    anchor = next((text.lower().find(term.lower()) for term in terms if text.lower().find(term.lower()) >= 0), 0)
+    start = max(0, anchor - radius)
+    end = min(len(text), anchor + radius)
+    excerpt = ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+    return terms, excerpt
+
+
 _CONFLICT_POSITIVE = ("可以", "允许", "无需", "不必", "可直接")
 _CONFLICT_NEGATIVE = ("必须", "不得", "禁止", "不可", "不能")
 

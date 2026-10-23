@@ -92,6 +92,9 @@ class KnowledgeSearchHit(BaseModel):
     confidence: Literal["normal", "low"] = "normal"
     # 重排概率；未启用重排时为 null。页面与诊断面板据此区分「分数够」和「重排认可」。
     rerank: float | None = None
+    # 命中词和上下文摘要，供前端高亮和人工核对。
+    matched_terms: list[str] = Field(default_factory=list)
+    context_excerpt: str = ""
 
 
 class KnowledgeSearchResponse(BaseModel):

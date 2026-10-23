@@ -15,7 +15,7 @@ from ..schemas.knowledge import KnowledgeBatchStatusRequest, KnowledgeDocument, 
 from ..services.audit import record_audit
 from ..services.document_extract import extract_text, suggested_title
 from ..services.knowledge_generate import ask_with_retrieval, generation_status
-from ..services.knowledge_search import detect_conflicts, search_rules
+from ..services.knowledge_search import build_context_excerpt, detect_conflicts, search_rules
 from ..services.rag_chroma import ChromaRagStore, get_rag_store, rag_store_status, split_structured
 from ..services.rag_diagnose import diagnose
 from ..services.runtime_env import env_summary
@@ -203,6 +203,7 @@ def search_knowledge(
     for hit in hits:
         payload = hit.__dict__.copy()
         payload["station_ids"] = list(hit.station_ids)
+        payload["matched_terms"], payload["context_excerpt"] = build_context_excerpt(hit, q)
         results.append(KnowledgeSearchHit(**payload))
     source_ids = list(dict.fromkeys(hit.source_id for hit in hits))
     return KnowledgeSearchResponse(

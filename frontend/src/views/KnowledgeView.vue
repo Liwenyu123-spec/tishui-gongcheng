@@ -45,6 +45,8 @@ interface SearchHit {
   // 检索接口会带重排概率；rag/ask 的 sources 目前不带，故声明为可选。
   rerank?: number | null
   rank?: number
+  matched_terms?: string[]
+  context_excerpt?: string
 }
 interface SearchConflict {
   source_ids: string[]
@@ -733,6 +735,8 @@ onMounted(() => {
         <strong>{{ hit.title }}</strong>
         <p class="muted">{{ hit.category || '规程' }} · {{ hit.filename || '无文件名' }} · {{ hit.version }} · {{ hit.location }} · {{ hit.station_ids.length ? hit.station_ids.join('、') : '全局' }} · 相关度 {{ hit.score }}<template v-if="hit.rerank !== null && hit.rerank !== undefined"> · 重排 {{ hit.rerank }}</template> · {{ hit.confidence === 'low' ? '低置信' : '可引用' }}</p>
         <p>{{ hit.detail }}</p>
+        <p v-if="hit.context_excerpt" class="muted">上下文：{{ hit.context_excerpt }}</p>
+        <p v-if="hit.matched_terms?.length" class="muted">命中词：{{ hit.matched_terms.join('、') }}</p>
       </div>
     </div>
     <div class="table-wrap">
