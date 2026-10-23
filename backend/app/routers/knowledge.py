@@ -11,7 +11,7 @@ from ..data import knowledge_store
 from ..data.knowledge import _KNOWLEDGE, _KNOWLEDGE_CONTENT, reload_from_store
 from ..data.repositories import get_data_source
 from ..dependencies import get_current_user, require_roles, user_has_station_access
-from ..schemas.knowledge import KnowledgeDocument, KnowledgeImportRequest, KnowledgeRagAskRequest, KnowledgeRagDebugRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
+from ..schemas.knowledge import KnowledgeBatchStatusRequest, KnowledgeDocument, KnowledgeImportRequest, KnowledgeRagAskRequest, KnowledgeRagDebugRequest, KnowledgeSearchHit, KnowledgeSearchResponse, KnowledgeStatusUpdateRequest
 from ..services.audit import record_audit
 from ..services.document_extract import extract_text, suggested_title
 from ..services.knowledge_generate import ask_with_retrieval, generation_status
@@ -477,6 +477,30 @@ def update_knowledge_status(
     knowledge_store.update_document(document)
     record_audit("status_update", "knowledge", document_id, f"知识文档 {document.title} 状态更新为 {payload.status}")
     return document
+
+
+@router.get("/knowledge/{document_id}/history")
+def knowledge_history(document_id: str, _: dict = Depends(require_roles("admin"))) -> list:
+    """返回单份知识文档的审核和生命周期变更历史。"""
+    if document_id not in _KNOWLEDGE:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识文档不存在")
+    return [event for event in reversed(data_source.audit.all()) if event.resource == "knowledge" and event.resource_id == document_id]
+
+
+@router.post("/knowledge/status/batch", response_model=list[KnowledgeDocument])
+def batch_update_knowledge_status(
+    payload: KnowledgeBatchStatusRequest,
+    _: dict = Depends(require_roles("admin")),
+) -> list[KnowledgeDocument]:
+    """批量更新文档状态并逐项记录审计；不存在的编号整体拒绝。"""
+    ids = list(dict.fromkeys(payload.document_ids))
+    missing = [document_id for document_id in ids if document_id not in _KNOWLEDGE]
+    if missing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"知识文档不存在：{', '.join(missing)}")
+    result = []
+    for document_id in ids:
+        result.append(update_knowledge_status(document_id, KnowledgeStatusUpdateRequest(status=payload.status)))
+    return result
 
 
 @router.delete("/knowledge/{document_id}")

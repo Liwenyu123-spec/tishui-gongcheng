@@ -32,7 +32,13 @@ class KnowledgeStatusUpdateRequest(BaseModel):
     """更新知识文档生命周期状态的请求。"""
 
     # valid 表示现行可用，pending 表示待审核，revoked 表示废止。
-    status: Literal["valid", "pending", "revoked"]
+    status: Literal["valid", "pending", "revoked", "archived"]
+
+
+class KnowledgeBatchStatusRequest(BaseModel):
+    """批量更新知识文档状态。"""
+    document_ids: list[str] = Field(min_length=1, max_length=100)
+    status: Literal["valid", "pending", "revoked", "archived"]
 
 
 class KnowledgeDocument(BaseModel):
