@@ -46,6 +46,11 @@ interface SearchHit {
   rerank?: number | null
   rank?: number
 }
+interface SearchConflict {
+  source_ids: string[]
+  reason: string
+  details: string[]
+}
 
 interface KnowledgeRow {
   id: string
@@ -272,8 +277,9 @@ const searchKnowledge = async () => {
   }
   loading.value = true
   try {
-    const result = await api<{ results: SearchHit[] }>(`/api/v1/knowledge/search?q=${encodeURIComponent(keyword)}`)
+    const result = await api<{ results: SearchHit[]; conflicts?: SearchConflict[] }>(`/api/v1/knowledge/search?q=${encodeURIComponent(keyword)}`)
     searchHits.value = result.results
+    searchConflicts.value = result.conflicts || []
     searchMessage.value = result.results.length ? `检索到 ${result.results.length} 条来源` : '没有命中现行资料或内置规程'
   } catch {
     searchHits.value = []
