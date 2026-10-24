@@ -81,28 +81,28 @@ for n,t in byname.items():
 # OCR-visible printed page number for IMG pages, used for audit only. Their time-stamped names
 # are already in the photographed page order; the anchors below confirm that order.
 def img_page_hint(text):
-    lines = text.splitlines()[:16] + text.splitlines()[-16:]
-    # Prefer a page marker attached to the book title, e.g. "供水安全生产规程·56".
-    for line in lines:
-        q=line.strip()
-        if '规程' not in q:
+    # Only accept a number when it is part of the running header.  The OCR body
+    # contains many ordinary numbers (for example "8、" and "24 小时"); those
+    # must never be presented as the printed page number.
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
+    candidates = lines[:8] + lines[-8:]
+    for q in candidates:
+        if len(q) > 60:
             continue
-        for m in re.finditer(r'[·。]\s*(\d{1,3})(?=$|[^0-9])',q):
-            v=int(m.group(1))
-            if 1 <= v <= 400 and v not in (80,160,380): return v
-    # Then accept a short standalone footer/header marker such as "·26·" or "10·".
-    for line in lines:
-        q=line.strip()
-        if len(q) > 40:
-            continue
-        m=re.match(r'^\s*[·。]?\s*(\d{1,3})\s*[·。](?=\s|$|[\u4e00-\u9fff])',q)
-        if m:
-            v=int(m.group(1))
-            if 1 <= v <= 400 and v not in (80,160,380): return v
-        m=re.search(r'[·。]\s*(\d{1,3})\s*$',q)
-        if m:
-            v=int(m.group(1))
-            if 1 <= v <= 400 and v not in (80,160,380): return v
+        patterns = (
+            # 供水安全生产规程·56· / 第一篇生产调度规程·1·
+            r'(?:规程|生产规程)\s*[·。]\s*(\d{1,3})\s*[·。]?',
+            # ·56·供水安全生产规程 / 56·供水安全生产规程
+            r'^[·。]?\s*(\d{1,3})\s*[·。]\s*(?:供水|生产|提水|规程)',
+            # Header OCR occasionally drops the title but keeps the two dots.
+            r'^[·。]\s*(\d{1,3})\s*[·。]\s*$',
+        )
+        for pat in patterns:
+            m=re.search(pat,q)
+            if m:
+                v=int(m.group(1))
+                if 1 <= v <= 400 and v not in (80,160,380):
+                    return v
     return None
 
 hash_names=sorted([n for n in byname if n in HASH_PAGE], key=lambda n:(HASH_PAGE[n],n))
