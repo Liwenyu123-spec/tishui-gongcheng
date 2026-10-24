@@ -103,10 +103,10 @@ const messages = ref<AgentMessage[]>([
 ])
 const currentWorkflowStatus = computed(() => [...messages.value].reverse().find(item => item.role === 'ai' && item.workflowStatus)?.workflowStatus || '')
 const workflowStatusNames: Record<string, string> = {
-  running: '执行中', completed: '已完成', degraded: '已降级', timeout: '已超时', blocked: '已阻断', cancelled: '已取消', unknown: '未知',
+  running: '执行中', completed: '已完成', degraded: '已降级', timeout: '已超时', blocked: '已阻断', cancelled: '已取消', interrupted: '连接中断', unknown: '未知',
 }
 const workflowStatusTypes: Record<string, 'success' | 'warning' | 'danger' | 'info'> = {
-  running: 'warning', completed: 'success', degraded: 'warning', timeout: 'danger', blocked: 'danger', cancelled: 'info', unknown: 'info',
+  running: 'warning', completed: 'success', degraded: 'warning', timeout: 'danger', blocked: 'danger', cancelled: 'info', interrupted: 'danger', unknown: 'info',
 }
 const citationExcerptVisible = ref(false)
 const citationExcerptLoading = ref(false)
