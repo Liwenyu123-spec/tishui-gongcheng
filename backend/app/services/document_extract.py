@@ -56,8 +56,10 @@ def _extract_pdf(payload: bytes) -> str:
         raise RuntimeError("未安装 pypdf，无法解析 PDF") from exc
     reader = PdfReader(BytesIO(payload))
     pages = []
-    for page in reader.pages:
-        pages.append((page.extract_text() or "").strip())
+    for page_number, page in enumerate(reader.pages, start=1):
+        content = (page.extract_text() or "").strip()
+        if content:
+            pages.append(f"[第 {page_number} 页]\n{content}")
     text = "\n\n".join(item for item in pages if item).strip()
     if not text:
         raise ValueError("PDF 中没有可提取的文字，扫描件需要后续接入多模态")
