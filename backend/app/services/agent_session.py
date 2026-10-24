@@ -32,6 +32,7 @@ _MAX_SESSIONS = 256
 @dataclass
 class _AgentSession:
     last_question: str = ""
+    recent_questions: list[str] = None  # type: ignore[assignment]
     last_station_id: str | None = None
     last_station_label: str | None = None
     touched_at: float = 0.0
@@ -73,7 +74,7 @@ def prepare_request(payload: AgentChatRequest, user: dict) -> AgentChatRequest:
         if key not in _SESSIONS and len(_SESSIONS) >= _MAX_SESSIONS:
             oldest = min(_SESSIONS, key=lambda item: _SESSIONS[item].touched_at)
             _SESSIONS.pop(oldest, None)
-        session = _SESSIONS.setdefault(key, _AgentSession())
+        session = _SESSIONS.setdefault(key, _AgentSession(recent_questions=[]))
         effective = raw
         station_id = payload.station_id
         station_label = None
@@ -100,6 +101,7 @@ def prepare_request(payload: AgentChatRequest, user: dict) -> AgentChatRequest:
             station_label = station_label or session.last_station_label
 
         session.last_question = effective
+        session.recent_questions = [*session.recent_questions[-4:], effective]
         session.last_station_id = station_id or session.last_station_id
         session.last_station_label = station_label or session.last_station_label
         session.touched_at = monotonic()
@@ -107,3 +109,20 @@ def prepare_request(payload: AgentChatRequest, user: dict) -> AgentChatRequest:
     # ``merged`` 仅用于调试/测试；不写入答案正文，避免污染调度员看到的结论。
     _ = merged
     return payload.model_copy(update={"message": effective, "station_id": station_id, "session_id": sid})
+
+
+def session_summary(session_id: str, user: dict) -> dict[str, object]:
+    """返回当前账号会话的短上下文摘要，不暴露其他账号会话。"""
+    user_key = str(user.get("id") or user.get("username") or "anonymous")
+    key = f"{user_key}:{session_id.strip()}"
+    with _SESSION_LOCK:
+        session = _SESSIONS.get(key)
+        if session is None:
+            return {"session_id": session_id, "question_count": 0, "summary": "", "recent_questions": []}
+        recent = list(session.recent_questions)
+        return {
+            "session_id": session_id,
+            "question_count": len(recent),
+            "summary": "；".join(recent[-3:]),
+            "recent_questions": recent,
+        }

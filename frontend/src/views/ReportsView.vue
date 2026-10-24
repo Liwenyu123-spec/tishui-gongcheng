@@ -2,6 +2,9 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
+import { currentUserRole } from '../composables/currentUser'
+import { useDataSource } from '../composables/dataSource'
+import { fetchReport, fetchReports, generateReport as generateReportApi, saveReport, updateReportStatus as updateReportStatusApi } from '../api/reports'
 import { registerPageRefresh } from '../composables/pageRefresh'
 
 interface ReportMetric {
@@ -71,13 +74,13 @@ const generateForm = reactive({
 })
 // 编辑表单只暂存当前草稿的标题和摘要，确认后再提交到后端。
 const editForm = reactive({ title: '', summary: '' })
-const sourceLabel = ref('本地示例')
+const { sourceLabel, setBackend, setLocal } = useDataSource()
 const statusNames: Record<string, string> = { draft: '草稿', reviewed: '已复核', archived: '已归档' }
 
 // 只有管理员或审核负责人可以调用报告状态更新接口。
 const canUpdateStatus = computed(() => {
   try {
-    const role = JSON.parse(localStorage.getItem('current_user') || '{}').role
+    const role = currentUserRole()
     return role === 'admin' || role === 'reviewer'
   } catch {
     return false
@@ -87,7 +90,7 @@ const canUpdateStatus = computed(() => {
 // 报告生成属于调度工作，审批负责人只负责复核和归档已有报告。
 const canGenerateReport = computed(() => {
   try {
-    const role = JSON.parse(localStorage.getItem('current_user') || '{}').role
+    const role = currentUserRole()
     return role === 'admin' || role === 'operator'
   } catch {
     return false
@@ -97,7 +100,7 @@ const canGenerateReport = computed(() => {
 // 草稿内容由管理员或调度员维护，审批负责人只处理复核状态。
 const canEditContent = computed(() => {
   try {
-    const role = JSON.parse(localStorage.getItem('current_user') || '{}').role
+    const role = currentUserRole()
     return (role === 'admin' || role === 'operator') && isBackendReport.value && report.value.status === 'draft'
   } catch {
     return false
@@ -119,18 +122,18 @@ const useLocalReport = () => {
   reports.value = [{ ...localReport }]
   report.value = { ...localReport }
   selectedReportId.value = localReport.id
-  sourceLabel.value = '本地示例'
+  setLocal()
 }
 
 // 加载报告草稿列表，并默认选中最新返回的第一条记录。
 const loadReports = async () => {
   listLoading.value = true
   try {
-    const result = await api<ApiReport[]>('/api/v1/reports')
+    const result = await fetchReports<ApiReport>()
     if (result.length) {
       reports.value = result
       setActiveReport(result[0])
-      sourceLabel.value = result[0].source === 'mock' ? '后端 Mock 数据' : result[0].source
+      setBackend(result[0].source === 'mock' ? '后端 Mock 数据' : result[0].source)
     } else {
       useLocalReport()
       ElMessage.info('报告接口当前没有记录，页面暂显示本地示例')
@@ -176,10 +179,7 @@ const saveReportContent = async () => {
   }
   editSaving.value = true
   try {
-    const result = await api<ApiReport>(`/api/v1/reports/${encodeURIComponent(report.value.id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ title: editForm.title, summary: editForm.summary }),
-    })
+    const result = await saveReport<ApiReport>(report.value.id, { title: editForm.title, summary: editForm.summary })
     setActiveReport(result)
     editVisible.value = false
     ElMessage.success('报告草稿内容已保存')
@@ -202,18 +202,15 @@ const generateReport = async () => {
   generateSaving.value = true
   loading.value = true
   try {
-    const result = await api<ApiReport>('/api/v1/reports/generate', {
-      method: 'POST',
-      body: JSON.stringify({
+    const result = await generateReportApi<ApiReport>({
         report_type: generateForm.report_type,
         report_date: generateForm.report_date,
         from_time: `${generateForm.report_date}T${generateForm.from_time}:00Z`,
         to_time: `${generateForm.report_date}T${generateForm.to_time}:00Z`,
-      }),
-    })
+      })
     reports.value = [result, ...reports.value.filter(item => !item.id.startsWith('local-') && item.id !== 'local-report')]
     setActiveReport(result)
-    sourceLabel.value = result.source === 'mock' ? '后端 Mock 数据' : result.source
+    setBackend(result.source === 'mock' ? '后端 Mock 数据' : result.source)
     ElMessage.success('报告草稿已生成')
     generateVisible.value = false
   } catch {
@@ -232,7 +229,7 @@ const refreshReportDetail = async (reportId = report.value.id, showMessage = tru
   }
   detailLoading.value = true
   try {
-    const result = await api<ApiReport>(`/api/v1/reports/${reportId}`)
+    const result = await fetchReport<ApiReport>(reportId)
     setActiveReport(result)
     if (showMessage) ElMessage.success('报告详情已刷新')
   } catch {
@@ -250,10 +247,7 @@ const updateReportStatus = async (status: 'reviewed' | 'archived') => {
   }
   statusLoading.value = true
   try {
-    const result = await api<ApiReport>(`/api/v1/reports/${encodeURIComponent(report.value.id)}/status`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status }),
-    })
+    const result = await updateReportStatusApi<ApiReport>(report.value.id, status)
     setActiveReport(result)
     ElMessage.success(`报告状态已更新为${statusNames[result.status] || result.status}`)
   } catch {

@@ -20,6 +20,8 @@ class AgentChatRequest(BaseModel):
     station_id: str | None = Field(default=None, max_length=64)
     # 多轮追问的进程内会话编号；重启后会话记忆清空，不写数据库。
     session_id: str | None = Field(default=None, max_length=64)
+    # 需要人工审批时先保存任务快照并暂停，恢复接口会用同一问题继续执行。
+    require_approval: bool = False
 
 
 class AgentCitation(BaseModel):

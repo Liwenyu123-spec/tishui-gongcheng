@@ -211,6 +211,10 @@ def search_rules(
             # 只写一条会与实际依据不符。旧索引没有这些字段时退回分片序号。
             section_path = str(metadata.get("section_path") or "").strip()
             context_label = str(item.get("context_label") or "").strip()
+            page_match = re.search(r"\[第\s*(\d+)\s*页\]", str(item.get("text") or ""))
+            page_label = f"第 {page_match.group(1)} 页" if page_match else ""
+            base_location = context_label or section_path or (f"段落/分片 {chunk_number + 1}" if chunk_number is not None else "正文")
+            location = f"{page_label} · {base_location}" if page_label else base_location
             # Chroma 负责语义召回，关键词重合度补足泵站编号、告警编码和专业术语的精确匹配。
             chunk_searchable = f"{metadata.get('title', '')} {metadata.get('filename', '')} {item.get('text', '')}".lower()
             keyword_bonus = sum(1 for term in query_terms if term and term in chunk_searchable)
@@ -225,8 +229,7 @@ def search_rules(
                     filename=str(metadata.get("filename") or ""),
                     station_ids=station_ids,
                     chunk_index=chunk_number,
-                    location=context_label or section_path
-                    or (f"段落/分片 {chunk_number + 1}" if chunk_number is not None else "正文"),
+                    location=location,
                     category=str(metadata.get("category") or "规程"),
                     confidence=str(item.get("confidence") or "normal"),
                     rerank=(float(item["rerank"]) if item.get("rerank") is not None else None),

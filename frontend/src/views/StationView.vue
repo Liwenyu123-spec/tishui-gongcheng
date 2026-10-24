@@ -4,6 +4,8 @@ import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import type { ECharts } from 'echarts'
 import { api } from '../api/http'
+import { readCurrentUser } from '../composables/currentUser'
+import { fetchContacts, fetchStation, fetchStations, fetchTelemetry, reportIncident, sendHeartbeat as sendStationHeartbeat } from '../api/stations'
 import { registerPageRefresh } from '../composables/pageRefresh'
 import { telemetry, stations as mockStations } from '../mock'
 
@@ -120,7 +122,7 @@ const renderChart = (items: TelemetryPoint[]) => {
 
 const loadStations = async () => {
   try {
-    const result = await api<ApiStation[]>('/api/v1/stations')
+    const result = await fetchStations<ApiStation>()
     if (result.length) {
       stationRecords.value = result
       stationOptions.value = result.sort((a, b) => a.sequence - b.sequence).map(item => item.name)
@@ -134,7 +136,7 @@ const loadStations = async () => {
 const loadStationDetail = async () => {
   detailLoading.value = true
   try {
-    stationDetail.value = await api<StationDetail>(`/api/v1/stations/${selectedStationId.value}`)
+    stationDetail.value = await fetchStation<StationDetail>(selectedStationId.value)
   } catch {
     stationDetail.value = null
     ElMessage.warning('站点详情接口暂不可用')
@@ -146,7 +148,7 @@ const loadStationDetail = async () => {
 const loadTelemetry = async () => {
   loading.value = true
   try {
-    points.value = await api<TelemetryPoint[]>(`/api/v1/stations/${selectedStationId.value}/telemetry`)
+    points.value = await fetchTelemetry<TelemetryPoint>(selectedStationId.value)
     sourceLabel.value = '后端 Mock 数据'
   } catch {
     points.value = telemetry.flatMap(item => [
@@ -171,7 +173,7 @@ const loadSelectedStation = () => {
 const loadStationContacts = async () => {
   contactLoading.value = true
   try {
-    stationContacts.value = await api<StationContact[]>(`/api/v1/stations/${encodeURIComponent(selectedStationId.value)}/contacts`)
+    stationContacts.value = await fetchContacts<StationContact>(selectedStationId.value)
   } catch {
     stationContacts.value = []
     ElMessage.warning('站点联系人接口暂不可用')
@@ -185,7 +187,7 @@ const sendHeartbeat = async (manual = false) => {
   heartbeatRequestInFlight = true
   if (manual) heartbeatLoading.value = true
   try {
-    const result = await api<HeartbeatResponse>(`/api/v1/stations/${encodeURIComponent(selectedStationId.value)}/heartbeat`, { method: 'POST' })
+    const result = await sendStationHeartbeat<HeartbeatResponse>(selectedStationId.value)
     heartbeatStatus.value = result.is_stale ? '已过期' : result.status === 'online' ? '在线' : result.status
     heartbeatAt.value = result.last_seen_at.slice(0, 16).replace('T', ' ')
     if (manual) ElMessage.success('站点心跳已发送')
@@ -216,18 +218,15 @@ const submitIncidentReport = async () => {
   }
   reportSubmitting.value = true
   try {
-    const currentUser = JSON.parse(localStorage.getItem('current_user') || '{}') as { username?: string }
-    const result = await api<IncidentResponse>(`/api/v1/stations/${encodeURIComponent(selectedStationId.value)}/incidents`, {
-      method: 'POST',
-      body: JSON.stringify({
+    const currentUser = readCurrentUser()
+    const result = await reportIncident<IncidentResponse>(selectedStationId.value, {
         category: reportForm.value.category,
         level: reportForm.value.level,
         description: reportForm.value.description.trim(),
         reported_by: currentUser.username || 'station-operator',
         deduplication_key: reportForm.value.deduplicationKey.trim() || undefined,
         simulate_delivery_failure: reportForm.value.simulateDeliveryFailure,
-      }),
-    })
+      })
     reportVisible.value = false
     ElMessage.success(`事件已上报：${result.id}`)
   } catch {

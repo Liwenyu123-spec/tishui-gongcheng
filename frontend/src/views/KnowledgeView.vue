@@ -2,8 +2,10 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/http'
+import { deleteKnowledgeDocument, fetchKnowledgeHistory, updateKnowledgeStatus, type KnowledgeAuditEvent } from '../api/knowledge'
 import { registerPageRefresh } from '../composables/pageRefresh'
 import { currentUserRole } from '../composables/currentUser'
+import KnowledgeStatusTag from '../components/KnowledgeStatusTag.vue'
 
 interface ApiKnowledgeDocument {
   id: string
@@ -176,7 +178,7 @@ const excerptResult = ref<{ title: string; version: string; location: string; ch
 const historyVisible = ref(false)
 const historyLoading = ref(false)
 const historyTitle = ref('')
-const historyRows = ref<Array<{ action?: string; detail?: string; created_at?: string; actor?: string }>>([])
+const historyRows = ref<KnowledgeAuditEvent[]>([])
 const isAdmin = computed(() => {
   return currentUserRole() === 'admin'
 })
@@ -523,10 +525,7 @@ const updateStatus = async (row: KnowledgeRow, displayStatus: string) => {
   }
   statusUpdatingId.value = row.id
   try {
-    const result = await api<ApiKnowledgeDocument>(`/api/v1/knowledge/${encodeURIComponent(row.id)}/status`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status: statusCodes[displayStatus] }),
-    })
+    const result = await updateKnowledgeStatus(row.id, statusCodes[displayStatus])
     row.status = statusNames[result.status] || result.status
     ElMessage.success(`资料状态已更新为${row.status}`)
   } catch {
@@ -546,7 +545,7 @@ const viewHistory = async (row: KnowledgeRow) => {
   historyLoading.value = true
   historyRows.value = []
   try {
-    historyRows.value = await api<typeof historyRows.value>(`/api/v1/knowledge/${encodeURIComponent(row.id)}/history`)
+    historyRows.value = await fetchKnowledgeHistory(row.id)
   } catch {
     ElMessage.error('审核历史读取失败，请稍后重试')
   } finally {
@@ -571,7 +570,7 @@ const removeDocument = async (row: KnowledgeRow) => {
   }
   statusUpdatingId.value = row.id
   try {
-    await api<{ success: boolean }>(`/api/v1/knowledge/${encodeURIComponent(row.id)}`, { method: 'DELETE' })
+    await deleteKnowledgeDocument(row.id)
     const index = rows.value.findIndex((item) => item.id === row.id)
     if (index >= 0) rows.value.splice(index, 1)
     ElMessage.success('资料已删除')
@@ -775,7 +774,7 @@ onMounted(() => {
         <el-table-column prop="contentLength" label="正文长度" width="100" />
         <el-table-column prop="date" label="导入时间" width="120" />
         <el-table-column prop="status" label="状态" width="90">
-          <template #default="s"><span :class="['tag',s.row.status==='现行'?'tag-green':s.row.status==='待审'?'tag-amber':s.row.status==='已归档'?'tag-gray':'tag-red']">{{s.row.status}}</span></template>
+          <template #default="s"><KnowledgeStatusTag :status="s.row.status" /></template>
         </el-table-column>
         <el-table-column label="操作" width="290">
           <template #default="s">

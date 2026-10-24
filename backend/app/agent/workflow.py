@@ -92,8 +92,10 @@ class SpecialistAgent:
 
     def __init__(self, name: str) -> None:
         self.name = name
-        self.role = _AGENT_ROLES.get(name, name)
-        self.tool_names = _AGENT_TOOL_NAMES.get(name, ())
+        from ..services.agent_registry import get_registered_agent
+        registered = get_registered_agent(name) or {}
+        self.role = str(registered.get("role") or _AGENT_ROLES.get(name, name))
+        self.tool_names = tuple(registered.get("tool_names") or _AGENT_TOOL_NAMES.get(name, ()))
 
     def _tools_for_plan(self, plan: AgentPlan) -> tuple[ReadOnlyTool, ...]:
         allowed = set(self.tool_names)
@@ -209,9 +211,12 @@ class DispatchWorkflow:
         # 预算按整轮工作流累计，而不是每个专业 Agent 单独重新计数。
 
         for name in self._agent_order():
-            from ..services.agent_runs import is_cancelled
+            from ..services.agent_runs import is_cancelled, is_paused
             if is_cancelled(context.run_id):
                 runs.append(SpecialistRun(agent=name, role=_AGENT_ROLES.get(name, name), status="cancelled", summary="运行已被用户取消"))
+                break
+            if is_paused(context.run_id):
+                runs.append(SpecialistRun(agent=name, role=_AGENT_ROLES.get(name, name), status="paused", summary="等待人工审批后继续执行"))
                 break
             # 每个节点只拿到前序结果的不可变快照；本节点新结果完成后再写回共享列表。
             node_context = replace(
@@ -261,6 +266,8 @@ class DispatchWorkflow:
         workflow_status = "completed"
         if any(run.status == "cancelled" for run in runs):
             workflow_status = "cancelled"
+        elif any(run.status == "paused" for run in runs):
+            workflow_status = "paused"
         elif any(item.status == "timeout" for item in executions):
             workflow_status = "timeout"
         elif any(run.status == "blocked" for run in runs):

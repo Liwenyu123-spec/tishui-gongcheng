@@ -2,8 +2,10 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
+import { createWorkOrderDraft, fetchAgentRunStatus, fetchAgentStations, fetchWorkOrders, submitAgentReview, updateWorkOrder, updateWorkOrderStatus as updateWorkOrderStatusApi } from '../api/agent'
 import { currentUserRole as readCurrentUserRole, readCurrentUser } from '../composables/currentUser'
 import { registerPageRefresh } from '../composables/pageRefresh'
+import WorkflowStatusTag from '../components/WorkflowStatusTag.vue'
 
 interface WorkOrderDraft {
   id: string
@@ -188,7 +190,7 @@ const resetConversation = () => {
 const loadWorkOrders = async () => {
   workOrderListLoading.value = true
   try {
-    workOrders.value = await api<WorkOrderDraft[]>('/api/v1/work-orders')
+    workOrders.value = await fetchWorkOrders<WorkOrderDraft>()
   } catch {
     ElMessage.warning('工单列表接口暂不可用')
   } finally {
@@ -198,7 +200,7 @@ const loadWorkOrders = async () => {
 // 加载当前账号可见站点，后端会再次校验站点范围，前端选择只用于提供查询上下文。
 const loadStations = async () => {
   try {
-    stations.value = await api<AgentStation[]>('/api/v1/stations')
+    stations.value = await fetchAgentStations<AgentStation>()
   } catch {
     ElMessage.warning('站点列表接口暂不可用，Agent 将按问题内容识别站点')
   }
@@ -357,7 +359,7 @@ const ask = async (q = input.value) => {
     aiMessage.pending = false
     agentStatusText.value = '分析完成，可以继续追问'
     if (aiMessage.runId) {
-      void api<{ status?: string }>(`/api/v1/agent/runs/${encodeURIComponent(aiMessage.runId)}`)
+      void fetchAgentRunStatus(aiMessage.runId)
         .then(status => {
           if (status.status) aiMessage.workflowStatus = status.status
         })
@@ -447,17 +449,14 @@ const createWorkOrder = async () => {
   }
   workOrderLoading.value = true
   try {
-    workOrder.value = await api<WorkOrderDraft>('/api/v1/work-orders/draft', {
-      method: 'POST',
-      body: JSON.stringify({
+    workOrder.value = await createWorkOrderDraft<WorkOrderDraft>({
         // 这些字段来自最近一次诊断答案，后端仍会再次校验站点权限。
         title: suggestion.title,
         station_id: suggestion.station_id,
         issue: suggestion.issue,
         suggested_action: suggestion.suggested_action,
         priority: suggestion.priority,
-      }),
-    })
+      })
     workOrders.value = [workOrder.value, ...workOrders.value.filter(item => item.id !== workOrder.value?.id)]
     ElMessage.success('工单草稿已生成')
   } catch {
@@ -476,14 +475,11 @@ const transferToReview = async () => {
   }
   reviewLoading.value = true
   try {
-    const review = await api<{ id: string }>('/api/v1/reviews', {
-      method: 'POST',
-      body: JSON.stringify({
+    const review = await submitAgentReview<{ id: string }>({
         subject: `Agent ${answer.intent} 复核 · ${answer.request_id}`,
         recommendation: [answer.answer, ...answer.pending_items.map(item => `待确认：${item}`)].join('；'),
         comment: '由 Agent 待确认项转交人工复核。',
-      }),
-    })
+      })
     reviewId.value = review.id
     ElMessage.success(`已提交人工复核：${review.id}`)
   } catch {
@@ -497,10 +493,7 @@ const transferToReview = async () => {
 const updateWorkOrderStatus = async (order: WorkOrderDraft, status: WorkOrderDraft['status']) => {
   workOrderStatusLoading.value = order.id
   try {
-    const updated = await api<WorkOrderDraft>(`/api/v1/work-orders/${encodeURIComponent(order.id)}/status`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status }),
-    })
+    const updated = await updateWorkOrderStatusApi<WorkOrderDraft>(order.id, status)
     workOrders.value = workOrders.value.map(item => item.id === updated.id ? updated : item)
     if (workOrder.value?.id === updated.id) workOrder.value = updated
     ElMessage.success(`工单状态已更新为${workOrderStatusNames[updated.status] || updated.status}`)
@@ -528,13 +521,10 @@ const saveAssignment = async () => {
   }
   assignmentSaving.value = true
   try {
-    const updated = await api<WorkOrderDraft>(`/api/v1/work-orders/${encodeURIComponent(assignmentOrder.value.id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({
+    const updated = await updateWorkOrder<WorkOrderDraft>(assignmentOrder.value.id, {
         owner: assignmentForm.value.owner.trim() || null,
         due_at: assignmentForm.value.due_at ? new Date(assignmentForm.value.due_at).toISOString() : null,
-      }),
-    })
+      })
     workOrders.value = workOrders.value.map(item => item.id === updated.id ? updated : item)
     if (workOrder.value?.id === updated.id) workOrder.value = updated
     assignmentVisible.value = false
@@ -608,7 +598,7 @@ const formatLocalDateTime = (value: string) => {
         <span :class="['agent-status', `agent-status--${agentRequestState}`]">
           <i></i>{{ agentStatusText }}
         </span>
-        <el-tag v-if="currentWorkflowStatus" size="small" effect="plain" :type="workflowStatusTypes[currentWorkflowStatus] || 'info'">工作流：{{ workflowStatusNames[currentWorkflowStatus] || currentWorkflowStatus }}</el-tag>
+        <WorkflowStatusTag v-if="currentWorkflowStatus" :status="currentWorkflowStatus" />
         <el-button class="button-stable button-stable--md" size="small" plain :disabled="agentLoading" @click="resetConversation">新建会话</el-button>
       </div>
       <div style="padding:12px 18px 0;display:flex;gap:8px;align-items:center">

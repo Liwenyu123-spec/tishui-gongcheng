@@ -4,6 +4,7 @@ import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 import './styles.css'
 import App from './App.vue'
+import { readCurrentUser } from './composables/currentUser'
 
 const routes = [
   // 登录页不需要 Token，其余页面统一要求先完成登录。
@@ -26,13 +27,7 @@ const router = createRouter({ history: createWebHistory(), routes })
 // 路由守卫只负责前端体验层拦截，真正的角色和权限校验仍由后端接口执行。
 router.beforeEach((to) => {
   const token = localStorage.getItem('access_token')
-  const currentUser = (() => {
-    try {
-      return JSON.parse(localStorage.getItem('current_user') || '{}') as { role?: string; permissions?: string[] }
-    } catch {
-      return {}
-    }
-  })()
+  const currentUser = readCurrentUser()
 
   // 已登录用户再次打开登录页时回到工作台，避免重复登录页面覆盖业务页面。
   if (to.meta.guestOnly && token) return '/dashboard'

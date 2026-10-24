@@ -6,6 +6,7 @@ import { ElMessage } from 'element-plus'
 import { currentUser as currentUserApi, logout as logoutApi } from './api/auth'
 import { api } from './api/http'
 import { runPageRefresh, usePageRefresh } from './composables/pageRefresh'
+import { readCurrentUser } from './composables/currentUser'
 
 interface NotificationItem {
   id: string
@@ -52,12 +53,8 @@ const groups: NavigationGroup[] = [
 
 // 从本地会话读取角色和权限，页面刷新后菜单可以立即保持一致。
 const readSessionUser = (): SessionUser => {
-  try {
-    const user = JSON.parse(localStorage.getItem('current_user') || '{}') as Partial<SessionUser>
-    return { display_name: user.display_name || '值班调度员', role: user.role || '', permissions: user.permissions || [] }
-  } catch {
-    return { display_name: '值班调度员', role: '', permissions: [] }
-  }
+  const user = readCurrentUser()
+  return { display_name: user.display_name || '值班调度员', role: user.role || '', permissions: user.permissions || [] }
 }
 
 const sessionUser = ref<SessionUser>(readSessionUser())
