@@ -21,12 +21,9 @@ def clean_hash(im):
     # Remove the two phone watermark blocks from the bottom edge.  Printed page
     # numbers sit above this strip, so no book text is removed.
     im = im.copy().convert('RGB')
-    d = ImageDraw.Draw(im)
-    w, h = im.size
-    y = int(h * .935)
-    d.rectangle((0, y, int(w*.58), h), fill='white')
-    d.rectangle((int(w*.67), y, w, h), fill='white')
-    return im
+    # The watermark is confined to the final strip.  Cropping the strip gives
+    # a clean page edge and avoids a conspicuous white rectangle over the page.
+    return im.crop((0, 0, im.width, int(im.height * .935)))
 
 def put_page(c, im, label):
     # 150 dpi is sufficient for A4 reading and keeps the many-page result
@@ -79,6 +76,7 @@ def make_pump(path):
             put_page(c, im, f'提水泵站规程 | 按原图连续顺序 | 原图 {i:03d} | {n}')
     c.save()
 
-make_engineering(OUT/'工程资料_按印刷页码_图文拆页版.pdf')
-make_pump(OUT/'提水泵站规程_按原图页序_图文拆页版.pdf')
-print('created scan PDFs')
+if __name__ == '__main__':
+    make_engineering(OUT/'工程资料_按印刷页码_图文拆页版.pdf')
+    make_pump(OUT/'提水泵站规程_按原图页序_图文拆页版.pdf')
+    print('created scan PDFs')
