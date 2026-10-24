@@ -54,8 +54,8 @@ class KnowledgeDocument(BaseModel):
     version: str
     # 规程、手册、台账、维修记录或应急预案。
     category: KnowledgeCategory = "规程"
-    # 文档状态：pending 待审、valid 现行、revoked 废止。
-    status: Literal["valid", "pending", "revoked"] = "pending"
+    # 文档状态：pending 待审、valid 现行、revoked 废止、archived 已归档。
+    status: Literal["valid", "pending", "revoked", "archived"] = "pending"
     # 正文字符长度，列表接口不直接返回正文。
     content_length: int
     # 文档导入时间。
