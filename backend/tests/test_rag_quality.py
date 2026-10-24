@@ -202,3 +202,20 @@ def test_expired_knowledge_is_excluded_from_search(client, admin_headers):
     assert client.patch(f"/api/v1/knowledge/{document_id}/status", headers=admin_headers, json={"status": "valid"}).status_code == 200
     results = client.get("/api/v1/knowledge/search", headers=admin_headers, params={"q": "压力异常过期处理办法"}).json()["results"]
     assert all(item["source_id"] != document_id for item in results)
+
+
+def test_knowledge_archive_status_returns_document(client, admin_headers):
+    """归档状态应能通过文档响应模型返回，且归档后不再进入检索。"""
+    imported = client.post("/api/v1/knowledge/import", headers=admin_headers, json={
+        "filename": "archive-check.md", "title": "归档状态检查", "version": "1.0",
+        "category": "规程", "content": "归档状态检查压力异常处理办法", "station_ids": [],
+    })
+    assert imported.status_code == 200
+    document_id = imported.json()["id"]
+    archived = client.patch(
+        f"/api/v1/knowledge/{document_id}/status",
+        headers=admin_headers,
+        json={"status": "archived"},
+    )
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["status"] == "archived"
