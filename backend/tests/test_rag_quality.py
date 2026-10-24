@@ -219,3 +219,9 @@ def test_knowledge_archive_status_returns_document(client, admin_headers):
     )
     assert archived.status_code == 200, archived.text
     assert archived.json()["status"] == "archived"
+    results = client.get(
+        "/api/v1/knowledge/search",
+        headers=admin_headers,
+        params={"q": "归档状态检查压力异常处理办法"},
+    ).json()["results"]
+    assert all(item["source_id"] != document_id for item in results)
