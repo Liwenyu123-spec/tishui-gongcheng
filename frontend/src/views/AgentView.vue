@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/http'
-import { currentUserRole, readCurrentUser } from '../composables/currentUser'
+import { currentUserRole as readCurrentUserRole, readCurrentUser } from '../composables/currentUser'
 import { registerPageRefresh } from '../composables/pageRefresh'
 
 interface WorkOrderDraft {
@@ -137,7 +137,7 @@ const canCreateWorkOrder = computed(() => Boolean(latestAgentAnswer.value?.work_
 // 只有管理员和值班调度员可以创建待人工审核记录，审批负责人负责后续处理。
 const currentUserRole = (() => {
   try {
-    return currentUserRole()
+    return readCurrentUserRole()
   } catch {
     return ''
   }
