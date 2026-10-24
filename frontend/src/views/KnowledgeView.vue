@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/http'
 import { registerPageRefresh } from '../composables/pageRefresh'
+import { currentUserRole } from '../composables/currentUser'
 
 interface ApiKnowledgeDocument {
   id: string
@@ -171,11 +172,7 @@ const historyLoading = ref(false)
 const historyTitle = ref('')
 const historyRows = ref<Array<{ action?: string; detail?: string; created_at?: string; actor?: string }>>([])
 const isAdmin = computed(() => {
-  try {
-    return JSON.parse(localStorage.getItem('current_user') || '{}').role === 'admin'
-  } catch {
-    return false
-  }
+  return currentUserRole() === 'admin'
 })
 
 // 引擎状态只取页面要用的字段，其余忽略，避免把后端结构整体搬进类型。
