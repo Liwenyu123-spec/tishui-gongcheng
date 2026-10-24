@@ -226,7 +226,7 @@ def search_rules(
                     station_ids=station_ids,
                     chunk_index=chunk_number,
                     location=context_label or section_path
-                    or (f"分片 {chunk_number + 1}" if chunk_number is not None else "正文"),
+                    or (f"段落/分片 {chunk_number + 1}" if chunk_number is not None else "正文"),
                     category=str(metadata.get("category") or "规程"),
                     confidence=str(item.get("confidence") or "normal"),
                     rerank=(float(item["rerank"]) if item.get("rerank") is not None else None),

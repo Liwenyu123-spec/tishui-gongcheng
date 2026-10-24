@@ -756,7 +756,7 @@ onMounted(() => {
       </div>
       <div v-for="hit in searchHits" :key="`${hit.source_id}-${hit.chunk_index}`" class="panel" style="margin-top:8px;padding:12px 14px">
         <strong>{{ hit.title }}</strong>
-        <p class="muted">{{ hit.category || '规程' }} · {{ hit.filename || '无文件名' }} · {{ hit.version }} · {{ hit.location }} · {{ hit.station_ids.length ? hit.station_ids.join('、') : '全局' }} · 相关度 {{ hit.score }}<template v-if="hit.rerank !== null && hit.rerank !== undefined"> · 重排 {{ hit.rerank }}</template> · {{ hit.confidence === 'low' ? '低置信' : '可引用' }}</p>
+        <p class="muted">{{ hit.category || '规程' }} · {{ hit.filename || '无文件名' }} · {{ hit.version }} · 定位：{{ hit.location }} · {{ hit.station_ids.length ? hit.station_ids.join('、') : '全局' }} · 相关度 {{ hit.score }}<template v-if="hit.rerank !== null && hit.rerank !== undefined"> · 重排 {{ hit.rerank }}</template> · {{ hit.confidence === 'low' ? '低置信' : '可引用' }}</p>
         <p>{{ hit.detail }}</p>
         <p v-if="hit.context_excerpt" class="muted">上下文：{{ hit.context_excerpt }}</p>
         <p v-if="hit.matched_terms?.length" class="muted">命中词：{{ hit.matched_terms.join('、') }}</p>

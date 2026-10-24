@@ -346,7 +346,7 @@ def knowledge_excerpt(
         "title": document.title,
         "version": document.version,
         "chunk_index": chunk_index,
-        "location": piece.get("section_path") or f"分片 {chunk_index + 1}",
+        "location": piece.get("section_path") or f"段落/分片 {chunk_index + 1}",
         "excerpt": piece.get("text", "")[:2000],
     }
 
