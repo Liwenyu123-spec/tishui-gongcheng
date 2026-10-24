@@ -722,6 +722,7 @@ onMounted(() => {
         <el-option label="现行" value="现行" />
         <el-option label="待审" value="待审" />
         <el-option label="废止" value="废止" />
+        <el-option label="已归档" value="已归档" />
       </el-select>
       <el-button class="button-stable button-stable--sm" type="primary" :loading="loading" @click="searchKnowledge">检索</el-button>
     </div>
@@ -749,7 +750,7 @@ onMounted(() => {
         <el-table-column prop="contentLength" label="正文长度" width="100" />
         <el-table-column prop="date" label="导入时间" width="120" />
         <el-table-column prop="status" label="状态" width="90">
-          <template #default="s"><span :class="['tag',s.row.status==='现行'?'tag-green':s.row.status==='待审'?'tag-amber':'tag-red']">{{s.row.status}}</span></template>
+          <template #default="s"><span :class="['tag',s.row.status==='现行'?'tag-green':s.row.status==='待审'?'tag-amber':s.row.status==='已归档'?'tag-gray':'tag-red']">{{s.row.status}}</span></template>
         </el-table-column>
         <el-table-column label="操作" width="290">
           <template #default="s">
