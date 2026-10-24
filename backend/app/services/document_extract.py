@@ -71,6 +71,15 @@ def _extract_docx(payload: bytes) -> str:
         raise RuntimeError("未安装 python-docx，无法解析 Word") from exc
     document = Document(BytesIO(payload))
     parts = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
+    # 将 Word 表格按行保留为制表符分隔文本，避免设备编号、阈值和单位在导入时丢失。
+    for table_index, table in enumerate(document.tables, start=1):
+        rows = []
+        for row in table.rows:
+            cells = [cell.text.replace("\n", " ").strip() for cell in row.cells]
+            if any(cells):
+                rows.append("\t".join(cells))
+        if rows:
+            parts.append(f"[表格 {table_index}]\n" + "\n".join(rows))
     text = "\n".join(parts).strip()
     if not text:
         raise ValueError("Word 文档中没有可提取的文字")
