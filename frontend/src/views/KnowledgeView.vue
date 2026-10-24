@@ -129,8 +129,8 @@ const localDocuments: KnowledgeRow[] = [
   { id: 'local-2', title: '泵组异常处理预案', filename: 'pump-alarm-plan.md', version: 'v0.9', category: '应急预案', status: '待审', date: '2026-10-01', contentLength: 1260, applicability: '全局', source: '本地示例' },
   { id: 'local-3', title: '四泵站 2 号泵维修手册', filename: 'pump-04-maintenance.pdf', version: 'v2.1', category: '手册', status: '废止', date: '2025-12-18', contentLength: 3520, applicability: '四泵站', source: '本地示例' },
 ]
-const statusNames: Record<string, string> = { valid: '现行', pending: '待审', revoked: '废止' }
-const statusCodes: Record<string, string> = { 现行: 'valid', 待审: 'pending', 废止: 'revoked' }
+const statusNames: Record<string, string> = { valid: '现行', pending: '待审', revoked: '废止', archived: '已归档' }
+const statusCodes: Record<string, string> = { 现行: 'valid', 待审: 'pending', 废止: 'revoked', 已归档: 'archived' }
 const rows = ref<KnowledgeRow[]>(localDocuments.map(document => ({ ...document })))
 const query = ref('')
 const statusFilter = ref('')
@@ -759,6 +759,7 @@ onMounted(() => {
               <el-button link type="success" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '现行')">现行</el-button>
               <el-button link type="warning" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '待审')">待审</el-button>
               <el-button link type="danger" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '废止')">废止</el-button>
+              <el-button link type="info" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '已归档')">归档</el-button>
               <el-button link type="danger" :disabled="statusUpdatingId === s.row.id" @click="removeDocument(s.row)">删除</el-button>
             </template>
           </template>
