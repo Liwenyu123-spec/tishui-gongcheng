@@ -232,6 +232,7 @@ const ask = async (q = input.value) => {
   agentCancelRequested.value = false
   agentStatusText.value = '正在连接 Agent 流…'
   agentAbortController = new AbortController()
+  let receivedDone = false
 
   const handleEvent = (rawEvent: string) => {
     const lines = rawEvent.split(/\r?\n/)
@@ -317,6 +318,7 @@ const ask = async (q = input.value) => {
       return
     }
     if (eventName === 'done') {
+      receivedDone = true
       const done = JSON.parse(data) as { workflow_status?: string }
       if (done.workflow_status) {
         aiMessage.workflowStatus = done.workflow_status
@@ -392,7 +394,7 @@ const ask = async (q = input.value) => {
       if (done) break
     }
     if (buffer.trim()) handleEvent(buffer)
-    if (aiMessage.pending) throw new Error('Agent 没有返回完整结果')
+    if (aiMessage.pending) throw new Error(receivedDone ? 'Agent 没有返回完整结果' : 'SSE 连接中断，未收到完成事件')
   } catch (error) {
     const aborted = error instanceof DOMException && error.name === 'AbortError'
       || error instanceof Error && error.name === 'AbortError'
@@ -405,11 +407,15 @@ const ask = async (q = input.value) => {
       agentStatusText.value = '分析已停止，可以修改问题后重新发送'
       return
     }
-    aiMessage.text = error instanceof Error ? `Agent 请求失败：${error.message}` : 'Agent 请求失败，请稍后重试'
-    aiMessage.evidence = '请确认后端已启动，并检查浏览器是否保留了当前登录 Token。'
+    const disconnected = error instanceof Error && error.message.includes('SSE 连接中断')
+    aiMessage.text = disconnected ? 'Agent 分析连接中断，未生成完整结论。' : error instanceof Error ? `Agent 请求失败：${error.message}` : 'Agent 请求失败，请稍后重试'
+    aiMessage.evidence = disconnected
+      ? '连接已关闭，可以重新发送问题；若频繁发生，请检查后端 SSE 和代理超时设置。'
+      : '请确认后端已启动，并检查浏览器是否保留了当前登录 Token。'
+    if (disconnected) aiMessage.workflowStatus = 'interrupted'
     aiMessage.pending = false
     agentRequestState.value = 'error'
-    agentStatusText.value = '请求失败，可以稍后重试'
+    agentStatusText.value = disconnected ? '连接中断，可以重新发送' : '请求失败，可以稍后重试'
     ElMessage.error('Agent 接口调用失败')
   } finally {
     agentLoading.value = false
