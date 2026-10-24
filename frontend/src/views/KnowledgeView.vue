@@ -166,6 +166,10 @@ const compareResult = ref<{ version: string; compared_version?: string; changed:
 const excerptVisible = ref(false)
 const excerptLoading = ref(false)
 const excerptResult = ref<{ title: string; version: string; location: string; chunk_index: number; excerpt: string } | null>(null)
+const historyVisible = ref(false)
+const historyLoading = ref(false)
+const historyTitle = ref('')
+const historyRows = ref<Array<{ action?: string; detail?: string; created_at?: string; actor?: string }>>([])
 const isAdmin = computed(() => {
   try {
     return JSON.parse(localStorage.getItem('current_user') || '{}').role === 'admin'
@@ -529,6 +533,24 @@ const updateStatus = async (row: KnowledgeRow, displayStatus: string) => {
   }
 }
 
+const viewHistory = async (row: KnowledgeRow) => {
+  if (row.id.startsWith('local-')) {
+    ElMessage.info('示例资料没有后端审核历史，请先导入后端文档')
+    return
+  }
+  historyTitle.value = `${row.title} · 审核历史`
+  historyVisible.value = true
+  historyLoading.value = true
+  historyRows.value = []
+  try {
+    historyRows.value = await api<typeof historyRows.value>(`/api/v1/knowledge/${encodeURIComponent(row.id)}/history`)
+  } catch {
+    ElMessage.error('审核历史读取失败，请稍后重试')
+  } finally {
+    historyLoading.value = false
+  }
+}
+
 // 硬删除只对后端文档开放：先二次确认，再调用 DELETE，成功后把行从表格移除。
 const removeDocument = async (row: KnowledgeRow) => {
   if (!isAdmin.value || row.id.startsWith('local-')) {
@@ -754,7 +776,8 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="操作" width="290">
           <template #default="s">
-            <el-button link type="primary" @click="preview(s.row)">预览引用</el-button>
+              <el-button link type="primary" @click="preview(s.row)">预览引用</el-button>
+              <el-button v-if="!s.row.id.startsWith('local-')" link type="info" @click="viewHistory(s.row)">审核历史</el-button>
             <el-button v-if="!s.row.id.startsWith('local-')" link type="primary" @click="compareVersion(s.row)">版本对比</el-button>
             <template v-if="isAdmin && !s.row.id.startsWith('local-')">
               <el-button link type="success" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '现行')">现行</el-button>
@@ -826,5 +849,17 @@ onMounted(() => {
     </el-form>
     <div v-if="csvResult" class="muted" style="margin-top:10px">总行数 {{ csvResult.total_rows }} · 通过 {{ csvResult.accepted_rows }} · 拒绝 {{ csvResult.rejected_rows }}<div v-for="error in csvResult.errors" :key="error">{{ error }}</div></div>
     <template #footer><el-button @click="csvVisible = false">关闭</el-button><el-button class="button-stable button-stable--md" type="primary" :loading="csvLoading" @click="validateCsv">开始校验</el-button></template>
+  </el-dialog>
+
+  <el-dialog v-model="historyVisible" :title="historyTitle" width="720px">
+    <el-skeleton v-if="historyLoading" :rows="4" animated />
+    <el-empty v-else-if="!historyRows.length" description="暂无审核历史" />
+    <el-timeline v-else>
+      <el-timeline-item v-for="(item, index) in historyRows" :key="`${item.created_at || 'event'}-${index}`" :timestamp="item.created_at || '时间未知'">
+        <strong>{{ item.action || '生命周期变更' }}</strong>
+        <p class="muted">{{ item.detail || '无详细说明' }}<template v-if="item.actor"> · 操作人：{{ item.actor }}</template></p>
+      </el-timeline-item>
+    </el-timeline>
+    <template #footer><el-button @click="historyVisible = false">关闭</el-button></template>
   </el-dialog>
 </template>
