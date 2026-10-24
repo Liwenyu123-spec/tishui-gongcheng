@@ -16,7 +16,7 @@ from ..services.audit import record_audit
 from ..services.agent_limits import limits_summary
 from ..services.agent import build_answer
 from ..services.agent_session import prepare_request
-from ..services.agent_runs import cancel_run, run_status
+from ..services.agent_runs import cancel_run, list_runs, run_status
 
 
 router = APIRouter(prefix="/api/v1", tags=["Agent"])
@@ -33,6 +33,12 @@ def cancel_agent_run(run_id: str, user: dict = Depends(require_roles("admin", "o
 def get_agent_run(run_id: str, user: dict = Depends(require_roles("admin", "operator", "reviewer"))) -> dict:
     """查询当前进程内 Agent 运行状态。"""
     return run_status(run_id)
+
+
+@router.get("/agent/runs")
+def list_agent_runs(limit: int = 50, user: dict = Depends(require_roles("admin", "operator", "reviewer"))) -> list[dict]:
+    """查询当前进程内最近的 Agent 运行摘要。"""
+    return list_runs(limit)
 
 
 def _sse_event(event: str, data: object) -> str:
