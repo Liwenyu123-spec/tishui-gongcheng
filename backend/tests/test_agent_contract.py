@@ -43,6 +43,13 @@ def test_agent_run_status_endpoint(client, admin_headers):
     assert response.json() == {"run_id": "run-not-found", "status": "unknown"}
 
 
+def test_agent_run_history_endpoint(client, admin_headers):
+    """运行历史接口应返回列表，即使当前进程还没有完成的运行。"""
+    response = client.get("/api/v1/agent/runs?limit=10", headers=admin_headers)
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
 def test_agent_cancel_is_reflected_in_sse_lifecycle(client, admin_headers, monkeypatch):
     """节点边界取消后，SSE 必须以 cancelled 状态结束并保留 done 事件。"""
     from app.agent import workflow
