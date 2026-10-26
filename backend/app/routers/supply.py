@@ -21,7 +21,10 @@ def supply_balance(
 
     # 把每个片区的供水量减去需求量，得到供需余额。
     # 先按用户站点范围过滤，避免有限站点账号看到其他片区数据。
+    from ..data.supply import vary_supply_areas
+
     visible_areas = [area for area in data_source.supply.list() if user_has_station_access(user, area["station_id"])]
+    vary_supply_areas(visible_areas)
     # 根据供水量减需求量计算每个片区的供需结余。
     rows = [SupplyArea(**area, balance=area["supply"] - area["demand"]) for area in visible_areas]
     # 汇总所有片区，得到全局供需结果。

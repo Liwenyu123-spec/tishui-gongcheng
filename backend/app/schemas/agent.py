@@ -18,7 +18,7 @@ class AgentChatRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=2000)
     station_id: str | None = Field(default=None, max_length=64)
-    # 多轮追问的进程内会话编号；重启后会话记忆清空，不写数据库。
+    # 多轮追问的会话编号。问句和站点上下文写入 conversations。
     session_id: str | None = Field(default=None, max_length=64)
     # 需要人工审批时先保存任务快照并暂停，恢复接口会用同一问题继续执行。
     require_approval: bool = False
@@ -75,7 +75,7 @@ class AgentAnswer(BaseModel):
     # 当前阶段所有结果均来自进程内 Mock 数据，不代表实时现场数据。
     data_quality: Literal["mock", "partial", "live", "stale"] = "mock"
     # 明确回答可用于什么范围，避免把联调结果当作生产结论。
-    limitations: list[str] = Field(default_factory=lambda: ["当前结果来自 Mock 数据，仅用于联调和人工复核"])
+    limitations: list[str] = Field(default_factory=lambda: ["当前结果来自数据库中的测试数据，仅用于联调和人工复核"])
     # 表示规则分析对当前结论的把握程度，不等同于真实生产准确率。
     confidence: Literal["low", "medium", "high"] = "medium"
     # 列出需要补充数据或人工现场确认的事项，避免把建议误认为已完成处置。

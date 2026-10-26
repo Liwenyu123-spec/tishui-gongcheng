@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
+import os
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any
 
 from .runtime_env import env_flag, windows_env
@@ -295,6 +298,45 @@ def split_structured(text: str, chunk_size: int = 500, overlap: int = 80) -> lis
     return pieces
 
 
+def _acquire_writer_lock(persist_path: Path):
+    """占用索引目录的写锁。第二个进程拿不到锁时不再打开同一份文件。"""
+
+    lock_path = persist_path.parent / f"{persist_path.name}.writer.lock"
+    handle = open(lock_path, "a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            if handle.read(1) != b"1":
+                handle.seek(0)
+                handle.write(b"1")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        handle.close()
+        raise RuntimeError("已有进程正在使用知识库索引，本进程不再打开该目录，避免把索引写坏") from exc
+    return handle
+
+
+def _index_fingerprint(documents: list[dict[str, Any]]) -> str:
+    parts = []
+    for item in sorted(documents, key=lambda row: str(row.get("document_id"))):
+        content = str(item.get("content") or "")
+        parts.append("\n".join([
+            str(item.get("document_id")),
+            str(item.get("status")),
+            str(item.get("version")),
+            hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        ]))
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
 class ChromaRagStore:
     """当前项目的 Chroma 存储适配器。"""
 
@@ -332,6 +374,7 @@ class ChromaRagStore:
         if not isinstance(self.embedding, LocalHashEmbedding):
             suffix = hashlib.sha256(self.embedding.name().encode("utf-8")).hexdigest()[:10]
             self.collection_name = f"{base_collection_name}_{suffix}"
+        self._persist_lock = _acquire_writer_lock(self.persist_path)
         self.client = chromadb.PersistentClient(path=str(self.persist_path))
         self.collection = self.client.get_or_create_collection(
             name=self.collection_name,
@@ -339,6 +382,39 @@ class ChromaRagStore:
             embedding_function=self.embedding,
         )
         self._lock = Lock()
+
+    def _replace_collection(self) -> None:
+        """索引文件损坏时删掉本地向量库，再按同一配置新建空集合。"""
+
+        import chromadb
+
+        with self._lock:
+            try:
+                self.client.delete_collection(self.collection_name)
+            except Exception:
+                shutil.rmtree(self.persist_path, ignore_errors=True)
+                self.persist_path.mkdir(parents=True, exist_ok=True)
+                self.client = chromadb.PersistentClient(path=str(self.persist_path))
+            self.collection = self.client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine", "embedding_model": self.embedding.name()},
+                embedding_function=self.embedding,
+            )
+
+    def _recover_index(self) -> None:
+        """索引损坏时清空并在后台按现行规程重建，当前检索先返回空结果。"""
+
+        self._replace_collection()
+
+        def rebuild() -> None:
+            try:
+                from ..routers.knowledge import rebuild_knowledge_index
+
+                rebuild_knowledge_index()
+            except Exception:
+                logging.getLogger(__name__).exception("知识库索引后台重建失败")
+
+        Thread(target=rebuild, name="rag-recover", daemon=True).start()
 
     @staticmethod
     def _metadata(
@@ -466,9 +542,37 @@ class ChromaRagStore:
             self.collection.add(ids=ids, documents=[piece["text"] for piece in pieces], metadatas=metadatas)
         return len(pieces)
 
-    def reindex_documents(self, documents: list[dict[str, Any]]) -> dict[str, Any]:
+    def reindex_documents(self, documents: list[dict[str, Any]], *, _retried: bool = False) -> dict[str, Any]:
         """按当前内存文档重建检索集合，并删掉已不在文档列表中的分片。"""
 
+        try:
+            return self._reindex_documents(documents)
+        except Exception as exc:
+            if _retried or "hnsw" not in str(exc).lower():
+                raise
+            self._replace_collection()
+            return self.reindex_documents(documents, _retried=True)
+
+    def _reindex_documents(self, documents: list[dict[str, Any]]) -> dict[str, Any]:
+        digest = _index_fingerprint(documents)
+        fingerprint_path = self.persist_path / "index_fingerprint.json"
+        try:
+            saved = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            saved = {}
+        if saved.get("digest") == digest and saved.get("collection") == self.collection_name:
+            try:
+                chunks = self.collection.count()
+            except Exception:
+                chunks = 0
+            if chunks:
+                return {
+                    "indexed_documents": int(saved.get("indexed_documents") or 0),
+                    "skipped_documents": len(documents) - int(saved.get("indexed_documents") or 0),
+                    "removed_orphans": 0,
+                    "chunks": chunks,
+                    "unchanged": True,
+                }
         known_ids = {str(item["document_id"]) for item in documents}
         indexed = 0
         for item in documents:
@@ -494,12 +598,17 @@ class ChromaRagStore:
         }
         for document_id in orphan_ids:
             self.delete_document(document_id)
-        return {
+        result = {
             "indexed_documents": indexed,
             "skipped_documents": len(documents) - indexed,
             "removed_orphans": len(orphan_ids),
             "chunks": self.collection.count(),
         }
+        fingerprint_path.write_text(
+            json.dumps({**result, "digest": digest, "collection": self.collection_name}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return result
 
     @staticmethod
     def _parse_time(value: Any) -> datetime | None:
@@ -614,7 +723,13 @@ class ChromaRagStore:
         时需要这些分项，正常业务调用不产生这笔开销。
         """
 
-        total = self.collection.count()
+        try:
+            total = self.collection.count()
+        except Exception as exc:
+            if "hnsw" not in str(exc).lower():
+                raise
+            self._recover_index()
+            return []
         if not query.strip() or total == 0:
             return []
         rows = self._visible_rows(station_id, visible_station_ids)
@@ -675,11 +790,17 @@ class ChromaRagStore:
             return text, f"{labels[0]}～{labels[-1]}"
 
         sparse = self._bm25_scores(query, rows)
-        result = self.collection.query(
+        try:
+            result = self.collection.query(
             query_texts=[query],
             n_results=min(max(limit * 8, 24), total),
             include=["documents", "metadatas", "distances"],
-        )
+            )
+        except Exception as exc:
+            if "hnsw" not in str(exc).lower():
+                raise
+            self._recover_index()
+            return []
         vector_best: dict[str, tuple[float, str, dict[str, Any]]] = {}
         documents = (result.get("documents") or [[]])[0]
         metadatas = (result.get("metadatas") or [[]])[0]
@@ -836,6 +957,7 @@ def get_rag_store() -> ChromaRagStore | None:
         _STORE = ChromaRagStore()
     except Exception as exc:  # noqa: BLE001
         _STORE_ERROR = str(exc)
+        logging.getLogger(__name__).warning("知识库索引未打开：%s", exc)
         return None
     return _STORE
 

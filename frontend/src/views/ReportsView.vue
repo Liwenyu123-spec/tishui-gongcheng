@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { api } from '../api/http'
 import { currentUserRole } from '../composables/currentUser'
-import { useDataSource } from '../composables/dataSource'
+import { backendSourceLabel, remoteListMessage, useDataSource } from '../composables/dataSource'
 import { fetchReport, fetchReports, generateReport as generateReportApi, saveReport, updateReportStatus as updateReportStatusApi } from '../api/reports'
 import { registerPageRefresh } from '../composables/pageRefresh'
 
@@ -44,11 +42,11 @@ const localReport: ApiReport = {
   data_version: 'local-demo-v1',
   created_at: '2026-10-16T10:46:00Z',
   metrics: [
-    { key: 'total_supply', label: '总供水量', value: 18900, unit: 'm³/d', source_ids: ['supply:pump-02', 'supply:pump-03', 'supply:pump-04'] },
-    { key: 'total_demand', label: '总需求量', value: 19700, unit: 'm³/d', source_ids: ['supply:pump-02', 'supply:pump-03', 'supply:pump-04'] },
-    { key: 'total_balance', label: '供需结余', value: -800, unit: 'm³/d', source_ids: ['supply:pump-02', 'supply:pump-03', 'supply:pump-04'] },
+    { key: 'total_supply', label: '总供水量', value: 18900, unit: 'm3/d', source_ids: ['supply:pump-02', 'supply:pump-03', 'supply:pump-04'] },
+    { key: 'total_demand', label: '总需求量', value: 19700, unit: 'm3/d', source_ids: ['supply:pump-02', 'supply:pump-03', 'supply:pump-04'] },
+    { key: 'total_balance', label: '供需结余', value: -800, unit: 'm3/d', source_ids: ['supply:pump-02', 'supply:pump-03', 'supply:pump-04'] },
     { key: 'alarm_count', label: '关联告警数', value: 3, unit: '条', source_ids: ['alarm-20261015-001', 'alarm-20261015-002', 'alarm-20261015-003'] },
-    { key: 'bottleneck_balance', label: '瓶颈片区：西部片区', value: -600, unit: 'm³/d', source_ids: ['supply:pump-02'] },
+    { key: 'bottleneck_balance', label: '瓶颈片区：西部片区', value: -600, unit: 'm3/d', source_ids: ['supply:pump-02'] },
   ],
   source_ids: ['supply:pump-02', 'supply:pump-03', 'supply:pump-04', 'alarm-20261015-001', 'alarm-20261015-002', 'alarm-20261015-003'],
   source: '本地示例',
@@ -133,14 +131,14 @@ const loadReports = async () => {
     if (result.length) {
       reports.value = result
       setActiveReport(result[0])
-      setBackend(result[0].source === 'mock' ? '后端 Mock 数据' : result[0].source)
+      setBackend(backendSourceLabel(result[0].source))
     } else {
       useLocalReport()
-      ElMessage.info('报告接口当前没有记录，页面暂显示本地示例')
+      ElMessage.info(remoteListMessage('empty', '报告'))
     }
   } catch {
     useLocalReport()
-    ElMessage.warning('报告列表接口暂不可用，当前显示本地示例')
+    ElMessage.warning(remoteListMessage('failed', '报告列表'))
   } finally {
     listLoading.value = false
   }
@@ -210,7 +208,7 @@ const generateReport = async () => {
       })
     reports.value = [result, ...reports.value.filter(item => !item.id.startsWith('local-') && item.id !== 'local-report')]
     setActiveReport(result)
-    setBackend(result.source === 'mock' ? '后端 Mock 数据' : result.source)
+    setBackend(backendSourceLabel(result.source))
     ElMessage.success('报告草稿已生成')
     generateVisible.value = false
   } catch {
@@ -319,7 +317,7 @@ onMounted(loadReports)
         </el-table-column>
         <el-table-column prop="source" label="来源" width="120" />
         <el-table-column label="操作" width="90">
-          <template #default="scope"><el-button link type="primary" @click.stop="selectReport(scope.row)">查看</el-button></template>
+          <template #default="scope"><el-button link type="primary" @click.stop="selectReport(scope.row as ApiReport)">查看</el-button></template>
         </el-table-column>
       </el-table>
     </div>
@@ -338,14 +336,14 @@ onMounted(loadReports)
         <div v-if="report.metrics?.length" class="report-metrics">
           <div v-for="metric in report.metrics" :key="metric.key" class="report-metric">
             <span>{{ metric.label }}</span>
-            <strong>{{ metric.value.toLocaleString() }} {{ metric.unit }}</strong>
+            <strong>{{ Number(metric.value).toLocaleString(undefined, { maximumFractionDigits: String(metric.unit).includes('MPa') ? 2 : 0 }) }} {{ metric.unit }}</strong>
           </div>
         </div>
         <p v-else class="muted">当前报告没有结构化指标。</p>
         <p class="muted">数据来源</p>
         <p class="report-source-ids">{{ report.source_ids?.join('、') || '暂无来源编号' }}</p>
         <p class="muted">供水量摘要</p>
-        <p>今日累计供水量 24,860 m³，较昨日同期上升 4.2%。</p>
+        <p>今日累计供水量 24,860 m3，较昨日同期上升 4.2%。</p>
         <p class="muted">关键告警</p>
         <p>二泵站流量偏低，关联西部片区压力下降，待值班人员核查。</p>
         <p class="muted">生成信息</p>
@@ -388,7 +386,7 @@ onMounted(loadReports)
       <el-form-item label="开始时间"><el-input v-model="generateForm.from_time" type="time" /></el-form-item>
       <el-form-item label="结束时间"><el-input v-model="generateForm.to_time" type="time" /></el-form-item>
     </el-form>
-    <p class="muted">当前时间窗用于 Mock 报告元数据记录，暂不重新计算真实历史数据。</p>
+    <p class="muted">当前时间窗写入报告记录，不按历史监测重新计算。</p>
     <template #footer>
       <el-button @click="generateVisible = false">取消</el-button>
       <el-button class="button-stable button-stable--md" type="primary" :loading="generateSaving" @click="generateReport">确认生成</el-button>

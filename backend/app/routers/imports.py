@@ -10,7 +10,7 @@ from ..data.repositories import get_data_source
 from ..dependencies import require_roles, user_has_station_access
 from ..schemas.imports import CsvImportResponse
 
-# 导入路由使用统一的接口前缀，当前只负责校验，不写入数据库。
+# 导入路由校验 CSV。全部通过后写入 telemetry_readings。
 router = APIRouter(prefix="/api/v1", tags=["数据导入"])
 data_source = get_data_source()
 
@@ -20,7 +20,7 @@ async def import_telemetry_csv(
     request: Request,
     user: dict = Depends(require_roles("admin", "operator", required_permissions=("submit_scheme",))),
 ) -> CsvImportResponse:
-    """读取遥测 CSV 并返回格式校验统计，不写入遥测存储。"""
+    """读取遥测 CSV。有错误时不写入；全部通过后写入数据库。"""
 
     # 文件名通过自定义请求头传入，当前不使用 multipart 以减少依赖。
     filename = request.headers.get("x-filename")
@@ -58,39 +58,43 @@ async def import_telemetry_csv(
         )
 
     errors: list[str] = []
-    accepted = 0
+    accepted_rows: list[dict] = []
     total = 0
-    # 站点编号来自当前 Mock 站点列表，不依赖数据库。
-    station_ids = {station["id"] for station in data_source.stations.list()}
+    stations = {station["id"]: station for station in data_source.stations.list()}
     # 从第二行开始计数，因为第一行已经是 CSV 表头。
     for line_number, row in enumerate(reader, start=2):
         total += 1
-        # 站点不存在时拒绝当前行，但继续校验后续数据。
-        if row.get("station_id") not in station_ids:
+        station = stations.get(row.get("station_id") or "")
+        if station is None:
             errors.append(f"第 {line_number} 行站点不存在: {row.get('station_id')}")
             continue
-        # 站点值班账号不能借 CSV 接口导入其他站点数据。
         if not user_has_station_access(user, row["station_id"]):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"当前账号无权导入站点 {row['station_id']} 数据")
-        # 数值和时间字段必须能转换成功。
+        metric = (row.get("metric") or "").strip()
+        if metric not in station.get("metrics", []):
+            errors.append(f"第 {line_number} 行站点不支持测点: {metric}")
+            continue
         try:
-            float(row.get("value", ""))
-            datetime.fromisoformat(row.get("observed_at", "").replace("Z", "+00:00"))
+            value = float(row.get("value", ""))
+            observed_at = datetime.fromisoformat(row.get("observed_at", "").replace("Z", "+00:00"))
         except ValueError:
             errors.append(f"第 {line_number} 行时间或数值格式错误")
             continue
-        # 测点名称和单位为空时，数据无法进入后续分析。
-        if not row.get("metric") or not row.get("unit"):
+        if not row.get("unit"):
             errors.append(f"第 {line_number} 行测点或单位为空")
             continue
-        accepted += 1
+        accepted_rows.append({"station_id": station["id"], "metric": metric, "value": value, "observed_at": observed_at})
 
-    # 只有全部数据行通过校验时 success 才为 True；本接口不保存通过的数据。
+    if not errors and accepted_rows:
+        writer = getattr(data_source, "import_telemetry_rows", None)
+        if writer is not None:
+            writer(accepted_rows)
+
     return CsvImportResponse(
         success=not errors,
         filename=filename,
         total_rows=total,
-        accepted_rows=accepted,
-        rejected_rows=total - accepted,
+        accepted_rows=len(accepted_rows),
+        rejected_rows=total - len(accepted_rows),
         errors=errors,
     )

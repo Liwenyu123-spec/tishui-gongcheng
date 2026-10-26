@@ -1,10 +1,32 @@
-"""进程内专业 Agent 注册目录；当前只读，后续可接配置持久化。"""
+"""专业 Agent 注册目录。自定义 Agent 写入本地 JSON，重启后仍可参加协作。"""
 
-from ..agent.workflow import _AGENT_ROLES, _AGENT_TOOL_NAMES
+import json
+from pathlib import Path
 from threading import Lock
 
+from ..agent.workflow import _AGENT_ROLES, _AGENT_TOOL_NAMES
+
+_STORE = Path(__file__).resolve().parents[2] / "data" / "agent_registry.json"
 _CUSTOM_AGENTS: dict[str, dict[str, object]] = {}
 _LOCK = Lock()
+
+
+def _load() -> None:
+    if not _STORE.exists():
+        return
+    try:
+        payload = json.loads(_STORE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if isinstance(payload, dict):
+        for name, item in payload.items():
+            if isinstance(item, dict):
+                _CUSTOM_AGENTS[str(name)] = item
+
+
+def _persist() -> None:
+    _STORE.parent.mkdir(parents=True, exist_ok=True)
+    _STORE.write_text(json.dumps(_CUSTOM_AGENTS, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def list_registered_agents() -> list[dict[str, object]]:
@@ -34,6 +56,7 @@ def register_agent(name: str, role: str, tool_names: list[str]) -> dict[str, obj
     item = {"name": name, "role": role, "tool_names": list(dict.fromkeys(tool_names)), "read_only": True, "custom": True}
     with _LOCK:
         _CUSTOM_AGENTS[name] = item
+        _persist()
     return dict(item)
 
 
@@ -48,3 +71,6 @@ def get_registered_agent(name: str) -> dict[str, object] | None:
     with _LOCK:
         item = _CUSTOM_AGENTS.get(name)
         return dict(item) if item else None
+
+
+_load()

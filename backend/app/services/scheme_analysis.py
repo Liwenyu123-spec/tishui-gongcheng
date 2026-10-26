@@ -62,7 +62,7 @@ def compare_scheme_inputs(
         risk = _risk(scheme.get("risk", "medium"))
         load = scheme.get("load_percent", scheme.get("load"))
         load_percent = _number(load, field=f"方案 {index} load_percent", default=55 + min(35, supply / target * 25))
-        supply_gap = round(supply - target, 2)
+        supply_gap = round(supply - target)
         violations: list[str] = []
         if supply < target * 0.95:
             violations.append(f"供水量低于目标的 95%（目标 {target:.0f} m³/d）")
@@ -76,10 +76,10 @@ def compare_scheme_inputs(
             {
                 "scheme_id": str(scheme.get("scheme_id") or f"scheme-{index}"),
                 "name": str(scheme.get("name") or f"方案 {index}"),
-                "supply": round(supply, 2),
-                "delay_minutes": round(delay, 2),
-                "energy": round(energy, 2),
-                "load_percent": round(load_percent, 2),
+                "supply": round(supply),
+                "delay_minutes": round(delay),
+                "energy": round(energy),
+                "load_percent": round(load_percent),
                 "risk": risk,
                 "supply_gap": supply_gap,
                 "feasible": not violations,
@@ -104,7 +104,7 @@ def compare_scheme_inputs(
             + 0.10 * load_score
             + 0.10 * risk_score
             + (1000 if not item["feasible"] else 0),
-            2,
+            1,
         )
         item["calculation_basis"] = [
             "供需偏差 = 方案供水量 - 目标需求量",

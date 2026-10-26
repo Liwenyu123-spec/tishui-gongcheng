@@ -1,7 +1,7 @@
-"""Agent 多轮问答的轻量进程内会话记忆。
+"""Agent 多轮问答的会话记忆。
 
-会话只保存最近一轮有效问句和站点上下文，不保存完整工具结果，也不写入数据库。
-会话键包含用户身份，避免同一个 session_id 在不同账号之间串用站点上下文。
+会话保存最近问句和站点上下文，不保存完整工具结果。
+记录写入 MySQL `conversations`。会话键包含用户身份，避免不同账号串用。
 """
 
 from __future__ import annotations
@@ -16,11 +16,16 @@ from ..schemas.agent import AgentChatRequest
 
 
 _STATION_ALIASES = {
+    "集泉二站": "jq-02",
+    "集泉一站": "jq-01",
     "集泉": "jq-01",
+    "上庄倒虹": "sz-invert",
+    "上庄": "sz-invert",
     "一泵站": "pump-01",
     "二泵站": "pump-02",
     "三泵站": "pump-03",
     "四泵站": "pump-04",
+    "平定侧入口": "pingding-inlet",
     "平定入口": "pingding-inlet",
 }
 _STATION_LABELS = {station_id: label for label, station_id in _STATION_ALIASES.items()}
@@ -35,6 +40,8 @@ class _AgentSession:
     recent_questions: list[str] = None  # type: ignore[assignment]
     last_station_id: str | None = None
     last_station_label: str | None = None
+    last_conclusion: str = ""
+    pending_items: list[str] = None  # type: ignore[assignment]
     touched_at: float = 0.0
 
 
@@ -42,12 +49,93 @@ _SESSIONS: dict[str, _AgentSession] = {}
 _SESSION_LOCK = Lock()
 
 
+def _session_row_id(key: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
+
+
+def _session_payload(session: _AgentSession) -> dict:
+    return {
+        "last_question": session.last_question,
+        "recent_questions": list(session.recent_questions or []),
+        "last_station_id": session.last_station_id,
+        "last_station_label": session.last_station_label,
+        "last_conclusion": session.last_conclusion,
+        "pending_items": list(session.pending_items or []),
+    }
+
+
+def _load_session(key: str) -> _AgentSession | None:
+    try:
+        from ..data.mysql_source import _connect, _load_json
+
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT payload FROM conversations WHERE id=%s", (_session_row_id(key),))
+                row = cur.fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    if not row:
+        return None
+    payload = _load_json(row.get("payload")) or {}
+    if not isinstance(payload, dict):
+        return None
+    return _AgentSession(
+        last_question=str(payload.get("last_question") or ""),
+        recent_questions=list(payload.get("recent_questions") or []),
+        last_station_id=payload.get("last_station_id"),
+        last_station_label=payload.get("last_station_label"),
+        last_conclusion=str(payload.get("last_conclusion") or ""),
+        pending_items=list(payload.get("pending_items") or []),
+        touched_at=monotonic(),
+    )
+
+
+def _save_session(key: str, session: _AgentSession) -> None:
+    try:
+        from datetime import datetime, timezone
+
+        from ..data.mysql_source import _connect, _dump
+
+        user_id = key.split(":", 1)[0][:32]
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute("ALTER TABLE conversations ADD COLUMN payload JSON NULL")
+                except Exception as exc:
+                    if "Duplicate column" not in str(exc):
+                        raise
+                cur.execute(
+                    """
+                    INSERT INTO conversations (id, user_id, created_at, title, payload)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE title=VALUES(title), payload=VALUES(payload)
+                    """,
+                    (
+                        _session_row_id(key),
+                        user_id,
+                        datetime.now(timezone.utc).replace(tzinfo=None),
+                        (session.last_station_label or "调度问答")[:128],
+                        _dump(_session_payload(session)),
+                    ),
+                )
+        finally:
+            conn.close()
+    except Exception:
+        return
+
+
 def _session_id(value: str | None) -> str:
     return (value or "").strip() or f"agent-{uuid4().hex[:12]}"
 
 
 def _contains_station(text: str) -> tuple[str | None, str | None]:
-    for label, station_id in _STATION_ALIASES.items():
+    for label, station_id in sorted(_STATION_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
         if label in text:
             return station_id, label
     return None, None
@@ -74,7 +162,11 @@ def prepare_request(payload: AgentChatRequest, user: dict) -> AgentChatRequest:
         if key not in _SESSIONS and len(_SESSIONS) >= _MAX_SESSIONS:
             oldest = min(_SESSIONS, key=lambda item: _SESSIONS[item].touched_at)
             _SESSIONS.pop(oldest, None)
-        session = _SESSIONS.setdefault(key, _AgentSession(recent_questions=[]))
+        if key not in _SESSIONS:
+            loaded = _load_session(key)
+            if loaded is not None:
+                _SESSIONS[key] = loaded
+        session = _SESSIONS.setdefault(key, _AgentSession(recent_questions=[], pending_items=[]))
         effective = raw
         station_id = payload.station_id
         station_label = None
@@ -105,6 +197,7 @@ def prepare_request(payload: AgentChatRequest, user: dict) -> AgentChatRequest:
         session.last_station_id = station_id or session.last_station_id
         session.last_station_label = station_label or session.last_station_label
         session.touched_at = monotonic()
+        _save_session(key, session)
 
     # ``merged`` 仅用于调试/测试；不写入答案正文，避免污染调度员看到的结论。
     _ = merged
@@ -118,11 +211,37 @@ def session_summary(session_id: str, user: dict) -> dict[str, object]:
     with _SESSION_LOCK:
         session = _SESSIONS.get(key)
         if session is None:
-            return {"session_id": session_id, "question_count": 0, "summary": "", "recent_questions": []}
+            loaded = _load_session(key)
+            if loaded is None:
+                return {"session_id": session_id, "question_count": 0, "summary": "", "recent_questions": [], "pending_items": []}
+            _SESSIONS[key] = session = loaded
         recent = list(session.recent_questions)
+        pending = list(session.pending_items or [])
+        station = session.last_station_label or session.last_station_id or "未指定站点"
+        conclusion = session.last_conclusion or "；".join(recent[-2:])
+        summary = f"站点：{station}。最近结论：{conclusion}"
+        if pending:
+            summary += "。待确认：" + "；".join(pending[:3])
         return {
             "session_id": session_id,
             "question_count": len(recent),
-            "summary": "；".join(recent[-3:]),
+            "summary": summary,
             "recent_questions": recent,
+            "station_id": session.last_station_id,
+            "pending_items": pending,
         }
+
+
+def remember_outcome(session_id: str, user: dict, *, conclusion: str, station_id: str | None, pending_items: list[str]) -> None:
+    """记下本轮结论、站点和待确认项，供下一轮摘要使用。"""
+    user_key = str(user.get("id") or user.get("username") or "anonymous")
+    key = f"{user_key}:{session_id.strip()}"
+    with _SESSION_LOCK:
+        session = _SESSIONS.get(key)
+        if session is None:
+            return
+        session.last_conclusion = (conclusion or "").strip()[:240]
+        session.pending_items = list(pending_items[:5])
+        if station_id:
+            session.last_station_id = station_id
+        _save_session(key, session)

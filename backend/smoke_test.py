@@ -27,6 +27,8 @@ os.environ["RAG_RERANK_ENABLED"] = "0"
 os.environ["RAG_GENERATION_ENABLED"] = "0"
 # 冒烟测试必须固定在离线规则模式，不调用外部大模型或消耗 API 配额。
 os.environ["AGENT_LLM_ENABLED"] = "0"
+# 冒烟必须走内存数据。空密码会阻止 .env 里的数据库密码被补进来。
+os.environ["MYSQL_PASSWORD"] = ""
 
 
 def smoke_temp_root() -> str:
@@ -647,7 +649,7 @@ def run_smoke_checks() -> None:
     assert all(point["unit"] and point["observed_at"] for point in telemetry)
     expect(
         "不支持测点被拒绝",
-        client.get("/api/v1/stations/pump-01/telemetry", headers=operator_headers, params={"metric": "level"}),
+        client.get("/api/v1/stations/pump-01/telemetry", headers=operator_headers, params={"metric": "temperature"}),
         400,
     )
     expect("站点账号越权遥测被拒绝", client.get("/api/v1/stations/pump-01/telemetry", headers=station_headers), 403)

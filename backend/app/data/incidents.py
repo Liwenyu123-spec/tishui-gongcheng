@@ -9,10 +9,12 @@ from ..schemas.incidents import Incident, Notification
 # 字典键是站点编号，列表内容是按优先级排列的主联系人账号。
 _STATION_CONTACTS = {
     "jq-01": ["dispatch-admin"],
+    "jq-02": ["dispatch-admin"],
     "pump-01": ["dispatch-admin"],
     "pump-02": ["dispatch-admin"],
     "pump-03": ["dispatch-admin"],
     "pump-04": ["dispatch-admin"],
+    "sz-invert": ["dispatch-admin"],
     "pingding-inlet": ["dispatch-admin"],
 }
 
@@ -20,10 +22,12 @@ _STATION_CONTACTS = {
 # 升级时原通知保留，另创建一条发送给备用联系人的通知。
 _STATION_BACKUP_CONTACTS = {
     "jq-01": "dispatch-supervisor",
+    "jq-02": "dispatch-supervisor",
     "pump-01": "dispatch-supervisor",
     "pump-02": "dispatch-supervisor",
     "pump-03": "dispatch-supervisor",
     "pump-04": "dispatch-supervisor",
+    "sz-invert": "dispatch-supervisor",
     "pingding-inlet": "dispatch-supervisor",
 }
 

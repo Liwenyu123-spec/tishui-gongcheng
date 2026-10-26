@@ -1,4 +1,4 @@
-export const stations = ['集泉一站','一泵站','二泵站','三泵站','四泵站','平定侧入口']
+export const stations = ['集泉一站','集泉二站','一泵站','二泵站','三泵站','四泵站','上庄倒虹','平定侧入口']
 export const alarmRows = [
   { level:'高', station:'二泵站', metric:'出水流量', value:'812 m³/h', threshold:'≥ 1,000', time:'10:42', status:'未确认', relation:'关联下游片区压力下降' },
   { level:'中', station:'四泵站', metric:'2号泵电流', value:'68 A', threshold:'≤ 60 A', time:'10:18', status:'未确认', relation:'' },

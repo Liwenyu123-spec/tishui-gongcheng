@@ -150,8 +150,15 @@ def generate_report(
 def list_reports(user: dict = Depends(require_roles("admin", "operator", "reviewer"))) -> list[Report]:
     """返回当前进程内的报告草稿列表。"""
 
-    # 报告按创建顺序保存在字典中，列表接口保持该顺序供前端展示。
-    return [report for report in data_source.reports.all().values() if _report_visible(report, user)]
+    from ..data.supply import vary_supply_areas
+
+    vary_supply_areas(list(data_source.supply.list()))
+    metrics, source_ids = _build_report_metrics(user)
+    visible = [report for report in data_source.reports.all().values() if _report_visible(report, user)]
+    for report in visible:
+        report.metrics = metrics
+        report.source_ids = source_ids
+    return visible
 
 
 @router.get("/reports/{report_id}", response_model=Report)

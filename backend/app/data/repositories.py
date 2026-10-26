@@ -180,7 +180,39 @@ class MockWorkOrderRepository:
         return _WORK_ORDERS.get(work_order_id)
 
 
-@dataclass(frozen=True)
+_MEMORY_VIRTUAL: dict[str, list[dict]] = {}
+
+
+def _memory_virtual_metrics(station: dict, metrics: list[str]) -> dict[str, list[dict]]:
+    """数据库不可用时，每次查询仍在内存里写一条新的测试值。"""
+
+    import random
+    from datetime import datetime, timezone
+
+    sequence = int(station.get("sequence") or 1)
+    specs = {
+        "flow": (1120.0 - (sequence - 1) * 18.0, 24.0, 400.0, 1600.0, 0),
+        "pressure": (0.72 - (sequence - 1) * 0.02, 0.03, 0.2, 1.2, 2),
+        "level": (3.4 - (sequence - 1) * 0.08, 0.12, 1.2, 5.5, 2),
+        "energy": (184.0 + (sequence - 1) * 2.5, 6.0, 80.0, 400.0, 0),
+    }
+    now = datetime.now(timezone.utc)
+    stored: dict[str, list[dict]] = {}
+    for metric in metrics:
+        if metric not in specs:
+            continue
+        base, jitter, low, high, digits = specs[metric]
+        key = f"{station['id']}:{metric}"
+        history = _MEMORY_VIRTUAL.setdefault(key, [])
+        start = float(history[0]["value"]) if history else base
+        value = round(min(high, max(low, start + random.uniform(-jitter, jitter))), digits)
+        history.insert(0, {"observed_at": now, "value": value})
+        del history[24:]
+        stored[metric] = list(history)
+    return stored
+
+
+@dataclass
 class MockDataSource:
     """当前阶段的统一数据源组合；字段类型就是业务层依赖的接口。"""
 
@@ -194,6 +226,9 @@ class MockDataSource:
     reviews: ReviewRepository
     reports: ReportRepository
     work_orders: WorkOrderRepository
+
+    def record_virtual_metrics(self, station: dict, metrics: list[str]) -> dict[str, list[dict]]:
+        return _memory_virtual_metrics(station, metrics)
 
 
 _DATA_SOURCE = MockDataSource(
@@ -211,6 +246,20 @@ _DATA_SOURCE = MockDataSource(
 
 
 def get_data_source() -> MockDataSource:
-    """返回当前进程的数据源；后续可替换为依赖注入容器。"""
+    """返回当前进程的数据源。能连上本地 MySQL 时读写 water_dispatch。"""
 
+    return _DATA_SOURCE
+
+
+def use_mysql_source() -> MockDataSource:
+    """用数据库仓储替换内存数据源。路由在导入时已经拿到旧对象，因此要回填字段。"""
+
+    global _DATA_SOURCE
+    from .mysql_source import build_mysql_source
+
+    mysql_source = build_mysql_source()
+    for key, value in mysql_source.__dict__.items():
+        object.__setattr__(_DATA_SOURCE, key, value)
+    # 已导入的路由模块持有原来的数据源对象，换类后仍是同一个对象。
+    _DATA_SOURCE.__class__ = mysql_source.__class__
     return _DATA_SOURCE

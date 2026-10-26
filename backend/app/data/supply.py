@@ -1,6 +1,22 @@
 """片区供需模块共用的 Mock 数据。"""
 
 
+def vary_supply_areas(areas: list[dict]) -> None:
+    """每次查询给供需和压力加一点测试波动，并写回原记录。"""
+
+    import random
+
+    for area in areas:
+        supply = float(area.get("supply") or 0)
+        demand = float(area.get("demand") or 0)
+        pressure = float(area.get("pressure") or 0.4)
+        area["supply"] = round(min(20000.0, max(500.0, supply + random.uniform(-180, 180))))
+        area["demand"] = round(min(20000.0, max(500.0, demand + random.uniform(-120, 120))))
+        area["pressure"] = round(min(1.2, max(0.15, pressure + random.uniform(-0.03, 0.03))), 2)
+        balance = area["supply"] - area["demand"]
+        area["risk"] = "high" if balance < -400 else "medium" if balance < 0 else "low"
+
+
 # 片区供需 Mock 数据；balance 由接口根据 supply-demand 计算。
 # station_id 用于把片区数据绑定到站点权限范围。
 _SUPPLY_AREAS = [

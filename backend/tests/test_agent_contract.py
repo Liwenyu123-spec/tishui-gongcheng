@@ -25,10 +25,12 @@ def test_agent_diagnosis_branches_are_distinguishable(client, admin_headers):
     assert procedure.status_code == 200 and operational.status_code == 200
     assert '"workflow_branch": "diagnosis-procedure"' in procedure.text
     assert '"workflow_branch": "diagnosis-operational"' in operational.text
-    assert '"max_tool_calls"' in text
-    assert '"run_id": "run-' in text
-    assert '"workflow_status": "completed"' in text
-    assert 'event: done' in text and '"workflow_status": "completed"' in text
+    for response in (procedure, operational):
+        text = response.text
+        assert '"max_tool_calls"' in text
+        assert '"run_id": "run-' in text
+        assert '"workflow_status": "completed"' in text
+        assert 'event: done' in text and '"workflow_status": "completed"' in text
 
 
 def test_agent_control_request_stays_read_only(client, admin_headers):

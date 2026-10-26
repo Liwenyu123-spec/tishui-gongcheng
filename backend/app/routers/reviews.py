@@ -50,6 +50,9 @@ def create_review(
     )
     # Mock 阶段将审核记录放入进程内字典，重启服务后会清空。
     data_source.reviews.all()[review.id] = review
+    commit = getattr(data_source, "commit_review", None)
+    if commit is not None and not commit(review, creating=True):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="审核记录未能写入数据库")
     # 记录转人工复核的操作人，便于管理员在审计页面追踪 Agent 转办来源。
     record_audit(
         "create",
@@ -103,5 +106,8 @@ def update_review(
         review.comment = payload.comment
     # 每次状态变更都刷新更新时间，并记录一条审计事件。
     review.updated_at = datetime.now(timezone.utc)
+    commit = getattr(data_source, "commit_review", None)
+    if commit is not None and not commit(review, creating=False):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="审核记录已被其他人更新，请刷新后再提交")
     record_audit(payload.status, "review", review_id, f"审核记录 {review.subject} 状态更新为 {payload.status}")
     return review

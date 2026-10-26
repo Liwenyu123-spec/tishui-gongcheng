@@ -40,6 +40,8 @@ class AgentPlan:
     primary_agent: str
     collaborating_agents: tuple[str, ...]
     tools: tuple[ReadOnlyTool, ...]
+    skill_id: str = ""
+    skill_summary: str = ""
 
 
 # 所有工具均为读取、计算或安全边界检查，不包含泵组、阀门或 PLC 写操作。

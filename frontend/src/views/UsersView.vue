@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { api } from '../api/http'
+import { fetchAuditEvents } from '../api/audit'
+import { backendSourceLabel } from '../composables/dataSource'
+import { createUser, deleteUser, fetchUsers, updateUser } from '../api/users'
+import { readCurrentUser } from '../composables/currentUser'
 import { registerPageRefresh } from '../composables/pageRefresh'
 
 interface ApiUser {
@@ -71,6 +73,7 @@ const auditActionNames: Record<string, string> = { create: '创建', update: '�
 const auditResourceNames: Record<string, string> = { user: '用户', knowledge: '知识文档', alarm: '告警', review: '审核记录', agent_run: 'Agent 运行' }
 
 const pendingCount = computed(() => rows.value.length)
+const currentUsername = computed(() => readCurrentUser().username || '')
 
 const scopeFor = (permissions: string[], stationIds: string[] = []) => {
   if (stationIds.length && !stationIds.includes('*')) return stationIds.join('、')
@@ -80,7 +83,7 @@ const scopeFor = (permissions: string[], stationIds: string[] = []) => {
   return '全链路只读'
 }
 
-const formatUser = (user: ApiUser, source = '后端 Mock 数据'): UserRow => ({
+const formatUser = (user: ApiUser, source = '数据库用户'): UserRow => ({
   ...user,
   scope: scopeFor(user.permissions, user.station_ids),
   status: '启用',
@@ -99,10 +102,10 @@ const formatAuditTime = (value: string) => {
 const loadUsers = async () => {
   loading.value = true
   try {
-    const result = await api<ApiUser[]>('/api/v1/users')
+    const result = await fetchUsers<ApiUser>()
     if (result.length) {
       rows.value = result.map(user => formatUser(user))
-      sourceLabel.value = '后端 Mock 数据'
+      sourceLabel.value = '数据库用户'
     } else {
       sourceLabel.value = '接口暂无用户 · 本地示例'
       ElMessage.info('用户接口当前没有数据，页面暂显示本地示例')
@@ -130,6 +133,7 @@ const openCreate = () => {
   formVisible.value = true
 }
 
+const openEditFromRow = (row: unknown) => openEdit(row as UserRow)
 const openEdit = (row: UserRow) => {
   editing.value = true
   Object.assign(form, { id: row.id, username: row.username, password: '', display_name: row.display_name, role: row.role, permissions: [...row.permissions] })
@@ -145,21 +149,15 @@ const saveUser = async () => {
   try {
     let result: ApiUser
     if (editing.value) {
-      result = await api<ApiUser>(`/api/v1/users/${form.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ display_name: form.display_name, role: form.role, permissions: form.permissions }),
-      })
+      result = await updateUser<ApiUser>(form.id, { display_name: form.display_name, role: form.role, permissions: form.permissions })
       rows.value = rows.value.map(row => row.id === result.id ? formatUser(result) : row)
       ElMessage.success('用户权限已更新')
     } else {
-      result = await api<ApiUser>('/api/v1/users', {
-        method: 'POST',
-        body: JSON.stringify({ username: form.username, password: form.password, display_name: form.display_name, role: form.role, permissions: form.permissions }),
-      })
+      result = await createUser<ApiUser>({ username: form.username, password: form.password, display_name: form.display_name, role: form.role, permissions: form.permissions })
       rows.value.unshift(formatUser(result))
       ElMessage.success('用户已创建')
     }
-    sourceLabel.value = '后端 Mock 数据'
+    sourceLabel.value = '数据库用户'
     formVisible.value = false
   } catch {
     ElMessage.error(editing.value ? '用户更新失败' : '用户创建失败，请检查用户名是否重复')
@@ -168,11 +166,31 @@ const saveUser = async () => {
   }
 }
 
+const removeUserFromRow = (row: unknown) => removeUser(row as UserRow)
+const removeUser = async (row: UserRow) => {
+  if (row.username === currentUsername.value) {
+    ElMessage.warning('不能删除当前登录的账号')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`删除用户「${row.display_name}」后，该账号将不能再登录。`, '删除用户', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+  } catch {
+    return
+  }
+  try {
+    await deleteUser(row.id)
+    rows.value = rows.value.filter(item => item.id !== row.id)
+    ElMessage.success('用户已删除')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '用户删除失败')
+  }
+}
+
 const viewAudit = async () => {
   auditVisible.value = true
   auditLoading.value = true
   try {
-    const result = await api<ApiAuditEvent[]>('/api/v1/audit-events')
+    const result = await fetchAuditEvents<ApiAuditEvent>()
     auditRows.value = result.map(event => ({
       id: event.id,
       action: auditActionNames[event.action] || event.action,
@@ -180,7 +198,7 @@ const viewAudit = async () => {
       operator: event.operator,
       time: formatAuditTime(event.occurred_at),
       detail: event.detail,
-      source: event.source === 'mock' ? '后端 Mock' : event.source,
+      source: backendSourceLabel(event.source),
     }))
     if (!auditRows.value.length) ElMessage.info('当前暂无审计记录')
   } catch {
@@ -218,9 +236,10 @@ onMounted(loadUsers)
         <el-table-column prop="scope" label="数据范围" />
         <el-table-column prop="status" label="状态"><template #default="s"><span class="tag tag-green">{{s.row.status}}</span></template></el-table-column>
         <el-table-column prop="last" label="最近登录" />
-        <el-table-column label="操作" width="190">
+        <el-table-column label="操作" width="240">
           <template #default="s">
-            <el-button link type="primary" @click="openEdit(s.row)">编辑权限</el-button>
+            <el-button link type="primary" @click="openEditFromRow(s.row)">编辑权限</el-button>
+            <el-button link type="danger" :disabled="s.row.username === currentUsername" @click="removeUserFromRow(s.row)">删除</el-button>
             <el-button link @click="viewAudit">查看审计</el-button>
           </template>
         </el-table-column>

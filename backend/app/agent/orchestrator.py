@@ -15,13 +15,42 @@ def coordinate(answer: AgentAnswer, message: str = "") -> AgentPlan:
     """根据意图和问题用词生成一次最小专业协作计划。"""
 
     rule_plan = plan_for_question(answer.intent, message)
+
+    def with_custom(plan: AgentPlan) -> AgentPlan:
+        """让工具集合与本轮计划相交的自定义 Agent 进入条件分支。"""
+        from ..services.agent_registry import list_registered_agents
+
+        tool_names = {tool.name for tool in plan.tools}
+        custom_agents = [
+            str(item["name"])
+            for item in list_registered_agents()
+            if item.get("custom") and tool_names.intersection(item.get("tool_names") or [])
+        ]
+        from ..services.agent_skills import select_skill
+
+        skill = select_skill(message, answer.intent)
+        base = plan if not custom_agents else AgentPlan(
+            primary_agent=plan.primary_agent,
+            collaborating_agents=tuple(dict.fromkeys((*plan.collaborating_agents, *custom_agents))),
+            tools=plan.tools,
+        )
+        if not skill:
+            return base
+        return AgentPlan(
+            primary_agent=base.primary_agent,
+            collaborating_agents=base.collaborating_agents,
+            tools=base.tools,
+            skill_id=skill["id"],
+            skill_summary=skill["summary"],
+        )
+
     requested_names = [
         name
         for name in answer.planned_tools
         if name in READ_ONLY_TOOLS and name != "apply_control_boundary"
     ]
     if not requested_names or answer.intent == "control_rejected":
-        return rule_plan
+        return with_custom(rule_plan)
 
     # 模型可以调整顺序并选择可选工具，但不能删掉后端认为必需的工具。
     required_by_intent = {
@@ -37,11 +66,11 @@ def coordinate(answer: AgentAnswer, message: str = "") -> AgentPlan:
         if name not in ordered_names:
             ordered_names.append(name)
 
-    return AgentPlan(
+    return with_custom(AgentPlan(
         primary_agent=rule_plan.primary_agent,
         collaborating_agents=rule_plan.collaborating_agents,
         tools=tuple(READ_ONLY_TOOLS[name] for name in ordered_names),
-    )
+    ))
 
 
 def run_plan(
@@ -53,6 +82,18 @@ def run_plan(
 
     from .executor import ToolContext
     from ..services.agent import reconcile_answer_with_tools
+
+    from ..services.agent_runs import save_task_snapshot
+
+    def save_capacity_snapshot(run_id: str, request) -> None:
+        """并发槽位不足时留下可重放的问题快照，供稍后恢复同一轮分析。"""
+        save_task_snapshot(run_id, {
+            "user_id": user.get("id") or user.get("username"),
+            "message": request.message,
+            "station_id": getattr(request, "station_id", None),
+            "session_id": getattr(request, "session_id", None),
+            "reason": "capacity",
+        })
 
     run_id = answer.run_id or f"run-{uuid4().hex[:16]}"
     from ..services.agent_runs import set_run_status
@@ -74,7 +115,8 @@ def run_plan(
                 )
                 for tool in plan.tools
             )
-            trace = CollaborationTrace(runs=())
+            trace = CollaborationTrace(runs=(), status="degraded")
+            save_capacity_snapshot(run_id, request)
         else:
             executions, trace = DispatchWorkflow(plan).run(context)
     final_answer = reconcile_answer_with_tools(answer, executions)

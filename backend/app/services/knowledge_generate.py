@@ -18,7 +18,7 @@ from uuid import uuid4
 from .knowledge_search import KnowledgeHit, _terms, search_rules
 from .runtime_env import env_flag, load_env_file, windows_env
 
-_STATION_ALIASES = ("集泉", "一泵站", "二泵站", "三泵站", "四泵站", "平定入口")
+_STATION_ALIASES = ("集泉二站", "集泉一站", "集泉", "上庄倒虹", "上庄", "一泵站", "二泵站", "三泵站", "四泵站", "平定侧入口", "平定入口")
 _METRIC_WORDS = ("流量", "压力", "水位", "液位", "电流", "下降", "异常", "核查", "规程")
 
 
@@ -279,12 +279,33 @@ def ask_with_retrieval(
     rewritten = cleaned
     if status["generation_ready"]:
         rewritten = _rewrite_query(cleaned) or cleaned
+    scope = infer_knowledge_scope(effective)
     hits = _search_queries(
         [effective, cleaned, rewritten],
         k=k,
         station_id=station_id,
         visible_station_ids=visible_station_ids,
+        category=scope,
     )
+    if not hits and scope:
+        hits = _search_queries(
+            [effective, cleaned, rewritten],
+            k=k,
+            station_id=station_id,
+            visible_station_ids=visible_station_ids,
+        )
+    corrected = False
+    if not hits:
+        broadened = f"{rewritten or cleaned or effective} 规程 核查"
+        hits = _search_queries(
+            [broadened],
+            k=k,
+            station_id=station_id,
+            visible_station_ids=visible_station_ids,
+        )
+        if hits:
+            rewritten = broadened
+            corrected = True
     if not hits:
         with _SESSION_LOCK:
             session = _SESSIONS.setdefault(sid, _AskSession())
@@ -303,6 +324,7 @@ def ask_with_retrieval(
             "compression": {"enabled": False, "chars_before": 0, "chars_after": 0, "reduced": 0},
             "retrieval_gate": {"passed": False, "min_score": ask_min_score(), "top_score": 0},
             "generation": "clarify",
+            "retrieval_correction": {"attempted": corrected, "rewritten_query": rewritten},
         }
     strong_hits, gate = select_strong_hits(hits)
     if not strong_hits:
@@ -336,12 +358,18 @@ def ask_with_retrieval(
             "compression": {"enabled": False, "chars_before": 0, "chars_after": 0, "reduced": 0},
             "retrieval_gate": gate,
             "generation": "abstain",
+            "retrieval_correction": {"attempted": corrected, "rewritten_query": rewritten},
         }
     if not status["generation_ready"]:
         raise RuntimeError(status["generation_error"] or "生成问答不可用")
     # 对照参考项目的句级压缩：只把和问句相关的句子送给模型。
     compressed_hits, compress_stats = compress_hits(strong_hits, rewritten or cleaned or effective)
     answer = _complete(effective, compressed_hits)
+    from .knowledge_search import detect_conflicts
+    conflicts = detect_conflicts(compressed_hits)
+    if conflicts:
+        notes = "；".join(item["preferred_reason"] for item in conflicts if item.get("preferred_reason"))
+        answer = f"{answer}\n\n【多文档冲突】{notes or '不同资料给出了相反约束，请人工核对版本后再采用。'}"
     groundedness = check_groundedness(answer, compressed_hits)
     if not groundedness["grounded"]:
         answer = (
@@ -368,6 +396,8 @@ def ask_with_retrieval(
         "groundedness": groundedness,
         "retrieval_gate": {**gate, "passed": True},
         "generation": "deepseek",
+        "knowledge_scope": scope,
+        "retrieval_correction": {"attempted": corrected, "rewritten_query": rewritten},
         **status,
     }
 
@@ -536,12 +566,25 @@ def validate_citations(answer: str, hits: list[KnowledgeHit]) -> dict[str, Any]:
     }
 
 
+def infer_knowledge_scope(question: str) -> str | None:
+    """按问句里的资料类型词限制检索范围；没有明确类型时不限制。"""
+
+    if any(word in question for word in ("预案", "应急", "抢修")):
+        return "应急预案"
+    if any(word in question for word in ("手册", "维修")):
+        return "手册"
+    if "规程" in question:
+        return "规程"
+    return None
+
+
 def _search_queries(
     queries: list[str],
     *,
     k: int,
     station_id: str | None,
     visible_station_ids: set[str] | None,
+    category: str | None = None,
 ) -> list[KnowledgeHit]:
     """用原问句和改写问句各检索一次，按资料编号合并，保留更高分。"""
 
@@ -552,6 +595,7 @@ def _search_queries(
             limit=k,
             station_id=station_id,
             visible_station_ids=visible_station_ids,
+            category=category,
         ):
             if hit.confidence == "low":
                 continue

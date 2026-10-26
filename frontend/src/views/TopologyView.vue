@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { api } from '../api/http'
+import { fetchStationDetail, fetchStationTelemetry, fetchTopology } from '../api/topology'
 import { registerPageRefresh } from '../composables/pageRefresh'
 
 interface TopologyNode {
@@ -41,14 +40,16 @@ interface TelemetryPoint {
 const selectedId = ref('pump-02')
 const loading = ref(false)
 const detailLoading = ref(false)
-const sourceLabel = ref('本地 Mock 数据')
+const sourceLabel = ref('本地示例')
 const nodes = ref<TopologyNode[]>([
   { station_id: 'jq-01', name: '集泉一站', sequence: 1 },
-  { station_id: 'pump-01', name: '一泵站', sequence: 2 },
-  { station_id: 'pump-02', name: '二泵站', sequence: 3 },
-  { station_id: 'pump-03', name: '三泵站', sequence: 4 },
-  { station_id: 'pump-04', name: '四泵站', sequence: 5 },
-  { station_id: 'pingding-inlet', name: '平定侧入口', sequence: 6 },
+  { station_id: 'jq-02', name: '集泉二站', sequence: 2 },
+  { station_id: 'pump-01', name: '一泵站', sequence: 3 },
+  { station_id: 'pump-02', name: '二泵站', sequence: 4 },
+  { station_id: 'pump-03', name: '三泵站', sequence: 5 },
+  { station_id: 'pump-04', name: '四泵站', sequence: 6 },
+  { station_id: 'sz-invert', name: '上庄倒虹', sequence: 7 },
+  { station_id: 'pingding-inlet', name: '平定侧入口', sequence: 8 },
 ])
 const edges = ref<TopologyEdge[]>([])
 const stationDetail = ref<StationDetail | null>(null)
@@ -62,14 +63,14 @@ const updatedAt = computed(() => telemetryPoints.value[0]?.observed_at ? telemet
 const loadSelected = async () => {
   if (!selectedId.value) return
   detailLoading.value = true
-  const detailTask = api<StationDetail>(`/api/v1/stations/${selectedId.value}`)
-  const telemetryTask = api<TelemetryPoint[]>(`/api/v1/stations/${selectedId.value}/telemetry`)
+  const detailTask = fetchStationDetail<StationDetail>(selectedId.value)
+  const telemetryTask = fetchStationTelemetry<TelemetryPoint>(selectedId.value)
   const [detailResult, telemetryResult] = await Promise.allSettled([detailTask, telemetryTask])
   if (detailResult.status === 'fulfilled') stationDetail.value = detailResult.value
   else stationDetail.value = null
   if (telemetryResult.status === 'fulfilled') {
     telemetryPoints.value = telemetryResult.value
-    sourceLabel.value = '后端 Mock 数据'
+    sourceLabel.value = '数据库站点'
   } else {
     telemetryPoints.value = []
     sourceLabel.value = '本地数据不可用'
@@ -81,14 +82,14 @@ const loadSelected = async () => {
 const loadTopology = async () => {
   loading.value = true
   try {
-    const result = await api<{ nodes: TopologyNode[]; edges: TopologyEdge[] }>('/api/v1/topology')
+    const result = await fetchTopology<{ nodes: TopologyNode[]; edges: TopologyEdge[] }>()
     nodes.value = result.nodes
     edges.value = result.edges
     if (!nodes.value.some(node => node.station_id === selectedId.value)) selectedId.value = nodes.value[0]?.station_id || ''
-    sourceLabel.value = '后端 Mock 数据'
+    sourceLabel.value = '数据库站点'
     await loadSelected()
   } catch {
-    sourceLabel.value = '本地 Mock 数据'
+    sourceLabel.value = '本地示例'
     ElMessage.warning('拓扑接口暂不可用，当前显示本地节点')
   } finally {
     loading.value = false
@@ -127,9 +128,9 @@ onMounted(loadTopology)
       </div>
       <div class="table-wrap">
         <div class="grid grid-2">
-          <div class="metric"><span class="metric-label">流量</span><div class="metric-value">{{ flow ?? '—' }} <small>{{ telemetryPoints.find(point => point.metric==='flow')?.unit || '' }}</small></div></div>
-          <div class="metric"><span class="metric-label">压力</span><div class="metric-value">{{ pressure ?? '—' }} <small>{{ telemetryPoints.find(point => point.metric==='pressure')?.unit || '' }}</small></div></div>
-          <div class="metric"><span class="metric-label">水位</span><div class="metric-value">{{ level ?? '—' }} <small>{{ telemetryPoints.find(point => point.metric==='level')?.unit || '' }}</small></div></div>
+          <div class="metric"><span class="metric-label">流量</span><div class="metric-value">{{ flow == null ? '—' : Number(flow).toFixed(0) }} <small>{{ telemetryPoints.find(point => point.metric==='flow')?.unit || '' }}</small></div></div>
+          <div class="metric"><span class="metric-label">压力</span><div class="metric-value">{{ pressure == null ? '—' : Number(pressure).toFixed(2) }} <small>{{ telemetryPoints.find(point => point.metric==='pressure')?.unit || '' }}</small></div></div>
+          <div class="metric"><span class="metric-label">水位</span><div class="metric-value">{{ level == null ? '—' : Number(level).toFixed(2) }} <small>{{ telemetryPoints.find(point => point.metric==='level')?.unit || '' }}</small></div></div>
           <div class="metric"><span class="metric-label">更新时间</span><div class="metric-value" style="font-size:18px">{{updatedAt}}</div></div>
         </div>
         <p>{{ stationDetail?.description || '当前没有可用站点详情' }}</p>

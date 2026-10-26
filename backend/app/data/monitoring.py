@@ -7,15 +7,14 @@ from datetime import datetime, timezone
 # id 是接口和权限校验使用的稳定编号，metrics 是该站点支持的测点集合。
 _STATIONS = [
     # 上游取水站，作为输水链路的起点。
-    {"id": "jq-01", "name": "集泉一站", "sequence": 1, "station_type": "取水泵站", "status": "running", "location": "集泉取水口", "description": "工程上游取水及一级提水站点。", "metrics": ["flow", "pressure", "level", "energy"]},
-    # 一级加压站，缺少水位测点示例。
-    {"id": "pump-01", "name": "一泵站", "sequence": 2, "station_type": "加压泵站", "status": "running", "location": "输水干线 1+200", "description": "承担一级输水加压。", "metrics": ["flow", "pressure", "energy"]},
-    # 二泵站用于 station-operator 站点范围权限测试。
-    {"id": "pump-02", "name": "二泵站", "sequence": 3, "station_type": "加压泵站", "status": "warning", "location": "输水干线 4+800", "description": "承担中段输水加压。", "metrics": ["flow", "pressure", "level", "energy"]},
-    # 中下游加压站，提供流量、压力和能耗测点。
-    {"id": "pump-03", "name": "三泵站", "sequence": 4, "station_type": "加压泵站", "status": "running", "location": "输水干线 8+600", "description": "承担中下游输水加压。", "metrics": ["flow", "pressure", "energy"]},
-    {"id": "pump-04", "name": "四泵站", "sequence": 5, "station_type": "末端泵站", "status": "running", "location": "平定城区入口", "description": "承担末端供水调节。", "metrics": ["flow", "pressure", "level", "energy"]},
-    {"id": "pingding-inlet", "name": "平定侧入口", "sequence": 6, "station_type": "供水入口", "status": "running", "location": "平定城区", "description": "工程输水进入片区的入口节点。", "metrics": ["flow", "pressure"]},
+    {"id": "jq-01", "name": "集泉一站", "sequence": 1, "station_type": "取水泵站", "status": "running", "location": "水帘洞附近", "description": "泉眼高于前池，自流汇入后加压，送往一泵站前池。", "metrics": ["flow", "pressure", "level", "energy"]},
+    {"id": "jq-02", "name": "集泉二站", "sequence": 2, "station_type": "取水泵站", "status": "running", "location": "梁家河附近", "description": "与集泉一站共同汇集泉水并加压，经渠线送入一泵站前池。", "metrics": ["flow", "pressure", "level", "energy"]},
+    {"id": "pump-01", "name": "一泵站", "sequence": 3, "station_type": "加压泵站", "status": "running", "location": "输水干线 1+200", "description": "承接集泉来水，加压后送往二泵站。", "metrics": ["flow", "pressure", "level", "energy"]},
+    {"id": "pump-02", "name": "二泵站", "sequence": 4, "station_type": "加压泵站", "status": "warning", "location": "输水干线 4+800", "description": "承接一泵站来水，加压后送往三泵站。", "metrics": ["flow", "pressure", "level", "energy"]},
+    {"id": "pump-03", "name": "三泵站", "sequence": 5, "station_type": "加压泵站", "status": "running", "location": "输水干线 8+600", "description": "承接二泵站来水，加压后送往四泵站。", "metrics": ["flow", "pressure", "level", "energy"]},
+    {"id": "pump-04", "name": "四泵站", "sequence": 6, "station_type": "加压泵站", "status": "running", "location": "槐树铺至西干渠", "description": "末级加压。出水后改为自流，进入上庄倒虹。", "metrics": ["flow", "pressure", "level", "energy"]},
+    {"id": "sz-invert", "name": "上庄倒虹", "sequence": 7, "station_type": "倒虹", "status": "running", "location": "南上庄村", "description": "四泵站之后的自流段，跨越南川河后送往平定。", "metrics": ["flow", "pressure", "level"]},
+    {"id": "pingding-inlet", "name": "平定侧入口", "sequence": 8, "station_type": "供水入口", "status": "running", "location": "平定城区", "description": "上庄倒虹之后进入平定片区的入口。", "metrics": ["flow", "pressure", "level"]},
 ]
 
 # 告警 Mock 数据；详情字段不在列表接口中返回。

@@ -82,9 +82,39 @@ def telemetry_series(station: dict, metric: str) -> list[TelemetrySample]:
     ]
 
 
-def latest_telemetry(station: dict, metric: str) -> TelemetrySample | None:
-    """返回指定站点指标的最新 Mock 样本。"""
+def _stored_samples(station: dict, metric: str) -> list[TelemetrySample]:
+    """读取库里已有的测试遥测。读不到时返回空列表，不新写记录。"""
 
+    from ..data.repositories import get_data_source
+
+    reader = getattr(get_data_source(), "read_virtual_metric", None)
+    if reader is None or metric not in _BASE_VALUES:
+        return []
+    try:
+        rows = reader(station["id"], metric)
+    except Exception:
+        return []
+    _, unit = _BASE_VALUES[metric]
+    return [
+        TelemetrySample(
+            station_id=station["id"],
+            station_name=station["name"],
+            metric=metric,
+            value=item["value"],
+            unit=unit,
+            observed_at=item["observed_at"],
+            source="virtual-reading",
+        )
+        for item in rows
+    ]
+
+
+def latest_telemetry(station: dict, metric: str) -> TelemetrySample | None:
+    """优先用库中最新测试值；还没有记录时用固定样本。"""
+
+    stored = _stored_samples(station, metric)
+    if stored:
+        return stored[0]
     series = telemetry_series(station, metric)
     return series[0] if series else None
 
@@ -94,7 +124,8 @@ def compare_variation(stations: Iterable[dict], metric: str) -> list[dict]:
 
     results: list[dict] = []
     for station in stations:
-        sample_series = telemetry_series(station, metric)
+        stored = _stored_samples(station, metric)
+        sample_series = stored if len(stored) >= 2 else telemetry_series(station, metric)
         if not sample_series:
             continue
         values = [sample.value for sample in sample_series]
@@ -110,6 +141,7 @@ def compare_variation(stations: Iterable[dict], metric: str) -> list[dict]:
                 "maximum": max(values),
                 "variation": round(max(values) - min(values), 3),
                 "observed_at": latest.observed_at,
+                "source": latest.source,
             }
         )
     return sorted(results, key=lambda item: (-item["variation"], item["station_id"]))

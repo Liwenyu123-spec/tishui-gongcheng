@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { api } from '../api/http'
+import { fetchReviewDetail, fetchReviews, updateReview } from '../api/reviews'
 import { registerPageRefresh } from '../composables/pageRefresh'
+import { backendSourceLabel, remoteListMessage } from '../composables/dataSource'
 
 interface ApiReview {
   id: string
@@ -65,23 +65,23 @@ const formatReview = (review: ApiReview): ReviewRow => ({
   comment: review.comment,
   time: formatLocalDateTime(review.created_at),
   status: statusNames[review.status] || review.status,
-  source: review.source === 'mock' ? '后端 Mock' : review.source,
+  source: backendSourceLabel(review.source),
 })
 
 const loadReviews = async () => {
   loading.value = true
   try {
-    const result = await api<ApiReview[]>('/api/v1/reviews')
+    const result = await fetchReviews<ApiReview>()
     if (result.length) {
       rows.value = result.map(formatReview)
-      sourceLabel.value = result[0].source === 'mock' ? '后端 Mock 数据' : result[0].source
+      sourceLabel.value = backendSourceLabel(result[0].source)
     } else {
       sourceLabel.value = '接口暂无记录 · 本地示例'
-      ElMessage.info('审核接口当前没有记录，页面暂显示本地示例')
+      ElMessage.info(remoteListMessage('empty', '审核'))
     }
   } catch {
     sourceLabel.value = '本地示例'
-    ElMessage.warning('审核接口暂不可用，当前显示本地示例')
+    ElMessage.warning(remoteListMessage('failed', '审核接口'))
   } finally {
     loading.value = false
   }
@@ -95,10 +95,7 @@ const updateReviewStatus = async (row: ReviewRow, status: 'approved' | 'rejected
   }
   updatingReviewId.value = row.id
   try {
-    const result = await api<ApiReview>(`/api/v1/reviews/${row.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status, ...(comment ? { comment } : {}) }),
-    })
+    const result = await updateReview<ApiReview>(row.id, { status, ...(comment ? { comment } : {}) })
     Object.assign(row, formatReview(result))
     ElMessage.success(status === 'approved' ? '审核已通过' : status === 'rejected' ? '审核已驳回' : '已退回补充材料')
   } catch {
@@ -140,7 +137,7 @@ const viewDetail = async (row: ReviewRow) => {
   }
   detailLoading.value = true
   try {
-    selectedDetail.value = await api<ApiReview>(`/api/v1/reviews/${row.id}`)
+    selectedDetail.value = await fetchReviewDetail<ApiReview>(row.id)
   } catch {
     selectedDetail.value = null
     ElMessage.warning('审核详情接口暂不可用')
@@ -172,11 +169,11 @@ onMounted(loadReviews)
         <el-table-column prop="status" label="状态" width="100" />
         <el-table-column label="操作" width="330">
           <template #default="s">
-            <el-button link type="primary" @click="viewDetail(s.row)">详情</el-button>
-            <el-button link type="primary" @click="viewBasis(s.row)">查看依据</el-button>
-            <el-button class="button-stable button-stable--xs" link type="success" :disabled="!canReviewRow(s.row)" :loading="updatingReviewId===s.row.id" @click="updateReviewStatus(s.row, 'approved')">通过</el-button>
-            <el-button class="button-stable button-stable--xs" link type="danger" :disabled="!canReviewRow(s.row)" :loading="updatingReviewId===s.row.id" @click="updateReviewStatus(s.row, 'rejected')">驳回</el-button>
-            <el-button class="button-stable button-stable--sm" link type="warning" :disabled="s.row.status!=='待审核'" :loading="updatingReviewId===s.row.id" @click="openSupplement(s.row)">退回补充</el-button>
+            <el-button link type="primary" @click="viewDetail(s.row as ReviewRow)">详情</el-button>
+            <el-button link type="primary" @click="viewBasis(s.row as ReviewRow)">查看依据</el-button>
+            <el-button class="button-stable button-stable--xs" link type="success" :disabled="!canReviewRow(s.row as ReviewRow)" :loading="updatingReviewId===s.row.id" @click="updateReviewStatus(s.row as ReviewRow, 'approved')">通过</el-button>
+            <el-button class="button-stable button-stable--xs" link type="danger" :disabled="!canReviewRow(s.row as ReviewRow)" :loading="updatingReviewId===s.row.id" @click="updateReviewStatus(s.row as ReviewRow, 'rejected')">驳回</el-button>
+            <el-button class="button-stable button-stable--sm" link type="warning" :disabled="s.row.status!=='待审核'" :loading="updatingReviewId===s.row.id" @click="openSupplement(s.row as ReviewRow)">退回补充</el-button>
           </template>
         </el-table-column>
       </el-table>

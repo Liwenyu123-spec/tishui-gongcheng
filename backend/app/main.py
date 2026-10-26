@@ -6,6 +6,7 @@
 # Path 用于定位项目根目录下的前端构建产物。
 from pathlib import Path
 from threading import Thread
+import asyncio
 import logging
 import time
 
@@ -43,9 +44,9 @@ app = FastAPI(
     # Swagger 页面显示的项目名称。
     title="提水工程供水调度平台 API",
     # 当前模拟阶段的后端版本。
-    version="0.3.0-mock",
+    version="0.10.306",
     # Swagger 页面显示的项目说明。
-    description="模拟阶段后端接口。当前使用内存 Mock 数据，供前后端联调。",
+    description="本地联调接口。业务记录和测试遥测在 MySQL，不连接现场设备，不下发控制指令。",
 )
 
 # 注册跨域中间件，使 Vue 开发服务器可以请求本地后端。
@@ -78,6 +79,44 @@ app.include_router(photos_router)
 app.include_router(imports_router)
 app.include_router(audit_router)
 app.include_router(agent_router)
+
+from .data.repositories import get_data_source, use_mysql_source
+
+# 数据库是可选的运行时依赖：开发/冒烟环境没有 MySQL 或 pymysql 时，保留 Mock 数据源，
+# 不应因为导入应用模块就直接启动失败。生产部署仍应在启动日志中明确暴露数据库不可用。
+try:
+    use_mysql_source()
+except Exception as exc:  # noqa: BLE001
+    logger.warning("MySQL 数据源初始化失败，回退到内存数据源：%s", exc)
+
+
+_api_lock = asyncio.Lock()
+
+
+@app.middleware("http")
+async def persist_database(request, call_next):
+    """接口请求前后同步 MySQL。页面和静态文件不进出数据库。"""
+
+    if not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    source = get_data_source()
+    is_read = request.method in {"GET", "HEAD", "OPTIONS"}
+    async with _api_lock:
+        reload = getattr(source, "reload_stations_and_users", None)
+        if reload is not None:
+            try:
+                await asyncio.to_thread(reload)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("MySQL 请求前刷新失败，继续使用当前数据：%s", exc)
+        response = await call_next(request)
+        if not is_read and response.status_code < 500:
+            flush = getattr(source, "flush", None)
+            if flush is not None:
+                try:
+                    await asyncio.to_thread(flush)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("MySQL 请求后写回失败：%s", exc)
+        return response
 
 
 @app.on_event("startup")

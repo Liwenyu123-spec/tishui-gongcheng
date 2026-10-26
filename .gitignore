@@ -14,8 +14,11 @@ build/
 node_modules/
 frontend/dist/
 backend/data/rag_chroma_db/
+backend/data/rag_chroma_db.writer.lock
 backend/data/rag_chroma_test/
 backend/data/knowledge/
+backend/data/agent_run_history.json
+backend/data/agent_registry.json
 # 冒烟脚本的临时目录：正常在系统临时目录，环境变量异常时可能落到仓库内，禁止提交
 backend/.smoke-temp/
 smoke_knowledge_store_*/

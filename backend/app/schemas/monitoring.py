@@ -70,6 +70,17 @@ class TopologyResponse(BaseModel):
     edges: list[TopologyEdge]
 
 
+class DesignPoint(BaseModel):
+    """资料中的设计参数，不是当前测试遥测。"""
+
+    id: str
+    object_id: str
+    metric_code: str
+    unit: str = ""
+    source: str = ""
+    note: str = ""
+
+
 class TelemetryPoint(BaseModel):
     """单条遥测记录。"""
 

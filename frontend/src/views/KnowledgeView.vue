@@ -1,11 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { api } from '../api/http'
-import { deleteKnowledgeDocument, fetchKnowledgeHistory, updateKnowledgeStatus, type KnowledgeAuditEvent } from '../api/knowledge'
+import { compareKnowledgeDocument, deleteKnowledgeDocument, extractKnowledgeFile, fetchKnowledgeDocuments, fetchKnowledgeExcerpt, fetchKnowledgeHistory, importKnowledgeDocument, searchKnowledgeDocuments, updateKnowledgeStatus, validateTelemetryCsv, type KnowledgeAuditEvent } from '../api/knowledge'
 import { registerPageRefresh } from '../composables/pageRefresh'
 import { currentUserRole } from '../composables/currentUser'
-import KnowledgeStatusTag from '../components/KnowledgeStatusTag.vue'
+import KnowledgeCsvDialog from '../components/KnowledgeCsvDialog.vue'
+import KnowledgeCompareDialog from '../components/KnowledgeCompareDialog.vue'
+import KnowledgeExcerptDialog from '../components/KnowledgeExcerptDialog.vue'
+import KnowledgeHistoryDialog from '../components/KnowledgeHistoryDialog.vue'
+import KnowledgeImportDialog from '../components/KnowledgeImportDialog.vue'
+import KnowledgeFilterBar from '../components/KnowledgeFilterBar.vue'
+import KnowledgeHeaderActions from '../components/KnowledgeHeaderActions.vue'
+import KnowledgeDiagnosePanel from '../components/KnowledgeDiagnosePanel.vue'
+import KnowledgeAskPanel from '../components/KnowledgeAskPanel.vue'
+import KnowledgeSearchResults from '../components/KnowledgeSearchResults.vue'
+import KnowledgeDocumentTable from '../components/KnowledgeDocumentTable.vue'
+import { diagnoseRag, fetchRagStatus, askRag } from '../api/rag'
+import { backendSourceLabel, classifyRemoteList, remoteListLabel } from '../composables/dataSource'
 
 interface ApiKnowledgeDocument {
   id: string
@@ -134,12 +144,6 @@ const localDocuments: KnowledgeRow[] = [
 ]
 const statusNames: Record<string, string> = { valid: '现行', pending: '待审', revoked: '废止', archived: '已归档' }
 const statusCodes: Record<string, string> = { 现行: 'valid', 待审: 'pending', 废止: 'revoked', 已归档: 'archived' }
-const highlightExcerpt = (text: string, terms: string[] = []) => {
-  const escaped = text.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character] || character))
-  const usableTerms = terms.filter(term => term.trim()).map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  if (!usableTerms.length) return escaped
-  return escaped.replace(new RegExp(`(${usableTerms.join('|')})`, 'gi'), '<mark>$1</mark>')
-}
 const rows = ref<KnowledgeRow[]>(localDocuments.map(document => ({ ...document })))
 const query = ref('')
 const statusFilter = ref('')
@@ -166,7 +170,7 @@ const importForm = reactive({ filename: '', title: '', version: '1.0', category:
 const csvVisible = ref(false)
 const csvLoading = ref(false)
 const csvResult = ref<CsvImportResponse | null>(null)
-const csvForm = reactive({ filename: 'telemetry.csv', content: 'station_id,observed_at,metric,value,unit\npump-02,2026-10-16T10:00:00Z,flow,1080,m³/h' })
+const csvForm = reactive({ filename: 'telemetry.csv', content: 'station_id,observed_at,metric,value,unit\npump-02,2026-10-16T10:00:00Z,flow,1080,m3/h' })
 const statusUpdatingId = ref('')
 const compareVisible = ref(false)
 const compareLoading = ref(false)
@@ -221,16 +225,10 @@ const engineHealth = computed(() => {
 })
 
 // 结论代码决定颜色：ok 绿、门槛拦截琥珀、无候选和空库红。
-const reasonTag = (reason: string) => {
-  if (reason === 'ok') return 'tag-green'
-  if (reason === 'gate_score' || reason === 'gate_rerank' || reason === 'below_rerank') return 'tag-amber'
-  return 'tag-red'
-}
-
 const loadEngineStatus = async () => {
   if (!isAdmin.value) return
   try {
-    engineStatus.value = await api<EngineStatus>('/api/v1/knowledge/rag/status')
+    engineStatus.value = await fetchRagStatus<EngineStatus>()
     engineError.value = ''
   } catch (error) {
     engineStatus.value = null
@@ -246,10 +244,7 @@ const runDiagnose = async () => {
   }
   debugging.value = true
   try {
-    debugResult.value = await api<DiagnoseResult>('/api/v1/knowledge/rag/debug', {
-      method: 'POST',
-      body: JSON.stringify({ question, k: 5 }),
-    })
+    debugResult.value = await diagnoseRag<DiagnoseResult>({ question, k: 5 })
   } catch (error) {
     debugResult.value = null
     ElMessage.error(error instanceof Error ? error.message : '诊断接口暂不可用')
@@ -276,7 +271,7 @@ const formatDocument = (document: ApiKnowledgeDocument): KnowledgeRow => ({
   date: document.imported_at.slice(0, 10),
   contentLength: document.content_length,
   applicability: document.station_ids?.length ? document.station_ids.join('、') : '全局',
-  source: document.source === 'mock' ? '后端 Mock' : document.source,
+  source: backendSourceLabel(document.source),
 })
 
 const searchKnowledge = async () => {
@@ -290,7 +285,7 @@ const searchKnowledge = async () => {
   }
   loading.value = true
   try {
-    const result = await api<{ results: SearchHit[]; conflicts?: SearchConflict[] }>(`/api/v1/knowledge/search?q=${encodeURIComponent(keyword)}`)
+    const result = await searchKnowledgeDocuments<{ results: SearchHit[]; conflicts?: SearchConflict[] }>(keyword)
     searchHits.value = result.results
     searchConflicts.value = result.conflicts || []
     searchMessage.value = result.results.length ? `检索到 ${result.results.length} 条来源` : '没有命中现行资料或内置规程'
@@ -307,16 +302,13 @@ const searchKnowledge = async () => {
 const loadKnowledge = async () => {
   loading.value = true
   try {
-    const result = await api<ApiKnowledgeDocument[]>('/api/v1/knowledge')
-    if (result.length) {
-      rows.value = result.map(formatDocument)
-      sourceLabel.value = result[0].source === 'mock' ? '后端 Mock 数据' : result[0].source
-    } else {
-      sourceLabel.value = '接口暂无记录 · 本地示例'
-      ElMessage.info('知识库接口当前没有文档，页面暂显示本地示例')
-    }
+    const result = await fetchKnowledgeDocuments<ApiKnowledgeDocument>()
+    const kind = classifyRemoteList(result)
+    sourceLabel.value = remoteListLabel(kind, result[0]?.source)
+    if (kind === 'backend') rows.value = result.map(formatDocument)
+    else ElMessage.info('知识库接口当前没有文档，页面暂显示本地示例')
   } catch {
-    sourceLabel.value = '本地示例'
+    sourceLabel.value = remoteListLabel('failed')
     ElMessage.warning('知识库接口暂不可用，当前显示本地示例')
   } finally {
     loading.value = false
@@ -358,7 +350,7 @@ const askKnowledge = async () => {
   asking.value = true
   askTurns.value = [...askTurns.value, { role: '用户', text: question }]
   try {
-    const result = await api<{
+    const result = await askRag<{
       answer: string
       rewritten_query?: string
       session_id?: string
@@ -370,10 +362,7 @@ const askKnowledge = async () => {
       compression?: { chars_before?: number; chars_after?: number; reduced?: number }
       groundedness?: { grounded?: boolean; overlap?: number; status?: string; warnings?: string[] }
       retrieval_gate?: { passed?: boolean; min_score?: number; top_score?: number }
-    }>('/api/v1/knowledge/rag/ask', {
-      method: 'POST',
-      body: JSON.stringify({ question, k: 5, session_id: askSessionId.value || null }),
-    })
+    }>({ question, k: 5, session_id: askSessionId.value || null })
     if (result.session_id) {
       askSessionId.value = result.session_id
       localStorage.setItem('knowledge_ask_session', result.session_id)
@@ -425,18 +414,7 @@ const extractFromFile = async (event: Event) => {
   if (!file) return
   extracting.value = true
   try {
-    const body = new FormData()
-    body.append('file', file)
-    const token = localStorage.getItem('access_token')
-    const response = await fetch('/api/v1/knowledge/extract', {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      body,
-    })
-    const data = await response.json().catch(() => null)
-    if (!response.ok) {
-      throw new Error(data && typeof data.detail === 'string' ? data.detail : `解析失败（${response.status}）`)
-    }
+    const data = await extractKnowledgeFile<{ filename: string; title: string; content: string; content_length: number; parser: string }>(file)
     importForm.filename = data.filename
     if (!importForm.title) importForm.title = data.title
     importForm.content = data.content
@@ -455,9 +433,7 @@ const importDocument = async () => {
   }
   importing.value = true
   try {
-    const result = await api<ApiKnowledgeDocument>('/api/v1/knowledge/import', {
-      method: 'POST',
-      body: JSON.stringify({
+    const result = await importKnowledgeDocument<ApiKnowledgeDocument>({
         filename: importForm.filename,
         title: importForm.title,
         version: importForm.version,
@@ -466,10 +442,9 @@ const importDocument = async () => {
         station_ids: importForm.stationIds.split(/[,，\s]+/).map(item => item.trim()).filter(Boolean),
         effective_from: importForm.effectiveFrom ? new Date(importForm.effectiveFrom).toISOString() : null,
         effective_to: importForm.effectiveTo ? new Date(importForm.effectiveTo).toISOString() : null,
-      }),
     })
     rows.value.unshift(formatDocument(result))
-    sourceLabel.value = result.source === 'mock' ? '后端 Mock 数据' : result.source
+    sourceLabel.value = backendSourceLabel(result.source)
     importVisible.value = false
     ElMessage.success('资料导入成功')
   } catch {
@@ -478,6 +453,8 @@ const importDocument = async () => {
     importing.value = false
   }
 }
+
+const findRow = (id: string) => filteredRows.value.find(row => row.id) || rows.value.find(row => row.id)!
 
 const preview = (row: KnowledgeRow) => {
   ElMessage.info(`${row.title} · ${row.version} · 当前仅展示文档元数据`)
@@ -493,7 +470,7 @@ const compareVersion = async (row: KnowledgeRow) => {
   compareLoading.value = true
   compareResult.value = null
   try {
-    compareResult.value = await api(`/api/v1/knowledge/${encodeURIComponent(row.id)}/compare`)
+    compareResult.value = await compareKnowledgeDocument(row.id)
   } catch {
     ElMessage.error('版本对比失败，请稍后重试')
   } finally {
@@ -510,7 +487,7 @@ const viewExcerpt = async (source: SearchHit) => {
   excerptLoading.value = true
   excerptResult.value = null
   try {
-    excerptResult.value = await api(`/api/v1/knowledge/${encodeURIComponent(source.source_id)}/excerpt?chunk_index=${source.chunk_index}`)
+    excerptResult.value = await fetchKnowledgeExcerpt(source.source_id, source.chunk_index)
   } catch {
     ElMessage.error('原文片段读取失败，请稍后重试')
   } finally {
@@ -588,11 +565,7 @@ const validateCsv = async () => {
   }
   csvLoading.value = true
   try {
-    csvResult.value = await api<CsvImportResponse>('/api/v1/imports/telemetry-csv', {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/csv', 'X-Filename': csvForm.filename },
-      body: csvForm.content,
-    })
+    csvResult.value = await validateTelemetryCsv<CsvImportResponse>(csvForm.filename, csvForm.content)
     if (csvResult.value.success) ElMessage.success('CSV 校验通过')
     else ElMessage.warning('CSV 校验发现问题，请查看错误明细')
   } catch {
@@ -621,247 +594,38 @@ onMounted(() => {
       <h2>知识库与设备资料</h2>
       <p>检索现行规程、设备台账、应急预案和维修记录 · {{ sourceLabel }}</p>
     </div>
-    <div><el-button type="primary" plain @click="openImport">导入资料</el-button><el-button plain @click="csvVisible = true">校验遥测 CSV</el-button></div>
+    <KnowledgeHeaderActions @import="openImport" @csv="csvVisible = true" />
   </div>
 
-  <!-- 检索诊断仅管理员可见：响应含分片摘要和召回细节，属于内部排障信息。 -->
-  <div v-if="isAdmin" class="panel" style="margin-bottom:16px;padding:16px 18px">
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
-      <strong>检索诊断</strong>
-      <span :class="['tag', engineHealth.level === 'good' ? 'tag-green' : engineHealth.level === 'warn' ? 'tag-amber' : engineHealth.level === 'bad' ? 'tag-red' : '']">{{ engineHealth.text }}</span>
-      <span v-if="engineStatus" class="muted" style="font-size:12px">
-        引擎 {{ engineStatus.engine_mode || '未知' }} · 分片 {{ engineStatus.chunks ?? 0 }} ·
-        重排 {{ engineStatus.rerank || '未知' }} ·
-        预热 {{ engineStatus.warmup?.elapsed_seconds != null ? `${engineStatus.warmup.elapsed_seconds}s` : '未执行' }}
-      </span>
-      <el-button link type="primary" @click="loadEngineStatus">刷新状态</el-button>
-    </div>
-    <p v-if="engineError" class="muted">引擎状态读取失败：{{ engineError }}</p>
-    <div class="filterbar" style="padding:0">
-      <el-input
-        v-model="debugQuestion"
-        placeholder="输入一条问句，看它为什么命中或为什么被拦"
-        style="max-width:520px"
-        clearable
-        @keyup.enter="runDiagnose"
-      />
-      <el-button class="button-stable button-stable--sm" type="primary" :loading="debugging" @click="runDiagnose">诊断</el-button>
-    </div>
+  <KnowledgeDiagnosePanel v-if="isAdmin" v-model:question="debugQuestion" :engine-health="engineHealth" :engine-status="engineStatus" :engine-error="engineError" :debugging="debugging" :debug-result="debugResult" @refresh="loadEngineStatus" @diagnose="runDiagnose" />
 
-    <div v-if="debugResult" style="margin-top:14px">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <span :class="['tag', reasonTag(debugResult.reason)]">{{ debugResult.reason }}</span>
-        <strong>{{ debugResult.verdict }}</strong>
-        <span class="muted" style="font-size:12px">耗时 {{ debugResult.elapsed_ms }}ms</span>
-      </div>
-      <p class="muted" style="margin:6px 0">{{ debugResult.reason_text }}</p>
-
-      <div v-if="debugResult.gate" class="muted" style="font-size:12px">
-        门槛：分数 ≥ {{ debugResult.gate.min_score }}
-        <template v-if="debugResult.gate.min_rerank != null">、重排 ≥ {{ debugResult.gate.min_rerank }}</template>
-        ｜Top1 分数 {{ debugResult.gate.top_score }}、重排 {{ debugResult.gate.top_rerank ?? '未启用' }}
-        ｜{{ debugResult.gate.kept }}/{{ debugResult.gate.total }} 条可引用
-      </div>
-
-      <div v-if="debugResult.environment_notes.length" style="margin-top:8px">
-        <p v-for="note in debugResult.environment_notes" :key="note" class="muted" style="color:#f5c578">· {{ note }}</p>
-      </div>
-
-      <div v-if="debugResult.notes.length" style="margin-top:8px">
-        <p v-for="note in debugResult.notes" :key="note" class="muted">· {{ note }}</p>
-      </div>
-
-      <el-table v-if="debugResult.hits.length" :data="debugResult.hits" style="margin-top:12px" size="small">
-        <el-table-column label="结果" width="72">
-          <template #default="s">
-            <span :class="['tag', s.row.passed ? 'tag-green' : 'tag-red']">{{ s.row.passed ? '可引用' : '拦下' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="资料" min-width="180">
-          <template #default="s">
-            <div>{{ s.row.title }}</div>
-            <div class="muted" style="font-size:12px">{{ s.row.location }} · {{ s.row.category || '规程' }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column label="总分" width="70" prop="score" />
-        <el-table-column label="关键词" width="80">
-          <template #default="s">{{ s.row.components.lexical ?? '-' }}</template>
-        </el-table-column>
-        <el-table-column label="向量相似度" width="104">
-          <template #default="s">
-            {{ s.row.components.vector_similarity ?? '-' }}
-            <span class="muted" style="font-size:11px">+{{ s.row.components.vector_bonus ?? 0 }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="BM25" width="96">
-          <template #default="s">
-            {{ s.row.components.bm25_raw ?? '-' }}
-            <span class="muted" style="font-size:11px">+{{ s.row.components.bm25_bonus ?? 0 }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="重排概率" width="92">
-          <template #default="s">{{ s.row.rerank ?? '未启用' }}</template>
-        </el-table-column>
-        <el-table-column label="候选来源" width="90">
-          <template #default="s">{{ s.row.components.candidate_from || '-' }}</template>
-        </el-table-column>
-      </el-table>
-      <p v-else class="muted" style="margin-top:10px">没有候选片段，检索在这一步就没有拿到任何结果。</p>
-    </div>
-  </div>
-
-  <div class="panel" style="margin-bottom:16px;padding:16px 18px">
-    <p class="muted">规程说明：根据现行检索片段生成，不查询实时测点。缺泵站时可多轮补问。</p>
-    <div class="filterbar" style="padding:0">
-      <el-input
-        v-model="askQuestion"
-        :placeholder="askNeedsClarification ? '例如直接回复：二泵站' : (askTurns.length ? '可继续追问，例如：那电流呢' : '例如：流量下降后按规程先核查什么')"
-        style="max-width:520px"
-        clearable
-        @keyup.enter="askKnowledge"
-      />
-      <el-button class="button-stable button-stable--sm" type="primary" :loading="asking" @click="askKnowledge">{{ askNeedsClarification ? '继续' : '生成说明' }}</el-button>
-      <el-button class="button-stable button-stable--sm" plain :disabled="asking" @click="clearAskSession">新对话</el-button>
-    </div>
-    <div v-if="askTurns.length" style="margin-top:12px">
-      <p v-for="(turn, index) in askTurns" :key="`${turn.role}-${index}`" class="muted">{{ turn.role }}：{{ turn.text }}</p>
-    </div>
-    <div v-if="askAnswer && !askNeedsClarification" style="margin-top:12px">
-      <p v-if="askRewritten" class="muted">检索问法：{{ askRewritten }}</p>
-      <p v-if="askRetrievalGate" class="muted">{{ askRetrievalGate }}</p>
-      <p v-if="askCompression" class="muted">{{ askCompression }}</p>
-      <p v-if="askGroundedness" class="muted">{{ askGroundedness }}</p>
-      <p v-for="source in askSources" :key="source.source_id" class="muted">引用{{ source.rank ? ` ${source.rank}` : '' }}：{{ source.title }} · {{ source.location }}<template v-if="source.chunk_index !== null && source.chunk_index !== undefined"> · 分片 {{ source.chunk_index + 1 }}</template><template v-if="source.rerank !== null && source.rerank !== undefined"> · 重排 {{ source.rerank }}</template><el-button v-if="source.chunk_index !== null && source.chunk_index !== undefined" link type="primary" size="small" @click="viewExcerpt(source)">查看原文</el-button></p>
-    </div>
-    <div v-if="askNeedsClarification && (askRetrievalGate || askSources.length)" style="margin-top:8px">
-      <p v-if="askRetrievalGate" class="muted">{{ askRetrievalGate }}</p>
-      <p v-for="source in askSources" :key="`weak-${source.source_id}`" class="muted">弱相关：{{ source.title }} · 相关度 {{ source.score }}</p>
-    </div>
-  </div>
+  <KnowledgeAskPanel v-model:question="askQuestion" :asking="asking" :needs-clarification="askNeedsClarification" :turns="askTurns" :answer="askAnswer" :rewritten="askRewritten" :retrieval-gate="askRetrievalGate" :compression="askCompression" :groundedness="askGroundedness" :sources="askSources" @ask="askKnowledge" @clear="clearAskSession" @excerpt="viewExcerpt($event as SearchHit)" />
 
   <div class="panel">
-    <div class="filterbar" style="padding:16px 18px 0">
-      <el-input v-model="query" placeholder="搜索规程、设备或异常处理方法" style="max-width:430px" clearable />
-      <el-select v-model="statusFilter" placeholder="资料状态" clearable style="width:130px">
-        <el-option label="现行" value="现行" />
-        <el-option label="待审" value="待审" />
-        <el-option label="废止" value="废止" />
-        <el-option label="已归档" value="已归档" />
-      </el-select>
-      <el-button class="button-stable button-stable--sm" type="primary" :loading="loading" @click="searchKnowledge">检索</el-button>
-    </div>
-    <div v-if="searchMessage" style="padding:12px 18px 0">
-      <p class="muted">{{ searchMessage }}</p>
-      <div v-if="searchConflicts.length" class="panel" style="margin-top:8px;padding:12px 14px;border:1px solid #d97706">
-        <strong style="color:#d97706">发现引用冲突，请人工核对</strong>
-        <p v-for="(conflict, index) in searchConflicts" :key="`${conflict.source_ids.join('-')}-${index}`" class="muted">{{ conflict.reason }} 来源：{{ conflict.source_ids.join('、') }}</p>
-      </div>
-      <div v-for="hit in searchHits" :key="`${hit.source_id}-${hit.chunk_index}`" class="panel" style="margin-top:8px;padding:12px 14px">
-        <strong>{{ hit.title }}</strong>
-        <p class="muted">{{ hit.category || '规程' }} · {{ hit.filename || '无文件名' }} · {{ hit.version }} · 定位：{{ hit.location }} · {{ hit.station_ids.length ? hit.station_ids.join('、') : '全局' }} · 相关度 {{ hit.score }}<template v-if="hit.rerank !== null && hit.rerank !== undefined"> · 重排 {{ hit.rerank }}</template> · {{ hit.confidence === 'low' ? '低置信' : '可引用' }}</p>
-        <p>{{ hit.detail }}</p>
-        <p v-if="hit.context_excerpt" class="muted">上下文：<span v-html="highlightExcerpt(hit.context_excerpt, hit.matched_terms)"></span></p>
-        <p v-if="hit.matched_terms?.length" class="muted">命中词：{{ hit.matched_terms.join('、') }}</p>
-      </div>
-    </div>
-    <div class="table-wrap">
-      <el-table :data="filteredRows">
-        <el-table-column prop="title" label="资料名称" min-width="190" />
-        <el-table-column prop="filename" label="文件名" min-width="190" />
-        <el-table-column prop="category" label="类别" width="110" />
-        <el-table-column prop="version" label="版本" width="90" />
-        <el-table-column prop="applicability" label="适用范围" width="120" />
-        <el-table-column prop="contentLength" label="正文长度" width="100" />
-        <el-table-column prop="date" label="导入时间" width="120" />
-        <el-table-column prop="status" label="状态" width="90">
-          <template #default="s"><KnowledgeStatusTag :status="s.row.status" /></template>
-        </el-table-column>
-        <el-table-column label="操作" width="290">
-          <template #default="s">
-              <el-button link type="primary" @click="preview(s.row)">预览引用</el-button>
-              <el-button v-if="!s.row.id.startsWith('local-')" link type="info" @click="viewHistory(s.row)">审核历史</el-button>
-            <el-button v-if="!s.row.id.startsWith('local-')" link type="primary" @click="compareVersion(s.row)">版本对比</el-button>
-            <template v-if="isAdmin && !s.row.id.startsWith('local-')">
-              <el-button link type="success" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '现行')">现行</el-button>
-              <el-button link type="warning" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '待审')">待审</el-button>
-              <el-button link type="danger" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '废止')">废止</el-button>
-              <el-button link type="info" :disabled="statusUpdatingId === s.row.id" @click="updateStatus(s.row, '已归档')">归档</el-button>
-              <el-button link type="danger" :disabled="statusUpdatingId === s.row.id" @click="removeDocument(s.row)">删除</el-button>
-            </template>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
+    <KnowledgeFilterBar v-model:query="query" v-model:status="statusFilter" :loading="loading" @search="searchKnowledge" />
+    <KnowledgeSearchResults :message="searchMessage" :conflicts="searchConflicts" :hits="searchHits" />
+    <KnowledgeDocumentTable :rows="filteredRows" :admin="isAdmin" :updating-id="statusUpdatingId" @preview="preview(findRow($event))" @history="viewHistory(findRow($event))" @compare="compareVersion(findRow($event))" @status="(id, status) => updateStatus(findRow(id), status)" @remove="removeDocument(findRow($event))" />
   </div>
 
-  <el-dialog v-model="compareVisible" :title="`版本对比：${compareTitle}`" width="720px">
-    <div v-loading="compareLoading">
-      <p v-if="compareResult && !compareResult.compared_version" class="muted">没有找到同标题的其他版本。</p>
-      <template v-else-if="compareResult">
-        <p class="muted">当前版本 {{ compareResult.version }} · 对比版本 {{ compareResult.compared_version }} · {{ compareResult.changed ? '正文有变化' : '正文无变化' }}</p>
-        <pre v-if="compareResult.diff.length" class="diff-preview">{{ compareResult.diff.join('\n') }}</pre>
-      </template>
-    </div>
-    <template #footer><el-button @click="compareVisible = false">关闭</el-button></template>
-  </el-dialog>
+  <KnowledgeCompareDialog
+    v-model="compareVisible"
+    :title="compareTitle"
+    :loading="compareLoading"
+    :result="compareResult"
+  />
 
-  <el-dialog v-model="excerptVisible" title="引用原文片段" width="720px">
-    <div v-loading="excerptLoading">
-      <template v-if="excerptResult">
-        <p class="muted">{{ excerptResult.title }} · {{ excerptResult.version }} · {{ excerptResult.location }} · 分片 {{ excerptResult.chunk_index + 1 }}</p>
-        <pre class="diff-preview">{{ excerptResult.excerpt }}</pre>
-      </template>
-    </div>
-    <template #footer><el-button @click="excerptVisible = false">关闭</el-button></template>
-  </el-dialog>
+  <KnowledgeExcerptDialog v-model="excerptVisible" :loading="excerptLoading" :result="excerptResult" />
 
-  <el-dialog v-model="importVisible" title="导入知识资料" width="520px">
-    <el-form label-width="90px">
-      <el-form-item label="上传文件">
-        <input type="file" accept=".txt,.md,.html,.htm,.pdf,.docx" :disabled="extracting" @change="extractFromFile" />
-        <p class="muted">支持 PDF、Word、Markdown 和文本；抽出正文后仍需确认导入，新资料默认为待审。</p>
-      </el-form-item>
-      <el-form-item label="文件名"><el-input v-model="importForm.filename" placeholder="例如 pump-02-operation.md" /></el-form-item>
-      <el-form-item label="资料名称"><el-input v-model="importForm.title" placeholder="例如二泵站运行规程" /></el-form-item>
-      <el-form-item label="版本"><el-input v-model="importForm.version" /></el-form-item>
-      <el-form-item label="类别">
-        <el-select v-model="importForm.category" style="width:100%">
-          <el-option label="规程" value="规程" />
-          <el-option label="手册" value="手册" />
-          <el-option label="台账" value="台账" />
-          <el-option label="维修记录" value="维修记录" />
-          <el-option label="应急预案" value="应急预案" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="适用站点"><el-input v-model="importForm.stationIds" placeholder="例如 pump-02；留空表示全局" /></el-form-item>
-      <el-form-item label="生效时间"><el-input v-model="importForm.effectiveFrom" type="datetime-local" /></el-form-item>
-      <el-form-item label="失效时间"><el-input v-model="importForm.effectiveTo" type="datetime-local" /></el-form-item>
-      <el-form-item label="正文内容"><el-input v-model="importForm.content" type="textarea" :rows="6" placeholder="输入需要保存的资料正文" /></el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button @click="importVisible = false">取消</el-button>
-      <el-button class="button-stable button-stable--md" type="primary" :loading="importing" @click="importDocument">确认导入</el-button>
-    </template>
-  </el-dialog>
+  <KnowledgeImportDialog v-model="importVisible" v-model:form="importForm" :extracting="extracting" :importing="importing" @extract="extractFromFile" @submit="importDocument" />
 
-  <el-dialog v-model="csvVisible" title="校验遥测 CSV" width="620px">
-    <el-form label-width="90px">
-      <el-form-item label="文件名"><el-input v-model="csvForm.filename" /></el-form-item>
-      <el-form-item label="CSV 内容"><el-input v-model="csvForm.content" type="textarea" :rows="8" /></el-form-item>
-    </el-form>
-    <div v-if="csvResult" class="muted" style="margin-top:10px">总行数 {{ csvResult.total_rows }} · 通过 {{ csvResult.accepted_rows }} · 拒绝 {{ csvResult.rejected_rows }}<div v-for="error in csvResult.errors" :key="error">{{ error }}</div></div>
-    <template #footer><el-button @click="csvVisible = false">关闭</el-button><el-button class="button-stable button-stable--md" type="primary" :loading="csvLoading" @click="validateCsv">开始校验</el-button></template>
-  </el-dialog>
+  <KnowledgeCsvDialog
+    v-model="csvVisible"
+    v-model:filename="csvForm.filename"
+    v-model:content="csvForm.content"
+    :loading="csvLoading"
+    :result="csvResult"
+    @validate="validateCsv"
+  />
 
-  <el-dialog v-model="historyVisible" :title="historyTitle" width="720px">
-    <el-skeleton v-if="historyLoading" :rows="4" animated />
-    <el-empty v-else-if="!historyRows.length" description="暂无审核历史" />
-    <el-timeline v-else>
-      <el-timeline-item v-for="(item, index) in historyRows" :key="`${item.created_at || 'event'}-${index}`" :timestamp="item.created_at || '时间未知'">
-        <strong>{{ item.action || '生命周期变更' }}</strong>
-        <p class="muted">{{ item.detail || '无详细说明' }}<template v-if="item.actor"> · 操作人：{{ item.actor }}</template></p>
-      </el-timeline-item>
-    </el-timeline>
-    <template #footer><el-button @click="historyVisible = false">关闭</el-button></template>
-  </el-dialog>
+  <KnowledgeHistoryDialog v-model="historyVisible" :title="historyTitle" :loading="historyLoading" :rows="historyRows" />
 </template>

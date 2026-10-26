@@ -17,10 +17,17 @@ from ..services.agent_limits import limits_summary
 from ..services.agent import build_answer
 from ..services.agent_session import prepare_request, session_summary
 from ..services.agent_registry import list_registered_agents, register_agent
-from ..services.agent_runs import cancel_run, clear_task_snapshot, list_runs, pause_run, resume_run, run_status, save_task_snapshot, task_snapshot
+from ..services.agent_skills import list_skills
+from ..services.agent_runs import cancel_run, clear_task_snapshot, decide_run, list_runs, pause_run, resume_run, run_status, save_task_snapshot, task_snapshot
 
 
 router = APIRouter(prefix="/api/v1", tags=["Agent"])
+
+
+@router.get("/agent/skills")
+def get_agent_skills(user: dict = Depends(require_roles("admin", "operator", "reviewer"))) -> list[dict]:
+    """查看只读技能目录：场景、权限、允许的工具和是否需要人工确认。"""
+    return list_skills()
 
 
 @router.get("/agent/registry")
@@ -59,6 +66,16 @@ def pause_agent_run(run_id: str, user: dict = Depends(require_roles("admin", "op
     return {"run_id": run_id, "status": "paused"}
 
 
+@router.post("/agent/runs/{run_id}/decision")
+def decide_agent_run(run_id: str, payload: dict, user: dict = Depends(require_roles("admin", "operator", "reviewer"))) -> dict:
+    """人工审批：approve 允许随后恢复，reject 停止并删除快照。"""
+    try:
+        return decide_run(run_id, str(payload.get("decision") or ""), str(payload.get("reason") or ""))
+    except ValueError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/agent/runs/{run_id}/resume")
 def resume_agent_run(run_id: str, user: dict = Depends(require_roles("admin", "operator", "reviewer"))) -> dict:
     """恢复人工审批暂停的运行。"""
@@ -69,6 +86,10 @@ def resume_agent_run(run_id: str, user: dict = Depends(require_roles("admin", "o
 @router.post("/agent/runs/{run_id}/resume-stream")
 def resume_agent_stream(run_id: str, user: dict = Depends(require_roles("admin", "operator", "reviewer"))) -> StreamingResponse:
     """恢复一个已保存的审批任务，并重新返回同一问题的 SSE 流。"""
+    current = run_status(run_id)
+    if current.get("status") == "rejected":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=409, detail="该运行已被驳回，不能恢复")
     snapshot = task_snapshot(run_id)
     if snapshot is None:
         from fastapi import HTTPException
@@ -144,6 +165,15 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
         operator=user.get("username", "mock-admin"),
     )
 
+    from ..services.agent_session import remember_outcome
+    remember_outcome(
+        prepared_payload.session_id or "",
+        user,
+        conclusion=answer.answer,
+        station_id=prepared_payload.station_id,
+        pending_items=list(answer.pending_items or []),
+    )
+
     def events() -> Iterator[str]:
         # start 事件让前端可以显示“正在分析”，并标注模型参与阶段。
         llm_route_used = answer.source in {"llm-router+mock", "llm-router+answer+mock"}
@@ -181,6 +211,8 @@ def chat_stream(payload: AgentChatRequest, user: dict = Depends(require_roles("a
                 "primary_agent": plan.primary_agent,
                 "collaborating_agents": list(plan.collaborating_agents),
                 "allowed_tools": [tool.name for tool in plan.tools],
+                "skill_id": plan.skill_id,
+                "skill_summary": plan.skill_summary,
                 # 把本进程当前限额随 start 事件返回，便于前端和接口调试确认实际配置。
                 "limits": limits_summary(),
             },

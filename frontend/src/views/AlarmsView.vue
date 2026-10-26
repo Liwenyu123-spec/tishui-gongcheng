@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { api } from '../api/http'
+import { acknowledgeAlarm, fetchAlarmDetail, fetchAlarms } from '../api/alarms'
 import { registerPageRefresh } from '../composables/pageRefresh'
 import { alarmRows } from '../mock'
+import { remoteListMessage } from '../composables/dataSource'
 
 interface ApiAlarm {
   id: string
@@ -56,7 +56,11 @@ const unconfirmedCount = computed(() => rows.value.filter(row => row.status === 
 const loadAlarms = async () => {
   loading.value = true
   try {
-    const result = await api<ApiAlarm[]>('/api/v1/alarms')
+    const result = await fetchAlarms<ApiAlarm>()
+    if (!result.length) {
+      ElMessage.info(remoteListMessage('empty', '告警'))
+      return
+    }
     rows.value = result.map(row => ({
       id: row.id,
       level: levelName[row.level] || row.level,
@@ -70,7 +74,7 @@ const loadAlarms = async () => {
       relation: row.relation || '',
     }))
   } catch {
-    ElMessage.warning('告警接口暂不可用，当前显示本地 Mock 数据')
+    ElMessage.warning(remoteListMessage('failed', '告警接口'))
   } finally {
     loading.value = false
   }
@@ -79,6 +83,8 @@ const loadAlarms = async () => {
 registerPageRefresh(loadAlarms)
 onMounted(loadAlarms)
 
+const ackFromRow = (row: unknown) => ack(row as AlarmRow)
+const openDetailFromRow = (row: unknown) => openDetail(row as AlarmRow)
 const ack = async (row: AlarmRow) => {
   if (row.id.startsWith('mock-')) {
     ElMessage.warning('本地示例告警无法写入后端，请确认接口列表已加载')
@@ -86,7 +92,7 @@ const ack = async (row: AlarmRow) => {
   }
   acknowledgingId.value = row.id
   try {
-    const result = await api<ApiAlarm>(`/api/v1/alarms/${row.id}/ack`, { method: 'POST' })
+    const result = await acknowledgeAlarm<ApiAlarm>(row.id)
     row.status = result.status === 'confirmed' ? '已确认' : '未确认'
     ElMessage.success('告警已确认')
   } catch {
@@ -100,7 +106,7 @@ const openDetail = async (row: AlarmRow) => {
   detailVisible.value = true
   detailLoading.value = true
   try {
-    selectedDetail.value = await api<ApiAlarmDetail>(`/api/v1/alarms/${row.id}`)
+    selectedDetail.value = await fetchAlarmDetail<ApiAlarmDetail>(row.id)
   } catch {
     selectedDetail.value = null
     ElMessage.warning('告警详情接口暂不可用')
@@ -114,7 +120,7 @@ const resetFilters = () => { stationFilter.value = ''; levelFilter.value = '' }
 
 <template>
   <div class="page-title"><div><h2>告警中心</h2><p>集中查看、筛选、确认告警；确认不等于控制设备</p></div><span class="tag tag-red">{{ loading ? '正在加载' : `未确认 ${unconfirmedCount}` }}</span></div>
-  <div class="panel"><div class="panel-head"><div class="filterbar"><el-select v-model="stationFilter" placeholder="全部站点" size="small" clearable style="width:130px"><el-option v-for="station in stationOptions" :key="station" :label="station" :value="station"/></el-select><el-select v-model="levelFilter" placeholder="全部级别" size="small" clearable style="width:120px"><el-option label="高" value="高"/><el-option label="中" value="中"/><el-option label="低" value="低"/></el-select><el-button size="small" @click="resetFilters">重置</el-button></div></div><div class="table-wrap"><el-table :data="filteredRows" stripe><el-table-column prop="level" label="级别" width="70"><template #default="s"><span :class="['tag',s.row.level==='高'?'tag-red':s.row.level==='中'?'tag-amber':'tag-gray']">{{s.row.level}}</span></template></el-table-column><el-table-column prop="station" label="站点"/><el-table-column prop="metric" label="指标"/><el-table-column prop="value" label="当前值"/><el-table-column prop="threshold" label="阈值"/><el-table-column prop="time" label="最近时间"/><el-table-column prop="status" label="处理状态"><template #default="s"><span :class="['tag',s.row.status==='已确认'?'tag-green':'tag-red']">{{s.row.status}}</span></template></el-table-column><el-table-column label="操作" width="180"><template #default="s"><el-button link type="primary" @click="openDetail(s.row)">查看详情</el-button><el-button class="button-stable button-stable--xs" link type="primary" :disabled="s.row.status==='已确认'" :loading="acknowledgingId===s.row.id" @click="ack(s.row)">确认</el-button></template></el-table-column></el-table></div></div>
+  <div class="panel"><div class="panel-head"><div class="filterbar"><el-select v-model="stationFilter" placeholder="全部站点" size="small" clearable style="width:130px"><el-option v-for="station in stationOptions" :key="station" :label="station" :value="station"/></el-select><el-select v-model="levelFilter" placeholder="全部级别" size="small" clearable style="width:120px"><el-option label="高" value="高"/><el-option label="中" value="中"/><el-option label="低" value="低"/></el-select><el-button size="small" @click="resetFilters">重置</el-button></div></div><div class="table-wrap"><el-table :data="filteredRows" stripe><el-table-column prop="level" label="级别" width="70"><template #default="s"><span :class="['tag',s.row.level==='高'?'tag-red':s.row.level==='中'?'tag-amber':'tag-gray']">{{s.row.level}}</span></template></el-table-column><el-table-column prop="station" label="站点"/><el-table-column prop="metric" label="指标"/><el-table-column prop="value" label="当前值"/><el-table-column prop="threshold" label="阈值"/><el-table-column prop="time" label="最近时间"/><el-table-column prop="status" label="处理状态"><template #default="s"><span :class="['tag',s.row.status==='已确认'?'tag-green':'tag-red']">{{s.row.status}}</span></template></el-table-column><el-table-column label="操作" width="180"><template #default="s"><el-button link type="primary" @click="openDetailFromRow(s.row)">查看详情</el-button><el-button class="button-stable button-stable--xs" link type="primary" :disabled="s.row.status==='已确认'" :loading="acknowledgingId===s.row.id" @click="ackFromRow(s.row)">确认</el-button></template></el-table-column></el-table></div></div>
   <el-dialog v-model="detailVisible" title="告警详情" width="560px">
     <div v-loading="detailLoading" v-if="selectedDetail">
       <p><strong>{{ selectedDetail.station_name }}</strong> · {{ metricName[selectedDetail.metric] || selectedDetail.metric }}</p>

@@ -22,11 +22,16 @@ data_source = get_data_source()
 
 _CONTROL_WORDS = ("启动", "停止", "开阀", "关阀", "切换阀", "修改压力", "下发", "控制指令")
 _STATION_ALIASES = {
+    "集泉二站": "jq-02",
+    "集泉一站": "jq-01",
     "集泉": "jq-01",
+    "上庄倒虹": "sz-invert",
+    "上庄": "sz-invert",
     "一泵站": "pump-01",
     "二泵站": "pump-02",
     "三泵站": "pump-03",
     "四泵站": "pump-04",
+    "平定侧入口": "pingding-inlet",
     "平定入口": "pingding-inlet",
 }
 
@@ -49,11 +54,20 @@ def _time_range_label(message: str, default: str = "当前 Mock 样本") -> str:
     return default
 
 
-def _freshness(observed_at: datetime | None, now: datetime) -> str:
-    """按一小时阈值标记观测数据新鲜度，避免 Mock 旧样本伪装成实时数据。"""
+def _freshness(observed_at: datetime | str | None, now: datetime) -> str:
+    """按一小时阈值标记观测数据新鲜度，避免旧样本伪装成实时数据。"""
 
-    if observed_at is None:
+    if observed_at is None or observed_at == "":
         return "unknown"
+    if isinstance(observed_at, str):
+        try:
+            observed_at = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+        except ValueError:
+            return "unknown"
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     return "stale" if now - observed_at > timedelta(hours=1) else "fresh"
 
 
@@ -68,7 +82,7 @@ def _find_station(message: str, requested_station_id: str | None, user: dict) ->
 
     station_id = requested_station_id
     if station_id is None:
-        for alias, candidate in _STATION_ALIASES.items():
+        for alias, candidate in sorted(_STATION_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
             if alias in message:
                 station_id = candidate
                 break
@@ -292,12 +306,14 @@ def _answer_for_status(
             generated_at=now,
         )
     value, unit = sample.value, sample.unit
-    title = f"{station['name']} {metric_label(metric)} Mock 测点"
+    virtual = sample.source == "virtual-reading"
+    origin = "刷新写入的测试数据" if virtual else "联调样本"
+    title = f"{station['name']} {metric_label(metric)} {origin}"
     return AgentAnswer(
         request_id=request_id,
         intent="status",
         answer=f"{station['name']}当前{metric_label(metric)}为 {value} {unit}，站点状态为 {station['status']}。",
-        facts=[f"站点：{station['name']}（{station['id']}）", f"{metric_label(metric)}：{value} {unit}", f"数据来源：Mock 遥测"],
+        facts=[f"站点：{station['name']}（{station['id']}）", f"{metric_label(metric)}：{value} {unit}", f"数据来源：{origin}"],
         recommendations=["当前结果仅用于联调，请在接入真实测点后复核。"],
         citations=[AgentCitation(source_type="telemetry", source_id=station["id"], title=title, detail=f"观测时间：{sample.observed_at.isoformat()}；质量：{sample.quality}")],
         confidence="medium",
@@ -351,15 +367,16 @@ def _answer_for_trend(
         f"{item['station_name']}：波动范围 {item['variation']} {item['unit']}，最新值 {item['latest']} {item['unit']}"
         for item in comparisons[:3]
     ]
+    series_name = "刷新写入的测试数据" if top.get("source") == "virtual-reading" else "联调样本"
     return AgentAnswer(
         request_id=request_id,
         intent="trend",
-        answer=f"按当前 Mock 时间序列的最大值减最小值计算，{top['station_name']}的{metric_label(metric)}波动最大，范围为 {top['variation']} {top['unit']}。",
+        answer=f"按当前{series_name}的最大值减最小值计算，{top['station_name']}的{metric_label(metric)}波动最大，范围为 {top['variation']} {top['unit']}。",
         facts=[f"分析指标：{metric_label(metric)}", f"分析站点数：{len(comparisons)}", *comparison_facts] + context_facts,
         recommendations=[f"建议优先核对{station['name']}的原始测点、采样完整性和泵组运行记录。"] + context_recommendations,
         citations=telemetry_citations + context_citations,
         confidence="medium",
-        pending_items=["确认趋势时间窗内的原始测点、单位和采样完整性", "当前结果仍是 Mock 样本，不能替代现场趋势判断"],
+        pending_items=["确认趋势时间窗内的原始测点、单位和采样完整性", "当前为测试数据，不是现场测点" if series_name == "刷新写入的测试数据" else "当前结果仍是联调样本，不能替代现场判断"],
         time_range=_time_range_label(message),
         observed_at=top["observed_at"],
         freshness=_freshness(top["observed_at"], now),
@@ -451,7 +468,7 @@ def _answer_for_knowledge(
     visible_station_ids = {station["id"] for station in _visible_stations(user)}
     station_id = requested_station_id
     if station_id is None:
-        for alias, candidate in _STATION_ALIASES.items():
+        for alias, candidate in sorted(_STATION_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
             if alias in message:
                 station_id = candidate
                 break

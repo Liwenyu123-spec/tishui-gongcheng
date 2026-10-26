@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import * as echarts from 'echarts'
-import type { ECharts } from 'echarts'
-import { api } from '../api/http'
+import type { ECharts } from 'echarts/core'
+import { createStationTrendChart } from '../charts/stationTrend'
 import { readCurrentUser } from '../composables/currentUser'
-import { fetchContacts, fetchStation, fetchStations, fetchTelemetry, reportIncident, sendHeartbeat as sendStationHeartbeat } from '../api/stations'
+import { fetchContacts, fetchDesignPoints, fetchStation, fetchStations, fetchTelemetry, reportIncident, sendHeartbeat as sendStationHeartbeat } from '../api/stations'
 import { registerPageRefresh } from '../composables/pageRefresh'
 import { telemetry, stations as mockStations } from '../mock'
 
@@ -63,10 +61,12 @@ interface StationContact {
 
 const fallbackStationIds: Record<string, string> = {
   集泉一站: 'jq-01',
+  集泉二站: 'jq-02',
   一泵站: 'pump-01',
   二泵站: 'pump-02',
   三泵站: 'pump-03',
   四泵站: 'pump-04',
+  上庄倒虹: 'sz-invert',
   平定侧入口: 'pingding-inlet',
 }
 const stationOptions = ref([...mockStations])
@@ -78,7 +78,8 @@ const points = ref<TelemetryPoint[]>([])
 const loading = ref(false)
 const detailLoading = ref(false)
 const chartInstance = ref<ECharts>()
-const sourceLabel = ref('后端 Mock 数据')
+const sourceLabel = ref('数据库测试数据')
+const designPoints = ref<{ id: string; object_id: string; metric_code: string; unit: string; note: string }[]>([])
 const heartbeatStatus = ref('未检测')
 const heartbeatAt = ref('')
 const heartbeatLoading = ref(false)
@@ -104,18 +105,21 @@ const pressure = computed(() => points.value.find(point => point.metric === 'pre
 const level = computed(() => points.value.find(point => point.metric === 'level')?.value ?? 3.68)
 
 const renderChart = (items: TelemetryPoint[]) => {
-  const flowPoints = items.filter(point => point.metric === 'flow').reverse()
-  const pressurePoints = items.filter(point => point.metric === 'pressure').reverse()
   const times = [...new Set(items.map(point => point.observed_at))].sort()
+  const valueAt = (metric: string, time: string) => items.find(point => point.metric === metric && point.observed_at === time)?.value ?? null
   chartInstance.value?.setOption({
     backgroundColor: 'transparent',
     tooltip: { trigger: 'axis' },
     legend: { textStyle: { color: '#8da5b3' } },
     xAxis: { type: 'category', data: times.map(time => time.slice(11, 16)), axisLabel: { color: '#6f8b9b' } },
-    yAxis: { axisLabel: { color: '#6f8b9b' }, splitLine: { lineStyle: { color: '#183444' } } },
+    yAxis: [
+      { axisLabel: { color: '#6f8b9b' }, splitLine: { lineStyle: { color: '#183444' } } },
+      { axisLabel: { color: '#8fd4e8' }, splitLine: { show: false } },
+    ],
     series: [
-      { name: '流量 m³/h', type: 'line', smooth: true, data: flowPoints.map(point => point.value), lineStyle: { color: '#5be0ca' }, areaStyle: { color: 'rgba(91,224,202,.12)' } },
-      { name: '压力 MPa', type: 'line', smooth: true, data: pressurePoints.map(point => point.value * 1200), lineStyle: { color: '#efb866' } },
+      { name: '流量 m3/h', type: 'line', smooth: true, data: times.map(time => valueAt('flow', time)), lineStyle: { color: '#5be0ca' }, areaStyle: { color: 'rgba(91,224,202,.12)' } },
+      { name: '压力 MPa', type: 'line', smooth: true, data: times.map(time => { const value = valueAt('pressure', time); return value == null ? null : value * 1200 }), lineStyle: { color: '#efb866' } },
+      { name: '水位 m', type: 'line', smooth: true, yAxisIndex: 1, data: times.map(time => valueAt('level', time)), lineStyle: { color: '#49c6e8', width: 2 } },
     ],
   })
 }
@@ -149,17 +153,31 @@ const loadTelemetry = async () => {
   loading.value = true
   try {
     points.value = await fetchTelemetry<TelemetryPoint>(selectedStationId.value)
-    sourceLabel.value = '后端 Mock 数据'
+    sourceLabel.value = '数据库测试数据'
   } catch {
     points.value = telemetry.flatMap(item => [
-      { observed_at: `2026-10-15T${item.time}:00Z`, metric: 'flow', value: item.flow, unit: 'm³/h', source: 'mock', quality: 'good', is_stale: false },
+      { observed_at: `2026-10-15T${item.time}:00Z`, metric: 'flow', value: item.flow, unit: 'm3/h', source: 'mock', quality: 'good', is_stale: false },
       { observed_at: `2026-10-15T${item.time}:00Z`, metric: 'pressure', value: item.pressure, unit: 'MPa', source: 'mock', quality: 'good', is_stale: false },
     ])
-    sourceLabel.value = '本地 Mock 数据'
-    ElMessage.warning('遥测接口暂不可用，当前显示本地 Mock 数据')
+    sourceLabel.value = '本地示例'
+    ElMessage.warning('遥测接口暂不可用，当前显示本地示例')
   } finally {
     loading.value = false
     renderChart(points.value)
+  }
+}
+
+const visibleDesignPoints = computed(() => {
+  const name = station.value
+  const matched = designPoints.value.filter(item => item.note.includes(name) || item.object_id === selectedStationId.value)
+  return matched.length ? matched : designPoints.value
+})
+
+const loadDesignPoints = async () => {
+  try {
+    designPoints.value = await fetchDesignPoints()
+  } catch {
+    designPoints.value = []
   }
 }
 
@@ -168,6 +186,7 @@ const loadSelectedStation = () => {
   loadTelemetry()
   sendHeartbeat(false)
   loadStationContacts()
+  loadDesignPoints()
 }
 
 const loadStationContacts = async () => {
@@ -244,7 +263,7 @@ registerPageRefresh(async () => {
 })
 
 onMounted(async () => {
-  chartInstance.value = echarts.init(chart.value!)
+  chartInstance.value = createStationTrendChart(chart.value!)
   await loadStations()
   loadSelectedStation()
   heartbeatTimer = setInterval(() => sendHeartbeat(false), 30000)
@@ -258,8 +277,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page-title"><div><h2>站点趋势</h2><p>查看泵站压力、流量、水位与能耗趋势，缺数区间显式标注 · {{ sourceLabel }}</p></div><div class="station-actions"><el-tag class="station-status" :type="heartbeatStatus === '在线' ? 'success' : heartbeatStatus === '不可用' ? 'danger' : 'info'" effect="dark">通讯：{{ heartbeatStatus }}</el-tag><span class="station-heartbeat-time">最近心跳：{{ heartbeatAt || '尚未收到' }}</span><el-button class="station-contact-button" type="warning" plain @click="openIncidentReport">联系调度</el-button><el-button class="station-heartbeat-button" size="small" :loading="heartbeatLoading" @click="sendHeartbeat(true)">发送心跳</el-button><el-select v-model="station" class="station-select"><el-option v-for="s in stationOptions" :key="s" :label="s" :value="s"/></el-select></div></div>
-  <div class="grid grid-4"><div class="panel metric"><span class="metric-label">当前流量</span><div class="metric-value">{{flow.toLocaleString()}} <small>m³/h</small></div><span class="status-line status-ok"><i/>{{ loading ? '正在加载' : `数据正常 · ${sourceLabel}` }}</span></div><div class="panel metric"><span class="metric-label">出水压力</span><div class="metric-value">{{pressure.toFixed(2)}} <small>MPa</small></div><span class="metric-foot">后端遥测值</span></div><div class="panel metric"><span class="metric-label">水池水位</span><div class="metric-value">{{level.toFixed(2)}} <small>m</small></div><span class="metric-foot">后端遥测值</span></div><div class="panel metric"><span class="metric-label">站点状态</span><div class="metric-value">{{ detailLoading ? '加载中' : stationDetail?.status || '—' }}</div><span class="metric-foot">最近心跳：{{ heartbeatAt || '尚未收到' }}</span></div></div>
-  <div class="panel" style="margin-top:18px"><div class="panel-head"><h3>24 小时运行趋势</h3><span>流量 / 压力 · {{sourceLabel}}</span></div><div ref="chart" class="chart"></div></div>
+  <div class="grid grid-4"><div class="panel metric"><span class="metric-label">当前流量</span><div class="metric-value">{{flow.toLocaleString(undefined, { maximumFractionDigits: 0 })}} <small>m3/h</small></div><span class="status-line status-ok"><i/>{{ loading ? '正在加载' : `数据正常 · ${sourceLabel}` }}</span></div><div class="panel metric"><span class="metric-label">出水压力</span><div class="metric-value">{{pressure.toFixed(2)}} <small>MPa</small></div><span class="metric-foot">每次刷新写入的测试数据</span></div><div class="panel metric"><span class="metric-label">水池水位</span><div class="metric-value">{{level.toFixed(2)}} <small>m</small></div><span class="metric-foot">测试水位，不是设计扬程</span></div><div class="panel metric"><span class="metric-label">站点状态</span><div class="metric-value">{{ detailLoading ? '加载中' : stationDetail?.status || '—' }}</div><span class="metric-foot">最近心跳：{{ heartbeatAt || '尚未收到' }}</span></div></div>
+  <div class="panel" style="margin-top:18px"><div class="panel-head"><h3>24 小时运行趋势</h3><span>流量 / 压力 / 水位 · {{sourceLabel}}</span></div><div ref="chart" class="chart"></div></div>
+  <div class="panel" style="margin-top:18px"><div class="panel-head"><h3>设计参数</h3><span>来自资料，不是当前测试遥测</span></div><p v-if="!visibleDesignPoints.length" class="muted">暂无设计参数</p><p v-for="item in visibleDesignPoints" :key="item.id" class="muted" style="margin:6px 0">{{ item.note || `${item.object_id} ${item.metric_code} ${item.unit}` }}</p></div>
   <el-dialog v-model="reportVisible" title="联系调度 · 一键上报问题" width="520px">
     <p class="muted" style="margin-top:0">当前站点：{{ station }}（{{ selectedStationId }}）。事件会进入平台内通知队列。</p>
     <p class="muted" style="margin:0 0 12px">调度联系人：{{ contactLoading ? '加载中…' : primaryContactSummary }} · 备用联系人：{{ contactLoading ? '加载中…' : backupContactSummary }} · 渠道：平台内通知</p>
@@ -268,7 +288,7 @@ onBeforeUnmount(() => {
       <el-form-item label="严重等级"><el-select v-model="reportForm.level" style="width:100%"><el-option label="一般" value="low" /><el-option label="重要" value="medium" /><el-option label="严重" value="high" /><el-option label="紧急" value="critical" /></el-select></el-form-item>
       <el-form-item label="问题描述"><el-input v-model="reportForm.description" type="textarea" :rows="4" placeholder="请描述现场现象、发生时间和已采取的措施" /></el-form-item>
       <el-form-item label="事件指纹"><el-input v-model="reportForm.deduplicationKey" placeholder="可选；相同故障重复上报时用于合并通知" /></el-form-item>
-      <el-form-item label="通知测试"><el-checkbox v-model="reportForm.simulateDeliveryFailure">模拟通知发送失败（Mock）</el-checkbox></el-form-item>
+      <el-form-item label="通知测试"><el-checkbox v-model="reportForm.simulateDeliveryFailure">模拟通知发送失败</el-checkbox></el-form-item>
     </el-form>
     <template #footer><el-button @click="reportVisible = false">取消</el-button><el-button class="button-stable button-stable--md" type="warning" :loading="reportSubmitting" @click="submitIncidentReport">提交上报</el-button></template>
   </el-dialog>

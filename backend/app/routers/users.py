@@ -53,6 +53,9 @@ def create_user(payload: UserCreateRequest, _: dict = Depends(require_roles("adm
         # 保存创建请求中的站点范围，后续接口会据此执行站点权限过滤。
         "station_ids": payload.station_ids,
     }
+    commit = getattr(data_source, "commit_user", None)
+    if commit is not None and not commit(payload.username, data_source.users.users()[payload.username], creating=True):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="用户未能写入数据库")
     # 新用户创建后立即返回公开字段；密码只留在内存内部记录中。
     # 用户新增属于管理操作，需要写入审计记录。
     record_audit("create", "user", user_id, f"创建用户 {payload.username}")
@@ -72,6 +75,33 @@ def update_user(user_id: str, payload: UserPatchRequest, _: dict = Depends(requi
     # 空 PATCH 不会改变用户记录，但仍按一次合法管理请求继续返回当前用户。
     # 只更新请求实际提供的字段，并保留用户密码等未开放字段。
     data_source.users.users()[username].update(updates)
+    commit = getattr(data_source, "commit_user", None)
+    if commit is not None and not commit(username, data_source.users.users()[username], creating=False):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户已被其他人更新，请刷新后再修改")
     # 用户权限或展示信息变化需要留下审计记录，便于追踪管理操作。
     record_audit("update", "user", user_id, f"修改用户 {username}")
     return _public_user(username)
+
+
+@router.delete("/users/{user_id}")
+def delete_user(user_id: str, current: dict = Depends(require_roles("admin"))) -> dict:
+    """删除一个账号。不能删除当前登录账号，也不能删掉最后一个管理员。"""
+
+    username = next((name for name, user in data_source.users.users().items() if user["id"] == user_id), None)
+    if username is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    if username == current.get("username"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="不能删除当前登录的账号")
+    target = data_source.users.users()[username]
+    admins = [user for user in data_source.users.users().values() if user.get("role") == "admin"]
+    if target.get("role") == "admin" and len(admins) <= 1:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="至少保留一个管理员")
+    remove = getattr(data_source, "delete_user", None)
+    if remove is not None:
+        remove(username)
+    data_source.users.users().pop(username, None)
+    expired = [token for token, owner in data_source.users.tokens().items() if owner == username]
+    for token in expired:
+        data_source.users.tokens().pop(token, None)
+    record_audit("delete", "user", user_id, f"删除用户 {username}")
+    return {"deleted": user_id}

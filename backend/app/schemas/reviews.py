@@ -37,6 +37,8 @@ class Review(BaseModel):
     recommendation: str
     # 审核意见。
     comment: str
+    # 行版本。提交时必须与数据库一致，避免旧副本覆盖新结论。
+    row_version: int = 0
     # 当前审核状态。
     status: str
     # 审核记录创建时间。

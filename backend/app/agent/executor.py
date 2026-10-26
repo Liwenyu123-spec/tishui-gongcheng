@@ -23,11 +23,16 @@ data_source = get_data_source()
 
 # 与 Agent 服务保持一致的中文别名，避免工具层只能识别站点编号。
 _STATION_ALIASES = {
+    "集泉二站": "jq-02",
+    "集泉一站": "jq-01",
     "集泉": "jq-01",
+    "上庄倒虹": "sz-invert",
+    "上庄": "sz-invert",
     "一泵站": "pump-01",
     "二泵站": "pump-02",
     "三泵站": "pump-03",
     "四泵站": "pump-04",
+    "平定侧入口": "pingding-inlet",
     "平定入口": "pingding-inlet",
 }
 
@@ -123,7 +128,7 @@ def _station_by_id(station_id: str, visible: set[str]) -> dict | None:
 def _station_from_message(message: str, visible: set[str]) -> dict | None:
     """从问题文本中的中文别名解析可见站点。"""
 
-    for alias, station_id in _STATION_ALIASES.items():
+    for alias, station_id in sorted(_STATION_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
         if alias in message:
             station = _station_by_id(station_id, visible)
             if station is not None:

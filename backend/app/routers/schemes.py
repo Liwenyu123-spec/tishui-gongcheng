@@ -31,7 +31,7 @@ def compare_schemes(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    return SchemeCompareResponse(
+    response = SchemeCompareResponse(
         comparison_id=f"compare-{uuid4().hex[:10]}",
         results=comparison["results"],
         recommendation=comparison["recommendation"],
@@ -40,3 +40,8 @@ def compare_schemes(
         constraints=comparison["constraints"],
         assumptions=comparison["assumptions"],
     )
+    from ..data.repositories import get_data_source
+    record_scheme = getattr(get_data_source(), "record_scheme", None)
+    if record_scheme is not None:
+        record_scheme(response.comparison_id, response.model_dump(mode="json"))
+    return response

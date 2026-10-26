@@ -2,9 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Menu as MenuIcon, Bell, UserFilled, Refresh } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
 import { currentUser as currentUserApi, logout as logoutApi } from './api/auth'
-import { api } from './api/http'
+import { acknowledgeNotification as acknowledgeNotificationApi, escalateNotification as escalateNotificationApi, fetchNotifications, retryNotification as retryNotificationApi } from './api/notifications'
+import { resolveIncident } from './api/incidents'
 import { runPageRefresh, usePageRefresh } from './composables/pageRefresh'
 import { readCurrentUser } from './composables/currentUser'
 
@@ -45,6 +45,8 @@ interface NavigationGroup {
 
 const route = useRoute()
 const router = useRouter()
+const routerReady = ref(false)
+router.isReady().finally(() => { routerReady.value = true })
 const groups: NavigationGroup[] = [
   { label: '运行监控', items: [{ path:'/dashboard', label:'运行总览' }, { path:'/topology', label:'工程拓扑', roles:['admin', 'operator'] }, { path:'/station', label:'站点趋势', roles:['admin', 'operator'] }, { path:'/alarms', label:'告警中心', roles:['admin', 'operator'] }, { path:'/areas', label:'片区供需', roles:['admin', 'operator'] }] },
   { label: '智能调度', items: [{ path:'/agent', label:'Agent 助手', permission:'ask' }, { path:'/schemes', label:'方案比较', permission:'submit_scheme' }, { path:'/reviews', label:'建议审核', permission:'review' }] },
@@ -58,6 +60,7 @@ const readSessionUser = (): SessionUser => {
 }
 
 const sessionUser = ref<SessionUser>(readSessionUser())
+const loggedIn = ref(Boolean(localStorage.getItem('access_token')))
 const canAccessNavigation = (item: NavigationItem) => {
   if (sessionUser.value.role === 'admin') return true
   if (item.role && item.role !== sessionUser.value.role) return false
@@ -66,10 +69,13 @@ const canAccessNavigation = (item: NavigationItem) => {
 }
 
 // 只显示当前账号有权进入的导航项；接口权限仍由后端再次强制校验。
-const visibleGroups = computed(() => groups
-  .map(group => ({ ...group, items: group.items.filter(canAccessNavigation) }))
-  .filter(group => group.items.length))
-const title = computed(() => visibleGroups.value.flatMap(g => g.items).find(i => i.path === route.path)?.label || '运行总览')
+const visibleGroups = computed(() => {
+  if (!loggedIn.value) return []
+  return groups
+    .map(group => ({ ...group, items: group.items.filter(canAccessNavigation) }))
+    .filter(group => group.items.length)
+})
+const title = computed(() => visibleGroups.value.flatMap(g => g.items).find(i => i.path === route.path)?.label || '调度工作台')
 const userName = ref(sessionUser.value.display_name)
 const signingOut = ref(false)
 const notificationVisible = ref(false)
@@ -98,21 +104,27 @@ const incidentStatusName: Record<string, string> = {
 
 const formatNotificationTime = (value: string) => value ? value.slice(0, 16).replace('T', ' ') : '—'
 
+const refreshSession = () => {
+  loggedIn.value = Boolean(localStorage.getItem('access_token'))
+  sessionUser.value = readSessionUser()
+  userName.value = sessionUser.value.display_name
+}
+
 const syncCurrentUser = async () => {
-  if (!localStorage.getItem('access_token')) {
-    sessionUser.value = readSessionUser()
-    userName.value = sessionUser.value.display_name
-    return
-  }
+  refreshSession()
+  if (!loggedIn.value) return
   try {
     const user = await currentUserApi()
     sessionUser.value = { display_name: user.display_name, role: user.role, permissions: user.permissions }
     userName.value = user.display_name
+    loggedIn.value = true
     localStorage.setItem('current_user', JSON.stringify(user))
   } catch {
     localStorage.removeItem('access_token')
     localStorage.removeItem('current_user')
-    sessionUser.value = { display_name: '值班调度员', role: '', permissions: [] }
+    loggedIn.value = false
+    sessionUser.value = readSessionUser()
+    userName.value = sessionUser.value.display_name
   }
 }
 
@@ -125,6 +137,9 @@ const signOut = async () => {
   } finally {
     localStorage.removeItem('access_token')
     localStorage.removeItem('current_user')
+    loggedIn.value = false
+    sessionUser.value = readSessionUser()
+    userName.value = sessionUser.value.display_name
     signingOut.value = false
     await router.push('/login')
   }
@@ -138,7 +153,7 @@ const loadNotifications = async () => {
   }
   notificationLoading.value = true
   try {
-    notifications.value = await api<NotificationItem[]>('/api/v1/notifications')
+    notifications.value = await fetchNotifications<NotificationItem>()
   } catch (error) {
     // 只有已登录状态才提示通知接口异常，未登录时保持安静等待下一次登录。
     const detail = error instanceof Error ? error.message : '未知错误'
@@ -156,7 +171,7 @@ const openNotifications = async () => {
 const acknowledgeNotification = async (item: NotificationItem) => {
   notificationActionKey.value = `ack:${item.id}`
   try {
-    const updated = await api<NotificationItem>(`/api/v1/notifications/${encodeURIComponent(item.id)}/ack`, { method: 'POST' })
+    const updated = await acknowledgeNotificationApi<NotificationItem>(item.id)
     item.status = updated.status
     item.acknowledged_at = updated.acknowledged_at
     ElMessage.success('通知已确认')
@@ -170,7 +185,7 @@ const acknowledgeNotification = async (item: NotificationItem) => {
 const escalateNotification = async (item: NotificationItem) => {
   notificationActionKey.value = `escalate:${item.id}`
   try {
-    await api<NotificationItem>(`/api/v1/notifications/${encodeURIComponent(item.id)}/escalate`, { method: 'POST' })
+    await escalateNotificationApi<NotificationItem>(item.id)
     await loadNotifications()
     ElMessage.success('通知已升级给备用调度联系人')
   } catch {
@@ -183,7 +198,7 @@ const escalateNotification = async (item: NotificationItem) => {
 const retryNotification = async (item: NotificationItem) => {
   notificationActionKey.value = `retry:${item.id}`
   try {
-    const updated = await api<NotificationItem>(`/api/v1/notifications/${encodeURIComponent(item.id)}/retry`, { method: 'POST' })
+    const updated = await retryNotificationApi<NotificationItem>(item.id)
     Object.assign(item, updated)
     ElMessage.success('失败通知已重新发送')
   } catch {
@@ -196,7 +211,7 @@ const retryNotification = async (item: NotificationItem) => {
 const resolveNotificationIncident = async (item: NotificationItem) => {
   notificationActionKey.value = `resolve:${item.id}`
   try {
-    await api(`/api/v1/incidents/${encodeURIComponent(item.incident_id)}/resolve`, { method: 'POST' })
+    await resolveIncident(item.incident_id)
     await loadNotifications()
     ElMessage.success('事件已关闭')
   } catch {
@@ -232,15 +247,17 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell">
+  <div v-if="!routerReady" class="boot-screen"></div>
+  <router-view v-else-if="route.path === '/login'" />
+  <div v-else class="app-shell">
     <aside class="sidebar">
       <div class="brand"><div class="brand-mark">水</div><div><strong>提水工程</strong><span>供水调度平台</span></div></div>
-      <div class="env-tag">测试环境 · Mock 数据</div>
+      <div class="env-tag">测试环境 · 数据库</div>
       <nav><div v-for="group in visibleGroups" :key="group.label" class="nav-group"><p>{{ group.label }}</p><button v-for="item in group.items" :key="item.path" :class="['nav-item', {active: route.path === item.path}]" @click="router.push(item.path)"><MenuIcon/><span>{{ item.label }}</span></button></div></nav>
       <div class="sidebar-foot"><span class="dot online"></span>只读分析模式</div>
     </aside>
     <main class="main-area">
-      <header class="topbar"><div><span class="eyebrow">WATER DISPATCH / OPERATIONS</span><h1>{{ title }}</h1></div><div class="top-actions"><span class="connection"><i></i> Mock 数据已连接</span><el-button class="refresh-page-button" text :icon="Refresh" :loading="pageRefreshing" :disabled="!pageRefreshHandler" @click="refreshCurrentPage">刷新本页</el-button><el-button text :icon="Bell" @click="openNotifications">通知 <b class="alarm-count">{{ unreadNotificationCount }}</b></el-button><el-avatar :size="32" :icon="UserFilled"/><span class="user-name">{{ userName }}</span><el-button class="button-stable button-stable--xs" text :loading="signingOut" @click="signOut">退出</el-button></div></header>
+      <header class="topbar"><div><span class="eyebrow">WATER DISPATCH / OPERATIONS</span><h1>{{ title }}</h1></div><div class="top-actions"><span class="connection"><i></i> 数据库已连接</span><el-button class="refresh-page-button" text :icon="Refresh" :loading="pageRefreshing" :disabled="!pageRefreshHandler" @click="refreshCurrentPage">刷新本页</el-button><el-button text :icon="Bell" @click="openNotifications">通知 <b class="alarm-count">{{ unreadNotificationCount }}</b></el-button><el-avatar :size="32" :icon="UserFilled"/><span class="user-name">{{ userName }}</span><el-button class="button-stable button-stable--xs" text :loading="signingOut" @click="signOut">退出</el-button></div></header>
       <section class="page-body"><router-view/></section>
     </main>
   </div>

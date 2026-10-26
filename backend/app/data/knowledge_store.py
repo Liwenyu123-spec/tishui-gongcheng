@@ -165,6 +165,15 @@ def _write_all(documents: dict[str, KnowledgeDocument]) -> None:
     payload.sort(key=lambda item: (str(item.get("imported_at") or ""), str(item.get("id") or "")))
     _atomic_write(documents_path(), json.dumps(payload, ensure_ascii=False, indent=2))
     _LAST_SAVED_AT = datetime.now(timezone.utc)
+    try:
+        from .repositories import get_data_source
+        mirror = getattr(get_data_source(), "mirror_knowledge", None)
+        if mirror is not None:
+            for item in payload:
+                mirror(str(item.get("id")), item)
+    except Exception:
+        # 知识正文仍以本地文件为准，数据库只保存一份可查看的文档信息。
+        pass
 
 
 def save_document(document: KnowledgeDocument, content: str) -> None:

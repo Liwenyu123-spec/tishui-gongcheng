@@ -1,11 +1,21 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { api } from '../api/http'
-import { createWorkOrderDraft, fetchAgentRunStatus, fetchAgentStations, fetchWorkOrders, submitAgentReview, updateWorkOrder, updateWorkOrderStatus as updateWorkOrderStatusApi } from '../api/agent'
+import { cancelAgentRun, createWorkOrderDraft, decideAgentRun, fetchAgentRunStatus, fetchAgentStations, fetchWorkOrders, openAgentResumeStream, openAgentStream, submitAgentReview, updateWorkOrder, updateWorkOrderStatus as updateWorkOrderStatusApi } from '../api/agent'
+import { fetchKnowledgeExcerpt } from '../api/knowledge'
 import { currentUserRole as readCurrentUserRole, readCurrentUser } from '../composables/currentUser'
 import { registerPageRefresh } from '../composables/pageRefresh'
-import WorkflowStatusTag from '../components/WorkflowStatusTag.vue'
+import AgentCitationDialog from '../components/AgentCitationDialog.vue'
+import WorkOrderAssignmentDialog from '../components/WorkOrderAssignmentDialog.vue'
+import AgentMessageList from '../components/AgentMessageList.vue'
+import AgentStationSelector from '../components/AgentStationSelector.vue'
+import AgentToolbar from '../components/AgentToolbar.vue'
+import AgentExampleQuestions from '../components/AgentExampleQuestions.vue'
+import AgentPromptComposer from '../components/AgentPromptComposer.vue'
+import AgentWorkOrderList from '../components/AgentWorkOrderList.vue'
+import AgentWorkOrderDraft from '../components/AgentWorkOrderDraft.vue'
+import AgentReviewActions from '../components/AgentReviewActions.vue'
+import AgentWorkOrderActions from '../components/AgentWorkOrderActions.vue'
+import AgentWorkspace from '../components/AgentWorkspace.vue'
 
 interface WorkOrderDraft {
   id: string
@@ -99,7 +109,7 @@ const messages = ref<AgentMessage[]>([
   {
     id: 'welcome',
     role: 'ai',
-    text: '您好，我是调度辅助 Agent。当前使用 Mock 数据和只读工具；如已启用模型，将由模型辅助理解问题，但不会直接访问现场或执行控制。请描述您要查询的运行问题。',
+    text: '您好，我是调度辅助 Agent。当前使用数据库中的测试遥测和只读工具；如已启用模型，将由模型辅助理解问题，但不会直接访问现场或执行控制。请描述您要查询的运行问题。',
     evidence: '当前模式：规则工具 + 可选大模型路由/答案整理 · 不生成现场控制指令',
   },
 ])
@@ -119,7 +129,7 @@ const viewCitationExcerpt = async (citation: AgentCitation) => {
   citationExcerptLoading.value = true
   citationExcerpt.value = null
   try {
-    citationExcerpt.value = await api(`/api/v1/knowledge/${encodeURIComponent(citation.source_id)}/excerpt?chunk_index=${citation.chunk_index}`)
+    citationExcerpt.value = await fetchKnowledgeExcerpt(citation.source_id, citation.chunk_index)
   } catch {
     ElMessage.error('原文片段读取失败，请稍后重试')
   } finally {
@@ -130,6 +140,10 @@ const agentLoading = ref(false)
 const agentRequestState = ref<AgentRequestState>('idle')
 const agentStatusText = ref('可以开始提问')
 const agentCancelRequested = ref(false)
+const requireApproval = ref(false)
+const activeSkill = ref('')
+const decisionReason = ref('')
+const decisionLoading = ref(false)
 let agentAbortController: AbortController | null = null
 const reviewId = ref('')
 // 保存最近一次完整的 Agent 答案，工单草稿会从其中读取结构化诊断建议。
@@ -176,7 +190,7 @@ const resetConversation = () => {
   messages.value = [{
     id: 'welcome',
     role: 'ai',
-    text: '您好，我是调度辅助 Agent。当前使用 Mock 数据和只读工具；如已启用模型，将由模型辅助理解问题，但不会直接访问现场或执行控制。请描述您要查询的运行问题。',
+    text: '您好，我是调度辅助 Agent。当前使用数据库中的测试遥测和只读工具；如已启用模型，将由模型辅助理解问题，但不会直接访问现场或执行控制。请描述您要查询的运行问题。',
     evidence: '当前模式：规则工具 + 可选大模型路由/答案整理 · 不生成现场控制指令',
   }]
   latestAgentAnswer.value = null
@@ -250,6 +264,7 @@ const ask = async (q = input.value) => {
         execution_mode?: string
         session_id?: string | null
         workflow_status?: string
+        skill_summary?: string
       }
       updateAgentSession(start.session_id)
       aiMessage.modelMode = start.mode || 'rule-mock'
@@ -257,8 +272,9 @@ const ask = async (q = input.value) => {
       aiMessage.runId = start.run_id || undefined
       aiMessage.workflowStatus = start.workflow_status || 'running'
       aiMessage.limits = start.limits
-      aiMessage.text = '已定位问题，正在整理事实和引用依据…'
-      agentStatusText.value = '已连接，正在执行只读分析…'
+      activeSkill.value = start.skill_summary || ''
+      aiMessage.text = start.workflow_status === 'paused' ? '等待人工审批后继续。' : '已定位问题，正在整理事实和引用依据…'
+      agentStatusText.value = start.workflow_status === 'paused' ? '已暂停，等待通过或驳回' : '已连接，正在执行只读分析…'
       return
     }
     if (eventName === 'agent') {
@@ -349,7 +365,7 @@ const ask = async (q = input.value) => {
       ...(answer.limitations || []).map(item => `限制：${item}`),
       `置信度：${confidenceNames[answer.confidence || 'medium'] || answer.confidence || '中'}`,
       ...(answer.pending_items || []).map(item => `待确认项：${item}`),
-      `时间范围：${answer.time_range || '当前 Mock 样本'}`,
+      `时间范围：${answer.time_range || '当前测试数据'}`,
       ...(answer.observed_at ? [`数据观测时间：${formatLocalDateTime(answer.observed_at)}`] : []),
       `数据新鲜度：${freshnessNames[answer.freshness || 'unknown'] || answer.freshness || '未知'}`,
       `来源：${answer.source} · 意图：${answer.intent}`,
@@ -368,16 +384,12 @@ const ask = async (q = input.value) => {
   }
 
   try {
-    const response = await fetch('/api/v1/chat/stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        message: question,
-        station_id: selectedStationId.value || null,
-        session_id: agentSessionId.value,
-      }),
-      signal: agentAbortController.signal,
-    })
+    const response = await openAgentStream({
+      message: question,
+      station_id: selectedStationId.value || null,
+      session_id: agentSessionId.value,
+      require_approval: requireApproval.value,
+    }, agentAbortController.signal)
     if (!response.ok) {
       const payload = await response.json().catch(() => null)
       throw new Error(payload && typeof payload.detail === 'string' ? payload.detail : `请求失败（${response.status}）`)
@@ -429,6 +441,54 @@ const ask = async (q = input.value) => {
 }
 
 // 同时通知后端并中止当前 SSE，请求在下一个 Agent 节点边界停止。
+const pausedRunId = computed(() => [...messages.value].reverse().find(item => item.workflowStatus === 'paused' && item.runId)?.runId || '')
+
+const submitDecision = async (decision: 'approve' | 'reject') => {
+  if (!pausedRunId.value) return
+  decisionLoading.value = true
+  try {
+    await decideAgentRun(pausedRunId.value, decision, decisionReason.value.trim())
+    const target = messages.value.find(item => item.runId === pausedRunId.value)
+    if (decision === 'reject') {
+      if (target) {
+        target.workflowStatus = 'rejected'
+        target.text = '本次分析已驳回，未继续执行。'
+        target.pending = false
+      }
+      agentStatusText.value = '已驳回'
+      ElMessage.success('已驳回，该运行不能再恢复')
+      return
+    }
+    const response = await openAgentResumeStream(pausedRunId.value)
+    if (!response.ok || !response.body) throw new Error('恢复分析失败')
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { value, done } = await reader.read()
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+      const events = buffer.split('\n\n')
+      buffer = done ? '' : (events.pop() || '')
+      for (const rawEvent of events.filter(Boolean)) {
+        const data = rawEvent.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n')
+        if (!data || !rawEvent.includes('event: result') || !target) continue
+        const answer = JSON.parse(data) as AgentAnswer
+        latestAgentAnswer.value = answer
+        target.text = answer.answer
+        target.pending = false
+        target.workflowStatus = 'completed'
+      }
+      if (done) break
+    }
+    agentStatusText.value = '审批已通过，分析已继续'
+    ElMessage.success('已通过并继续分析')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '审批提交失败')
+  } finally {
+    decisionLoading.value = false
+  }
+}
+
 const cancelAgent = () => {
   if (!agentAbortController || !agentLoading.value) return
   agentCancelRequested.value = true
@@ -436,7 +496,7 @@ const cancelAgent = () => {
   agentStatusText.value = '正在停止当前分析…'
   const active = messages.value.find(item => item.pending && item.runId)
   if (active?.runId) {
-    void fetch(`/api/v1/agent/runs/${encodeURIComponent(active.runId)}/cancel`, { method: 'POST' })
+    void cancelAgentRun(active.runId)
   }
   agentAbortController.abort()
 }
@@ -574,105 +634,41 @@ const formatLocalDateTime = (value: string) => {
     <span class="tag tag-green">只读分析模式</span>
   </div>
 
-  <div class="agent-layout">
-    <div class="panel">
+  <AgentWorkspace>
+    <template #conversation>
       <div style="padding:14px 18px;border-bottom:1px solid #1c3a4c">
         <el-tag size="small" type="success">协调 Agent</el-tag>
         <span class="muted" style="font-size:13px;margin-left:10px">8 个专业 Agent 可协作</span>
       </div>
-      <div v-for="m in messages" :key="m.id" :class="['message',m.role==='user'?'user':'ai']">
-        <b>{{m.role==='user'?'你':'Agent'}}</b>
-        <div>{{m.text}}</div>
-        <div v-if="m.role==='ai' && m.steps?.length" class="analysis-steps">
-          <span class="analysis-steps__title">分析步骤</span>
-          <span v-for="(step, index) in m.steps" :key="`${m.id}-step-${index}`" class="analysis-step">
-            {{ index + 1 }}. {{ step }}
-          </span>
-        </div>
-        <div v-if="m.role==='ai' && m.evidence" class="evidence" style="white-space:pre-line">{{m.evidence}}</div>
-        <div v-if="m.role==='ai' && m === messages[messages.length - 1] && latestAgentAnswer?.citations.some(c => c.source_type === 'knowledge' && c.chunk_index !== null && c.chunk_index !== undefined)" class="evidence">
-          <el-button v-for="citation in latestAgentAnswer.citations.filter(c => c.source_type === 'knowledge' && c.chunk_index !== null && c.chunk_index !== undefined)" :key="citation.source_id" link type="primary" size="small" @click="viewCitationExcerpt(citation)">查看 {{ citation.title }} 原文</el-button>
-        </div>
+      <p v-if="activeSkill" class="agent-status-strip">技能：{{ activeSkill }}</p>
+      <p v-if="latestAgentAnswer?.pending_items?.length" class="agent-status-strip">待确认：{{ latestAgentAnswer.pending_items.join('；') }}</p>
+      <div v-if="pausedRunId" class="agent-decision">
+        <input v-model="decisionReason" placeholder="审批说明，驳回时建议填写原因" />
+        <el-button size="small" type="success" :loading="decisionLoading" @click="submitDecision('approve')">通过并继续</el-button>
+        <el-button size="small" type="danger" plain :loading="decisionLoading" @click="submitDecision('reject')">驳回</el-button>
       </div>
-      <div class="agent-toolbar">
-        <span :class="['agent-status', `agent-status--${agentRequestState}`]">
-          <i></i>{{ agentStatusText }}
-        </span>
-        <WorkflowStatusTag v-if="currentWorkflowStatus" :status="currentWorkflowStatus" />
-        <el-button class="button-stable button-stable--md" size="small" plain :disabled="agentLoading" @click="resetConversation">新建会话</el-button>
-      </div>
-      <div style="padding:12px 18px 0;display:flex;gap:8px;align-items:center">
-        <span class="muted" style="font-size:13px;white-space:nowrap">分析站点</span>
-        <el-select v-model="selectedStationId" clearable filterable placeholder="按问题内容识别" style="width:210px">
-          <el-option v-for="station in stations" :key="station.id" :label="`${station.name} · ${station.status}`" :value="station.id" />
-        </el-select>
-      </div>
-      <div style="padding:12px 18px;display:flex;gap:8px">
-        <el-input v-model="input" :disabled="agentLoading" placeholder="例如：过去 2 小时哪个泵站压力波动最大？" @keyup.enter="ask()" />
-        <el-button type="primary" :loading="agentLoading" :disabled="agentLoading" @click="ask()">发送</el-button>
-        <el-button v-if="agentLoading" class="button-stable button-stable--md" type="warning" plain :loading="agentRequestState === 'cancelling'" :disabled="agentRequestState === 'cancelling'" @click="cancelAgent">停止分析</el-button>
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head"><h3>示例问题</h3></div>
-      <div class="table-wrap">
-        <el-button v-for="q in ['现在四泵站出水流量是多少？','过去 2 小时哪个泵站压力波动最大？','二泵站流量下降后先核查什么？']" :key="q" style="width:100%;margin-bottom:9px;text-align:left" @click="ask(q)">{{q}}</el-button>
-        <div class="warning" style="margin-top:8px">控制边界：涉及启动/停止泵、切阀或压力设定的请求将被拒绝，不生成控制命令。</div>
-        <template v-if="canCreateWorkOrder">
-          <el-button class="button-stable button-stable--block" type="primary" plain :loading="workOrderLoading" style="width:100%;margin-top:12px" @click="createWorkOrder">生成核查工单草稿</el-button>
-          <p class="muted work-order-hint">当前按钮使用最近一次诊断建议填充工单。</p>
-        </template>
-        <template v-if="canTransferToReview">
-          <el-button class="button-stable button-stable--block" type="warning" plain :loading="reviewLoading" style="width:100%;margin-top:10px" @click="transferToReview">提交人工复核</el-button>
-          <p class="muted work-order-hint">只创建审核待办，不执行现场控制。</p>
-          <p v-if="reviewId" class="muted work-order-hint">审核记录：{{ reviewId }}</p>
-        </template>
-        <div v-if="workOrder" class="panel" style="margin-top:14px;padding:12px">
-          <div class="panel-head"><h3>工单草稿</h3><span>{{ workOrderStatusNames[workOrder.status] || workOrder.status }} · {{ workOrder.source === 'mock' ? '后端 Mock' : workOrder.source }}</span></div>
-          <p class="muted">{{ workOrder.title }} · {{ formatTime(workOrder.created_at) }}</p>
-          <p>{{ workOrder.issue }}</p>
-          <p>建议动作：{{ workOrder.suggested_action }}</p>
-        </div>
-        <div class="panel" style="margin-top:14px;padding:12px">
-          <div class="panel-head"><h3>工单列表</h3><el-button class="button-stable button-stable--xs" link :loading="workOrderListLoading" @click="loadWorkOrders">刷新</el-button></div>
-          <div v-if="!workOrders.length" class="empty">暂无工单</div>
-          <div v-for="order in workOrders" :key="order.id" class="work-order-row">
-            <div><strong>{{ order.title }}</strong><p class="muted">{{ order.station_id || '通用任务' }} · {{ workOrderStatusNames[order.status] || order.status }} · {{ order.priority }} · {{ order.owner || '未分派' }}</p></div>
-            <div class="work-order-actions">
-              <el-button v-if="!['completed', 'cancelled'].includes(order.status)" size="small" plain @click="openAssignmentDialog(order)">处理信息</el-button>
-              <el-button v-if="order.status === 'draft'" class="button-stable button-stable--sm" size="small" :loading="workOrderStatusLoading === order.id" @click="updateWorkOrderStatus(order, 'assigned')">分派</el-button>
-              <el-button v-if="order.status === 'assigned'" class="button-stable button-stable--md" size="small" type="primary" :loading="workOrderStatusLoading === order.id" @click="updateWorkOrderStatus(order, 'in_progress')">开始处理</el-button>
-              <el-button v-if="order.status === 'in_progress'" class="button-stable button-stable--md" size="small" type="success" :loading="workOrderStatusLoading === order.id" @click="updateWorkOrderStatus(order, 'completed')">标记完成</el-button>
-              <el-button v-if="['draft', 'assigned', 'in_progress'].includes(order.status)" class="button-stable button-stable--sm" size="small" text type="danger" :loading="workOrderStatusLoading === order.id" @click="updateWorkOrderStatus(order, 'cancelled')">取消</el-button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <el-dialog v-model="citationExcerptVisible" title="Agent 引用原文片段" width="720px">
-    <div v-loading="citationExcerptLoading">
-      <template v-if="citationExcerpt">
-        <p class="muted">{{ citationExcerpt.title }} · {{ citationExcerpt.version }} · {{ citationExcerpt.location }} · 分片 {{ citationExcerpt.chunk_index + 1 }}</p>
-        <pre class="evidence">{{ citationExcerpt.excerpt }}</pre>
-      </template>
-    </div>
-    <template #footer><el-button @click="citationExcerptVisible = false">关闭</el-button></template>
-  </el-dialog>
-
-  <el-dialog v-model="assignmentVisible" title="补充工单处理信息" width="520px">
-    <el-form label-width="90px">
-      <el-form-item label="负责人"><el-input v-model="assignmentForm.owner" placeholder="例如：pump-team-a 或 operator" maxlength="80" /></el-form-item>
-      <el-form-item label="截止时间"><el-input v-model="assignmentForm.due_at" type="datetime-local" /></el-form-item>
-    </el-form>
-    <p class="muted">当前 Mock 只保存负责人和截止时间，不会自动发送提醒。</p>
-    <template #footer>
-      <el-button @click="assignmentVisible = false">取消</el-button>
-      <el-button class="button-stable button-stable--lg" type="primary" :loading="assignmentSaving" @click="saveAssignment">保存处理信息</el-button>
+      <AgentMessageList
+        :messages="messages"
+        :citations="latestAgentAnswer?.citations.filter(c => c.source_type === 'knowledge' && c.chunk_index !== null && c.chunk_index !== undefined) || []"
+        @view-citation="viewCitationExcerpt"
+      />
+      <AgentToolbar :status="currentWorkflowStatus || agentStatusText" :request-state="agentRequestState" :loading="agentLoading" @reset="resetConversation" />
+      <AgentStationSelector v-model="selectedStationId" :stations="stations" />
+      <label class="agent-approval-toggle"><input v-model="requireApproval" type="checkbox" :disabled="agentLoading" /> 先人工审批再执行</label>
+      <AgentPromptComposer v-model="input" :loading="agentLoading" :cancelling="agentRequestState === 'cancelling'" @ask="ask()" @cancel="cancelAgent" />
     </template>
-  </el-dialog>
+    <template #examples><AgentExampleQuestions @ask="ask" /></template>
+    <template #followup>
+      <AgentWorkOrderActions :visible="canCreateWorkOrder" :loading="workOrderLoading" @create="createWorkOrder" />
+      <AgentReviewActions :can-transfer="canTransferToReview" :loading="reviewLoading" :review-id="reviewId" @submit="transferToReview" />
+      <AgentWorkOrderDraft :order="workOrder" :status-names="workOrderStatusNames" :format-time="formatTime" />
+      <AgentWorkOrderList :orders="workOrders" :status-names="workOrderStatusNames" :loading="workOrderListLoading" :action-loading="workOrderStatusLoading" @refresh="loadWorkOrders" @assign="openAssignmentDialog" @status="updateWorkOrderStatus" />
+    </template>
+  </AgentWorkspace>
+
+  <AgentCitationDialog v-model="citationExcerptVisible" :loading="citationExcerptLoading" :citation="citationExcerpt" />
+
+  <WorkOrderAssignmentDialog v-model="assignmentVisible" v-model:form="assignmentForm" :saving="assignmentSaving" @save="saveAssignment" />
 </template>
 
 <style scoped>
@@ -692,4 +688,8 @@ const formatLocalDateTime = (value: string) => {
 .agent-status--error { color:#ffadad; }
 .agent-status--error i { background:#f37878; }
 .agent-status--idle i { background:#49d59e; }
+.agent-status-strip { margin: 0; padding: 8px 18px; color: #d7ecf4; background: #12384a; font-size: 13px; }
+.agent-decision { display: flex; gap: 8px; align-items: center; padding: 10px 18px; }
+.agent-decision input { flex: 1; height: 32px; padding: 0 10px; border: 1px solid #265464; border-radius: 6px; background: #0b2431; color: #eefbff; }
+.agent-approval-toggle { display: flex; align-items: center; gap: 6px; padding: 0 18px 8px; color: #8da5b3; font-size: 13px; }
 </style>

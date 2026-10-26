@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { api } from '../api/http'
+import { fetchDashboardStations, fetchDashboardSupply, fetchHealth, fetchPressureTelemetry, fetchUnconfirmedAlarms } from '../api/dashboard'
 import { registerPageRefresh } from '../composables/pageRefresh'
 import { alarmRows as localAlarmRows, stations as localStations } from '../mock'
+import { backendSourceLabel, remoteListLabel } from '../composables/dataSource'
 
 interface HealthResponse {
   status: string
@@ -78,10 +79,10 @@ const metrics = computed(() => {
   const totalSupply = supplyBalance.value?.total_supply ?? 24860
   const totalBalance = supplyBalance.value?.total_balance ?? -1400
   return [
-    ['总供水量', totalSupply.toLocaleString(), 'm³/d', supplyBalance.value ? '后端供需接口' : '本地示例'],
-    ['当前输水压力', pressure ? pressure.value.toFixed(2) : '0.72', 'MPa', pressure?.is_stale ? '数据已过期' : '遥测 Mock'],
+    ['总供水量', totalSupply.toLocaleString(undefined, { maximumFractionDigits: 0 }), 'm³/d', supplyBalance.value ? '后端供需接口' : '本地示例'],
+    ['当前输水压力', pressure ? pressure.value.toFixed(2) : '0.72', 'MPa', pressure?.is_stale ? '数据已过期' : '测试遥测'],
     ['在线泵组', `${onlineCount} / ${stationTotal}`, '台', stationRows.value.length ? '站点状态接口' : '本地示例'],
-    ['供需缺口', Math.abs(totalBalance).toLocaleString(), 'm³', totalBalance < 0 ? '当前存在供水缺口' : '供水有结余'],
+    ['供需缺口', Math.abs(totalBalance).toLocaleString(undefined, { maximumFractionDigits: 0 }), 'm³', totalBalance < 0 ? '当前存在供水缺口' : '供水有结余'],
   ]
 })
 
@@ -131,11 +132,11 @@ const startupNeedsAttention = computed(() => ['starting', 'degraded', 'failed'].
 const loadDashboard = async () => {
   healthLoading.value = true
   const results = await Promise.allSettled([
-    api<HealthResponse>('/api/v1/health'),
-    api<StationSummary[]>('/api/v1/stations'),
-    api<AlarmSummary[]>('/api/v1/alarms?status=unconfirmed'),
-    api<SupplyBalanceResponse>('/api/v1/supply/balance'),
-    api<TelemetryPoint[]>('/api/v1/stations/pump-02/telemetry?metric=pressure'),
+    fetchHealth<HealthResponse>(),
+    fetchDashboardStations<StationSummary>(),
+    fetchUnconfirmedAlarms<AlarmSummary>(),
+    fetchDashboardSupply<SupplyBalanceResponse>(),
+    fetchPressureTelemetry<TelemetryPoint>(),
   ])
   const health = results[0]
   if (health.status === 'fulfilled') {
@@ -161,7 +162,7 @@ const loadDashboard = async () => {
   }
   if (results[3].status === 'fulfilled') supplyBalance.value = results[3].value
   if (results[4].status === 'fulfilled') telemetryRows.value = results[4].value
-  sourceLabel.value = results.slice(1).some(item => item.status === 'fulfilled') ? '后端 Mock' : '本地示例'
+  sourceLabel.value = results.slice(1).some(item => item.status === 'fulfilled') ? backendSourceLabel('mock') : remoteListLabel('failed')
   healthLoading.value = false
 }
 
@@ -188,7 +189,7 @@ onMounted(loadDashboard)
   </div>
 
   <div class="panel" style="margin-top:18px">
-    <div class="panel-head"><h3>全链路健康度</h3><span>站点数据：{{ stationRows.length ? '后端 Mock' : '本地示例' }}</span></div>
+    <div class="panel-head"><h3>全链路健康度</h3><span>站点数据：{{ stationRows.length ? '数据库' : '本地示例' }}</span></div>
     <div v-if="startupNeedsAttention" class="warning" style="margin-bottom:14px">
       <strong>RAG 启动状态：{{ startupLabel }}</strong>
       <span> · {{ startupPhaseLabel }} · {{ startupStatus.message || '请稍后刷新状态' }}</span>

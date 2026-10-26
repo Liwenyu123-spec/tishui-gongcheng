@@ -46,6 +46,7 @@ class KnowledgeHit:
     # 邻域上下文（当前分片 + 前后条款）。结构化切片后单条可能很短，
     # 生成与忠实度校验用这份更完整的文本，detail 仍保留精确分片用于引用展示。
     context: str = ""
+    effective_from: str = ""
 
 
 # 规则目录与 Agent 诊断分支共用稳定编号，便于回答、审计和回放相互追踪。
@@ -149,6 +150,7 @@ def search_rules(
     station_id: str | None = None,
     visible_station_ids: set[str] | None = None,
     now: datetime | None = None,
+    category: str | None = None,
 ) -> list[KnowledgeHit]:
     """按关键词、状态、有效期和站点检索内置规则及已批准导入文档。"""
 
@@ -234,8 +236,11 @@ def search_rules(
                     confidence=str(item.get("confidence") or "normal"),
                     rerank=(float(item["rerank"]) if item.get("rerank") is not None else None),
                     context=str(item.get("context") or ""),
+                    effective_from=str(metadata.get("effective_from") or ""),
                 )
             )
+            if category and hits[-1].category != category:
+                hits.pop()
 
     # Chroma 不可用时保留原有内存检索作为回退；已进入 Chroma 的文档避免重复展示。
     for document_id, document in _KNOWLEDGE.items():
@@ -275,8 +280,11 @@ def search_rules(
                     station_ids=tuple(document.station_ids),
                     location="正文摘要",
                     category=document.category,
+                    effective_from=document.effective_from.isoformat() if document.effective_from else "",
                 )
             )
+            if category and hits[-1].category != category:
+                hits.pop()
     hits.sort(key=lambda hit: (-hit.score, hit.source_id))
     return hits[: max(1, min(limit, 10))]
 
@@ -320,9 +328,37 @@ def detect_conflicts(hits: list[KnowledgeHit]) -> list[dict]:
             shared_terms = set(_terms(left.title)) & set(_terms(right.title))
             if not opposite or len(shared_terms) < 1:
                 continue
+            preferred = _prefer_conflict_source(left, right)
             conflicts.append({
                 "source_ids": [left.source_id, right.source_id],
                 "reason": "不同来源对同一主题给出了相反约束，请核对版本、生效时间和适用范围。",
                 "details": [left.detail, right.detail],
+                "preferred_source_id": preferred.source_id,
+                "preferred_reason": (
+                    f"优先采用《{preferred.title}》"
+                    + (f"（生效 {preferred.effective_from[:10]}）" if preferred.effective_from else f"（版本 {preferred.version}）")
+                    + ("，范围为指定站点" if preferred.station_ids else "，范围为全局")
+                    + "，另一份仅作对照。"
+                ),
             })
     return conflicts
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    import re
+    numbers = [int(item) for item in re.findall(r"\d+", version or "")]
+    return tuple(numbers) or (0,)
+
+
+def _prefer_conflict_source(left: KnowledgeHit, right: KnowledgeHit) -> KnowledgeHit:
+    """冲突时先看站点专用和生效时间，再看版本号与相关度。"""
+
+    def sort_key(hit: KnowledgeHit) -> tuple:
+        return (
+            1 if hit.station_ids else 0,
+            hit.effective_from or "",
+            _version_key(hit.version),
+            hit.score,
+        )
+
+    return left if sort_key(left) >= sort_key(right) else right

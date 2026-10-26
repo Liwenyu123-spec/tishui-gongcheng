@@ -133,6 +133,9 @@ def receive_station_heartbeat(station_id: str, _: dict = Depends(require_station
     now = _now()
     # 仅更新最近心跳时间；心跳在线不代表泵组运行正常。
     _STATION_HEARTBEATS[station_id] = now
+    record_heartbeat = getattr(data_source, "record_heartbeat", None)
+    if record_heartbeat is not None:
+        record_heartbeat(station_id, now)
     record_audit("heartbeat", "station", station_id, f"接收站点心跳：{station_id}")
     return HeartbeatResponse(
         station_id=station_id,

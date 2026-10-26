@@ -7,12 +7,43 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from ..data.repositories import get_data_source
 from ..dependencies import require_roles, require_station_access, user_has_station_access
 from ..services.analysis import telemetry_series
+
+_VIRTUAL_UNITS = {"flow": "m³/h", "pressure": "MPa", "level": "m", "energy": "kWh"}
 from ..services.audit import record_audit as _record_audit
-from ..schemas.monitoring import Alarm, AlarmDetail, Station, StationDetail, TelemetryPoint, TopologyEdge, TopologyNode, TopologyResponse
+from ..schemas.monitoring import Alarm, AlarmDetail, DesignPoint, Station, StationDetail, TelemetryPoint, TopologyEdge, TopologyNode, TopologyResponse
 
 # 监控路由统一提供拓扑、站点、遥测和告警查询。
 router = APIRouter(prefix="/api/v1", tags=["监控"])
 data_source = get_data_source()
+
+
+def _record_virtual_metrics(station: dict, metrics: list[str]) -> list[TelemetryPoint]:
+    """每次查询为请求的测点各写一条测试数据，并返回最近记录。"""
+
+    recorder = getattr(data_source, "record_virtual_metrics", None)
+    stored: dict = {}
+    if recorder is not None:
+        try:
+            stored = recorder(station, metrics) or {}
+        except Exception:
+            stored = {}
+    if not stored:
+        from ..data.repositories import _memory_virtual_metrics
+
+        stored = _memory_virtual_metrics(station, metrics)
+    points: list[TelemetryPoint] = []
+    for metric, rows in stored.items():
+        points.extend(
+            TelemetryPoint(
+                observed_at=item["observed_at"],
+                metric=metric,
+                value=item["value"],
+                unit=_VIRTUAL_UNITS[metric],
+                source="virtual-reading",
+            )
+            for item in rows
+        )
+    return points
 
 
 @router.get("/topology", response_model=TopologyResponse, tags=["拓扑"])
@@ -20,7 +51,7 @@ def topology(user: dict = Depends(require_roles("admin", "operator"))) -> Topolo
     """把站点列表转换为拓扑节点和相邻连接边。"""
 
     # 先按用户范围筛选节点，避免拓扑暴露未授权站点。
-    all_stations = data_source.stations.list()
+    all_stations = sorted(data_source.stations.list(), key=lambda station: station.get("sequence") or 0)
     visible_stations = [station for station in all_stations if user_has_station_access(user, station["id"])]
     # 用集合保存可见站点编号，后续构造相邻边时可以快速判断两端是否可见。
     visible_ids = {station["id"] for station in visible_stations}
@@ -34,6 +65,38 @@ def topology(user: dict = Depends(require_roles("admin", "operator"))) -> Topolo
     ]
     # 返回固定 Mock 版本和确认时间，明确拓扑尚未接入真实 GIS 或 SCADA。
     return TopologyResponse(version="mock-topology-v1", confirmed_at=datetime(2026, 10, 15, tzinfo=timezone.utc), nodes=nodes, edges=edges)
+
+
+@router.get("/measurement-points", response_model=list[DesignPoint], tags=["监控"])
+def measurement_points(_: dict = Depends(require_roles("admin", "operator"))) -> list[DesignPoint]:
+    """返回资料里的设计参数。这些数值不是当前测试遥测。"""
+
+    from ..data.mysql_source import _connect
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, object_id, metric_code, unit, source, note
+                FROM measurement_points
+                ORDER BY object_id, metric_code, id
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [
+        DesignPoint(
+            id=row["id"],
+            object_id=row["object_id"],
+            metric_code=row["metric_code"] or "",
+            unit=row.get("unit") or "",
+            source=row.get("source") or "",
+            note=row.get("note") or "",
+        )
+        for row in rows
+    ]
 
 
 @router.get("/stations", response_model=list[Station], tags=["站点"])
@@ -68,15 +131,19 @@ def telemetry(station_id: str, metric: str | None = Query(default=None, max_leng
     if any(item not in station["metrics"] for item in metrics):
         unsupported = next(item for item in metrics if item not in station["metrics"])
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"站点不支持的测点: {unsupported}")
-    points: list[TelemetryPoint] = []
-    series_by_metric = {metric_name: telemetry_series(station, metric_name) for metric_name in metrics}
-    # 生成六个时间点，每个点相隔十分钟，用于前端趋势图展示；from/to 当前仅保留接口兼容性。
+    points = _record_virtual_metrics(station, metrics)
+    if points:
+        return points
+    # 数据库不可用时退回固定样本，避免页面空白。
+    fallback: list[TelemetryPoint] = []
     for offset in range(6):
         for metric_name in metrics:
-            sample = series_by_metric[metric_name][offset]
-            points.append(TelemetryPoint(observed_at=sample.observed_at, metric=sample.metric, value=sample.value, unit=sample.unit, quality=sample.quality))
-    # 生成顺序为当前时间到较早时间，前端可直接用于趋势图展示。
-    return points
+            series = telemetry_series(station, metric_name)
+            if offset >= len(series):
+                continue
+            sample = series[offset]
+            fallback.append(TelemetryPoint(observed_at=sample.observed_at, metric=sample.metric, value=sample.value, unit=sample.unit, quality=sample.quality))
+    return fallback
 
 
 @router.get("/alarms", response_model=list[Alarm], tags=["告警"])
@@ -94,8 +161,17 @@ def alarms(status_filter: str | None = Query(default=None, alias="status", max_l
     if station_id:
         # station_id 参数只影响已经通过权限检查的站点数据。
         rows = [alarm for alarm in rows if alarm["station_id"] == station_id]
-    # 列表响应隐藏详情字段，详情接口再返回处理建议。
-    return [Alarm(**{key: value for key, value in alarm.items() if key not in {"description", "suggested_action"}}) for alarm in rows]
+    import random
+
+    shown = []
+    for alarm in rows:
+        item = {key: value for key, value in alarm.items() if key not in {"description", "suggested_action"}}
+        if isinstance(item.get("value"), (int, float)):
+            base = float(item["value"])
+            digits = 2 if item.get("metric") in {"pressure", "level"} else 0
+            item["value"] = round(base + random.uniform(-0.04, 0.04) * max(abs(base), 1.0), digits)
+        shown.append(Alarm(**item))
+    return shown
 
 
 @router.get("/alarms/{alarm_id}", response_model=AlarmDetail, tags=["告警"])
@@ -123,7 +199,12 @@ def acknowledge_alarm(alarm_id: str, user: dict = Depends(require_roles("admin",
     if not user_has_station_access(user, alarm["station_id"]):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权确认该站点告警")
     # Mock 阶段直接更新内存状态，并记录审计事件。
+    previous_status = alarm["status"]
     alarm["status"] = "confirmed"
+    commit = getattr(data_source, "commit_alarm", None)
+    if commit is not None and not commit(alarm):
+        alarm["status"] = previous_status
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="告警已被其他人更新，请刷新后再确认")
     _record_audit("acknowledge", "alarm", alarm_id, f"确认告警：{alarm['station_name']} {alarm['metric']}")
     # 列表响应隐藏详情字段，避免确认接口返回超出 Alarm 模型的内部字段。
     return Alarm(**{key: value for key, value in alarm.items() if key not in {"description", "suggested_action"}})
