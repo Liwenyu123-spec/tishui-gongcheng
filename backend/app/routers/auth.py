@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from ..data.repositories import get_data_source
+from ..data.repositories import get_data_source, save_row
 from ..dependencies import get_current_username
 from ..schemas.auth import LoginRequest, LoginResponse, LogoutResponse, UserResponse
 
@@ -35,6 +35,7 @@ def login(payload: LoginRequest) -> LoginResponse:
     access_token = f"mock-token-{payload.username}"
     # 新建用户首次登录时，将签发的 Mock Token 注册到内存映射中。
     data_source.users.tokens()[access_token] = payload.username
+    save_row("commit_token", access_token, payload.username)
     return LoginResponse(access_token=access_token, user=_public_user(payload.username))
 
 

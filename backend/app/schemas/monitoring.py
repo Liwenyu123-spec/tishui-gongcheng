@@ -16,8 +16,10 @@ class Station(BaseModel):
     sequence: int
     # 站点类型，例如泵站或调蓄站。
     station_type: str
-    # 当前站点运行状态。
+    # 当前站点运行状态。由最近一次测试水位决定：低于 3.20 m 为 warning。
     status: str
+    # 本次刷新写入的测试水位。没有水位测点时为空。
+    level: float | None = None
     # 数据来源标记。
     source: str = "mock"
 

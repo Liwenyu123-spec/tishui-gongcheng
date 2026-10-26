@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..data.incidents import _STATION_BACKUP_CONTACTS, _STATION_CONTACTS, _STATION_HEARTBEATS
-from ..data.repositories import get_data_source
+from ..data.repositories import get_data_source, save_row
 from ..dependencies import require_roles, require_station_access, user_has_station_access
 from ..schemas.incidents import HeartbeatResponse, Incident, IncidentCreateRequest, Notification, StationContact
 from ..services.audit import record_audit
@@ -79,6 +79,7 @@ def _create_notifications(incident: Incident, now: datetime) -> None:
             failure_reason="Mock 通知网关模拟失败" if delivery_failed else None,
         )
         data_source.notifications.all()[notification.id] = notification
+        save_row("commit_notification", notification)
 
 
 @router.post("/stations/{station_id}/incidents", response_model=Incident)
@@ -98,6 +99,7 @@ def report_incident(station_id: str, payload: IncidentCreateRequest, _: dict = D
         duplicate.updated_at = now
         duplicate.description = payload.description
         duplicate.deduplicated = True
+        save_row("commit_incident", duplicate)
         record_audit("deduplicate", "incident", duplicate.id, f"合并站点重复事件：{station_id} {payload.deduplication_key}")
         return duplicate
 
@@ -118,6 +120,7 @@ def report_incident(station_id: str, payload: IncidentCreateRequest, _: dict = D
     )
     # 先保存事件，再根据站点联系人生成平台通知。
     data_source.incidents.all()[incident.id] = incident
+    save_row("commit_incident", incident)
     _create_notifications(incident, now)
     record_audit("report", "incident", incident.id, f"站点上报事件：{station_id} {incident.category}")
     return incident
@@ -242,6 +245,9 @@ def acknowledge_notification(notification_id: str, user: dict = Depends(require_
             for related in data_source.notifications.all().values():
                 if related.incident_id == incident.id:
                     related.incident_status = incident.status
+                    save_row("commit_notification", related)
+            save_row("commit_incident", incident)
+        save_row("commit_notification", notification)
         record_audit("acknowledge", "notification", notification_id, f"确认站点事件通知：{notification.incident_id}")
     return notification
 
@@ -264,6 +270,7 @@ def retry_notification(notification_id: str, user: dict = Depends(require_roles(
     notification.retry_count += 1
     notification.failure_reason = None
     notification.sent_at = _now()
+    save_row("commit_notification", notification)
     record_audit("retry", "notification", notification_id, f"重试发送站点事件通知：{notification.incident_id}")
     return notification
 
@@ -303,6 +310,8 @@ def escalate_notification(notification_id: str, user: dict = Depends(require_rol
     )
     # 保存升级通知；接口返回新通知，前端可直接刷新备用联系人通知状态。
     data_source.notifications.all()[escalated.id] = escalated
+    save_row("commit_notification", notification)
+    save_row("commit_notification", escalated)
     record_audit(
         "escalate",
         "notification",
@@ -330,5 +339,7 @@ def resolve_incident(incident_id: str, user: dict = Depends(require_roles("admin
     for related in data_source.notifications.all().values():
         if related.incident_id == incident.id:
             related.incident_status = incident.status
+            save_row("commit_notification", related)
+    save_row("commit_incident", incident)
     record_audit("resolve", "incident", incident_id, f"关闭站点事件：{incident.station_id} {incident.category}")
     return incident

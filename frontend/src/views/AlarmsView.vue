@@ -4,6 +4,7 @@ import { acknowledgeAlarm, fetchAlarmDetail, fetchAlarms } from '../api/alarms'
 import { registerPageRefresh } from '../composables/pageRefresh'
 import { alarmRows } from '../mock'
 import { remoteListMessage } from '../composables/dataSource'
+import { formatLocalClock } from '../utils/time'
 
 interface ApiAlarm {
   id: string
@@ -69,7 +70,7 @@ const loadAlarms = async () => {
       metric: metricName[row.metric] || row.metric,
       value: `${row.value} ${row.unit}`,
       threshold: row.threshold,
-      time: row.occurred_at.slice(11, 16),
+      time: formatLocalClock(row.occurred_at),
       status: row.status === 'confirmed' ? '已确认' : '未确认',
       relation: row.relation || '',
     }))

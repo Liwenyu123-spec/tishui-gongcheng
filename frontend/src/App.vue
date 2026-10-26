@@ -7,6 +7,7 @@ import { acknowledgeNotification as acknowledgeNotificationApi, escalateNotifica
 import { resolveIncident } from './api/incidents'
 import { runPageRefresh, usePageRefresh } from './composables/pageRefresh'
 import { readCurrentUser } from './composables/currentUser'
+import { formatLocalDateTime } from './utils/time'
 
 interface NotificationItem {
   id: string
@@ -102,7 +103,7 @@ const incidentStatusName: Record<string, string> = {
   false_positive: '误报关闭',
 }
 
-const formatNotificationTime = (value: string) => value ? value.slice(0, 16).replace('T', ' ') : '—'
+const formatNotificationTime = (value: string) => value ? formatLocalDateTime(value) : '—'
 
 const refreshSession = () => {
   loggedIn.value = Boolean(localStorage.getItem('access_token'))

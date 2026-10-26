@@ -60,13 +60,25 @@ const comparisonMeta = ref<Pick<SchemeCompareResponse, 'target_demand' | 'constr
 const loadComparison = async () => {
   loading.value = true
   try {
+    const risks = ['low', 'medium', 'high']
+    // 每次刷新都换一批输入，供水量、时延、能耗、负荷、风险和目标需求都会变。
     const variedSchemes = mockSchemes.map(scheme => ({
       ...scheme,
-      supply: Math.round(scheme.supply + (Math.random() - 0.5) * 500),
-      energy: Math.round(scheme.energy + (Math.random() - 0.5) * 60),
-      delay_minutes: Math.max(10, Math.round(scheme.delay_minutes + (Math.random() - 0.5) * 10)),
+      supply: Math.round(scheme.supply + (Math.random() - 0.5) * 2400),
+      energy: Math.round(scheme.energy + (Math.random() - 0.5) * 280),
+      delay_minutes: Math.max(15, Math.round(scheme.delay_minutes + (Math.random() - 0.5) * 28)),
+      load_percent: Math.round(48 + Math.random() * 50),
+      risk: risks[Math.floor(Math.random() * risks.length)],
     }))
-    const result = await compareSchemes<SchemeCompareResponse>({ schemes: variedSchemes })
+    const result = await compareSchemes<SchemeCompareResponse>({
+      schemes: variedSchemes,
+      target_demand: Math.round(13000 + (Math.random() - 0.5) * 1600),
+      constraints: {
+        max_delay_minutes: Math.round(50 + Math.random() * 20),
+        max_load_percent: Math.round(80 + Math.random() * 15),
+        max_risk: 'high',
+      },
+    })
     schemes.value = result.results
     recommendation.value = result.recommendation
     comparisonMeta.value = result

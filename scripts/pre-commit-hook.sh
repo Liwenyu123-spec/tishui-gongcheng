@@ -1,8 +1,8 @@
 #!/bin/sh
-# 提交前快速回归门禁（由 安装提交检查.ps1 安装到 .git/hooks/pre-commit）
+# 提交前快速回归门禁。复制本文件为 .git/hooks/pre-commit 后，git commit 会先跑它。
 #
 # 只跑后端快链路：编译检查 + pytest 单元用例 + Mock 冒烟 + 差异检查。
-# 前端生产构建和 RAG 质量回归属于发布前检查，请执行 完整回归.ps1。
+# 前端生产构建和 RAG 质量回归不在这次检查里，需要时单独执行。
 #
 # 需要跳过时：git commit --no-verify
 

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { fetchStationDetail, fetchStationTelemetry, fetchTopology } from '../api/topology'
 import { registerPageRefresh } from '../composables/pageRefresh'
+import { formatLocalClock } from '../utils/time'
 
 interface TopologyNode {
   station_id: string
@@ -58,7 +59,7 @@ const selectedNode = computed(() => nodes.value.find(node => node.station_id ===
 const flow = computed(() => telemetryPoints.value.find(point => point.metric === 'flow')?.value)
 const pressure = computed(() => telemetryPoints.value.find(point => point.metric === 'pressure')?.value)
 const level = computed(() => telemetryPoints.value.find(point => point.metric === 'level')?.value)
-const updatedAt = computed(() => telemetryPoints.value[0]?.observed_at ? telemetryPoints.value[0].observed_at.slice(11, 16) : '—')
+const updatedAt = computed(() => telemetryPoints.value[0]?.observed_at ? formatLocalClock(telemetryPoints.value[0].observed_at) : '—')
 
 const loadSelected = async () => {
   if (!selectedId.value) return

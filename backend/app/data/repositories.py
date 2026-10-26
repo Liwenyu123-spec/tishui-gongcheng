@@ -1,8 +1,8 @@
-"""统一的数据访问边界。
+"""业务代码只通过 get_data_source() 拿数据。
 
-当前实现仍然使用进程内 Mock 数据，但业务层只依赖这里定义的仓储接口。
-后续接入数据库、时序库或现场数据适配器时，替换 ``MockDataSource`` 的组装即可，
-不需要让路由和 Agent 再次修改数据读取方式。
+启动时先装一份内存示例。main.py 能连上 MySQL 时，会把同一个对象换成
+MysqlDataSource：字段还是 stations、alarms、users 这些名字，内容改从
+water_dispatch 来。路由和 Agent 不需要知道当前是内存还是数据库。
 """
 
 from __future__ import annotations
@@ -180,6 +180,17 @@ class MockWorkOrderRepository:
         return _WORK_ORDERS.get(work_order_id)
 
 
+# 测试水位低于这条线时，站点状态改为关注。刷新写入的水位会绕着这条线上下走。
+LEVEL_ATTENTION_METERS = 3.2
+
+
+def apply_level_status(station: dict, level: float) -> None:
+    """站点状态跟当前水位走，不使用档案里的固定状态。"""
+
+    station["status"] = "warning" if float(level) < LEVEL_ATTENTION_METERS else "running"
+
+
+# 数据库不可用时，测试遥测只留在本进程。
 _MEMORY_VIRTUAL: dict[str, list[dict]] = {}
 
 
@@ -209,6 +220,8 @@ def _memory_virtual_metrics(station: dict, metrics: list[str]) -> dict[str, list
         history.insert(0, {"observed_at": now, "value": value})
         del history[24:]
         stored[metric] = list(history)
+    if "level" in stored:
+        apply_level_status(station, stored["level"][0]["value"])
     return stored
 
 
@@ -249,6 +262,14 @@ def get_data_source() -> MockDataSource:
     """返回当前进程的数据源。能连上本地 MySQL 时读写 water_dispatch。"""
 
     return _DATA_SOURCE
+
+
+def save_row(method: str, *args) -> None:
+    """内存数据源没有对应方法时直接跳过。MySQL 数据源只写这一行。"""
+
+    writer = getattr(_DATA_SOURCE, method, None)
+    if writer is not None:
+        writer(*args)
 
 
 def use_mysql_source() -> MockDataSource:

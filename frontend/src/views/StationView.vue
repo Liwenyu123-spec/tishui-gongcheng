@@ -6,6 +6,7 @@ import { readCurrentUser } from '../composables/currentUser'
 import { fetchContacts, fetchDesignPoints, fetchStation, fetchStations, fetchTelemetry, reportIncident, sendHeartbeat as sendStationHeartbeat } from '../api/stations'
 import { registerPageRefresh } from '../composables/pageRefresh'
 import { telemetry, stations as mockStations } from '../mock'
+import { formatLocalClock, formatLocalDateTime } from '../utils/time'
 
 interface ApiStation {
   id: string
@@ -111,7 +112,7 @@ const renderChart = (items: TelemetryPoint[]) => {
     backgroundColor: 'transparent',
     tooltip: { trigger: 'axis' },
     legend: { textStyle: { color: '#8da5b3' } },
-    xAxis: { type: 'category', data: times.map(time => time.slice(11, 16)), axisLabel: { color: '#6f8b9b' } },
+    xAxis: { type: 'category', data: times.map(time => formatLocalClock(time)), axisLabel: { color: '#6f8b9b' } },
     yAxis: [
       { axisLabel: { color: '#6f8b9b' }, splitLine: { lineStyle: { color: '#183444' } } },
       { axisLabel: { color: '#8fd4e8' }, splitLine: { show: false } },
@@ -208,7 +209,7 @@ const sendHeartbeat = async (manual = false) => {
   try {
     const result = await sendStationHeartbeat<HeartbeatResponse>(selectedStationId.value)
     heartbeatStatus.value = result.is_stale ? '已过期' : result.status === 'online' ? '在线' : result.status
-    heartbeatAt.value = result.last_seen_at.slice(0, 16).replace('T', ' ')
+    heartbeatAt.value = formatLocalDateTime(result.last_seen_at)
     if (manual) ElMessage.success('站点心跳已发送')
   } catch {
     heartbeatStatus.value = '不可用'

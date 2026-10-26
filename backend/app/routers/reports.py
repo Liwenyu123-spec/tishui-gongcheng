@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from ..data.repositories import get_data_source
+from ..data.repositories import get_data_source, save_row
 from ..dependencies import require_roles, user_has_station_access
 from ..schemas.reports import Report, ReportContentUpdateRequest, ReportGenerateRequest, ReportMetric, ReportStatusUpdateRequest
 from ..services.audit import record_audit
@@ -136,6 +136,7 @@ def generate_report(
     )
     # 当前阶段仅在内存中保存草稿，服务重启后记录会清空。
     data_source.reports.all()[report.id] = report
+    save_row("commit_report", report)
     record_audit(
         "generate",
         "report",
@@ -205,6 +206,7 @@ def update_report_content(
         if not summary:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="报告摘要不能为空")
         report.summary = summary
+    save_row("commit_report", report)
     record_audit("content_update", "report", report_id, f"报告 {report.title} 草稿内容已编辑")
     return report
 
@@ -232,5 +234,6 @@ def update_report_status(
     if report.status == payload.status:
         return report
     report.status = payload.status
+    save_row("commit_report", report)
     record_audit("status_update", "report", report_id, f"报告 {report.title} 状态更新为 {payload.status}")
     return report

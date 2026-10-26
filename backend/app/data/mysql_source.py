@@ -28,6 +28,7 @@ from .repositories import (
     MockAlarmRepository,
     MockAuditRepository,
     MockDataSource,
+    apply_level_status,
     MockIncidentRepository,
     MockNotificationRepository,
     MockReportRepository,
@@ -175,6 +176,60 @@ class MysqlDataSource(MockDataSource):
                     )
         return len(rows)
 
+    # 下面这几个方法只写被改到的那一行。查询接口不再调用 flush() 把整表重写一遍。
+    def commit_incident(self, item) -> None:
+        self._commit([(
+            """
+            INSERT INTO incidents (id, station_id, category, level, source, status, reported_by, payload)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE status=VALUES(status), payload=VALUES(payload)
+            """,
+            (item.id, item.station_id, item.category, item.level, item.source, item.status, item.reported_by, _dump(item)),
+        )])
+
+    def commit_notification(self, item) -> None:
+        self._commit([(
+            """
+            INSERT INTO notifications (id, incident_id, recipient, channel, status, payload)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE status=VALUES(status), payload=VALUES(payload)
+            """,
+            (item.id, item.incident_id, item.recipient, item.channel, item.status, _dump(item)),
+        )])
+
+    def commit_report(self, item) -> None:
+        self._commit([(
+            "INSERT INTO reports (id, payload) VALUES (%s, %s) ON DUPLICATE KEY UPDATE payload=VALUES(payload)",
+            (item.id, _dump(item)),
+        )])
+
+    def commit_order(self, item) -> None:
+        self._commit([(
+            """
+            INSERT INTO work_orders (id, object_id, description, status, payload)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE status=VALUES(status), payload=VALUES(payload)
+            """,
+            (item.id, item.station_id or item.id, item.issue[:255], item.status, _dump(item)),
+        )])
+
+    def commit_audit(self, event) -> None:
+        occurred = event.occurred_at.replace(tzinfo=None) if isinstance(event.occurred_at, datetime) else None
+        self._commit([(
+            """
+            INSERT INTO audit_events (id, user_id, action, object_type, object_id, created_at, payload)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE payload=VALUES(payload)
+            """,
+            (event.id, None, event.action, event.resource, event.resource_id, occurred, _dump(event)),
+        )])
+
+    def commit_token(self, token: str, username: str) -> None:
+        self._commit([(
+            "INSERT INTO auth_tokens (token, username) VALUES (%s, %s) ON DUPLICATE KEY UPDATE username=VALUES(username)",
+            (token, username),
+        )])
+
     def flush(self) -> None:
         """同一连接、同一事务写回本轮业务对象。中途失败则整批回滚。"""
 
@@ -235,6 +290,7 @@ class MysqlDataSource(MockDataSource):
             "energy": (184.0 + (sequence - 1) * 2.5, 6.0, 80.0, 400.0, 0),
         }
         now = datetime.now(timezone.utc).replace(tzinfo=None)
+        latest_level: float | None = None
         with _connect() as conn:
             with conn.cursor() as cur:
                 for metric in metrics:
@@ -249,6 +305,8 @@ class MysqlDataSource(MockDataSource):
                     row = cur.fetchone()
                     start = float(row["value"]) if row and row["value"] is not None else base
                     value = round(min(high, max(low, start + random.uniform(-jitter, jitter))), digits)
+                    if metric == "level":
+                        latest_level = value
                     cur.execute(
                         """
                         INSERT INTO telemetry_readings (point_id, observed_at, value, quality, source_batch, is_stale)
@@ -270,6 +328,8 @@ class MysqlDataSource(MockDataSource):
                         """,
                         (point_id, point_id),
                     )
+        if latest_level is not None:
+            apply_level_status(station, latest_level)
         return {metric: self.read_virtual_metric(station["id"], metric) for metric in metrics if metric in specs}
 
     def record_virtual_level(self, station: dict) -> list[dict]:

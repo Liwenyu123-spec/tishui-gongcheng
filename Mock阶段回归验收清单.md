@@ -21,12 +21,6 @@
 | 差异检查 | `git diff --check` | 0.0s | 通过 |
 | 启动检查 | `uvicorn app.main:app --port 8011` | — | `/api/v1/health` 200、`/docs` 200、`/` 200（单地址模式） |
 
-一条命令跑完全部自动化项：
-
-```powershell
-.\完整回归.ps1
-```
-
 日常提交只需要跑提交前门禁（已安装为 git pre-commit 钩子，只改文档时自动跳过代码检查）：
 
 ```powershell

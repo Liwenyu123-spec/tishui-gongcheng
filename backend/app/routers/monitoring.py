@@ -1,4 +1,9 @@
-"""拓扑、站点、遥测和告警查询路由。"""
+"""站点、拓扑、遥测和告警。
+
+遥测不是现场采集。每次 GET /stations/{id}/telemetry 都会新写一条测试值：
+流量和能耗取整数，压力和水位保留两位小数，每个测点只留最近 24 条。
+设计参数在另一个接口，不要和这些测试值混在一起。
+"""
 
 from datetime import datetime, timezone
 
@@ -103,8 +108,18 @@ def measurement_points(_: dict = Depends(require_roles("admin", "operator"))) ->
 def stations(user: dict = Depends(require_roles("admin", "operator"))) -> list[Station]:
     """返回全部站点的基础字段。"""
 
-    # 站点列表与拓扑使用相同的站点范围规则。
-    return [Station(**station) for station in data_source.stations.list() if user_has_station_access(user, station["id"])]
+    rows = []
+    for station in data_source.stations.list():
+        if not user_has_station_access(user, station["id"]):
+            continue
+        level = None
+        # 总览刷新时为每个有水位的站点写一条新水位，状态与这条水位一致。
+        if "level" in station.get("metrics", []):
+            points = _record_virtual_metrics(station, ["level"])
+            newest = next((point for point in points if point.metric == "level"), None)
+            level = newest.value if newest is not None else None
+        rows.append(Station(**{**station, "level": level}))
+    return rows
 
 
 @router.get("/stations/{station_id}", response_model=StationDetail, tags=["站点"])

@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-- 项目迭代：`v0.10.318`
+- 项目迭代：`v0.10.326`
 - 前端包版本：`0.2.0`
 - 当前模式：本地 MySQL `water_dispatch`、只读 Agent、多 Agent 专业节点协作
 - 前端目录：[frontend](./frontend)
@@ -127,6 +127,8 @@ cd ..\backend
 ```
 
 该脚本会先构建前端，再只启动 FastAPI；浏览器打开 `http://127.0.0.1:8000` 即可使用完整页面和接口。
+
+不想看到命令行窗口时，双击 `启动单地址无窗口.vbs`。它不再构建前端，只启动已经构建好的服务，窗口隐藏，输出写在 `backend/data/server.log`。结束服务时在任务管理器里结束对应的 `python.exe`。`启动开发环境.bat` 仍会打开两个窗口，因为前后端日志需要各自留在终端里。
 
 单地址启动时，FastAPI 会先提供页面和基础接口，再在后台准备 RAG 的 Embedding、重排模型和知识索引。
 可访问 `GET /api/v1/health` 查看 `startup.status`：`starting` 表示准备中，`ready` 表示完成，
@@ -264,19 +266,11 @@ Agent 后端现在具备共享状态式的专业节点协作：协调 Agent 先�
 
 Agent 页面同一轮对话会自动携带 `session_id`，支持“二泵站压力是多少”后继续追问“那流量呢”。会话按用户隔离，问句和站点上下文写入数据库，重启后仍在。
 
-## 提交前检查与完整回归
-
-分两层，避免每次提交都等最慢的检查：
+## 提交前检查
 
 **日常提交（提交前门禁）**
 
-安装一次即可由 `git commit` 自动触发：
-
-```powershell
-.\安装提交检查.ps1
-```
-
-也可以用批处理双击安装：`安装提交检查.bat`。门禁依次执行后端编译、pytest 单元用例、Mock 冒烟和 `git diff --check`，约 1 分钟；只改文档的提交会自动跳过代码检查。检查未通过时会把失败记录追加到 `.test-temp\precommit_failures.log`（已在 `.gitignore` 中），便于后台自动同步被拦住后回查。临时绕过用 `git commit --no-verify` 或设置环境变量 `SKIP_PRECOMMIT=1`，需要卸载时执行 `.\安装提交检查.ps1 -卸载`。
+本机 `.git/hooks/pre-commit` 已经装好，`git commit` 会自动跑 `scripts\pre_commit_check.py`。门禁依次执行后端编译、pytest 单元用例、Mock 冒烟和 `git diff --check`，约 1 分钟；只改文档的提交会自动跳过代码检查。临时绕过用 `git commit --no-verify` 或设置环境变量 `SKIP_PRECOMMIT=1`。换电脑后把 `scripts\pre-commit-hook.sh` 复制为 `.git\hooks\pre-commit` 即可恢复。
 
 手工执行同一套检查：
 
@@ -285,15 +279,7 @@ python scripts\pre_commit_check.py
 python scripts\pre_commit_check.py --full   # 追加 RAG 质量回归
 ```
 
-**发布前或里程碑前（完整回归）**
-
-```powershell
-.\完整回归.ps1
-```
-
-依次执行前端生产构建、后端编译、pytest 单元用例、Mock 冒烟回归、RAG 质量回归和 `git diff --check`，每个子任务都有硬超时，不会因为某个子进程卡住而停在终端。
-
-单独跑某一项：
+发布前可以按下面几项分开跑：前端生产构建、后端编译、pytest、Mock 冒烟、RAG 质量回归和 `git diff --check`。
 
 ```powershell
 cd frontend

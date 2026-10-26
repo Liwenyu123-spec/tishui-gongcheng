@@ -16,6 +16,7 @@ import AgentWorkOrderDraft from '../components/AgentWorkOrderDraft.vue'
 import AgentReviewActions from '../components/AgentReviewActions.vue'
 import AgentWorkOrderActions from '../components/AgentWorkOrderActions.vue'
 import AgentWorkspace from '../components/AgentWorkspace.vue'
+import { formatLocalClock, formatLocalDateTime } from '../utils/time'
 
 interface WorkOrderDraft {
   id: string
@@ -569,7 +570,7 @@ const openAssignmentDialog = (order: WorkOrderDraft) => {
   assignmentOrder.value = order
   assignmentForm.value = {
     owner: order.owner || '',
-    due_at: order.due_at ? order.due_at.slice(0, 16) : '',
+    due_at: order.due_at ? formatLocalDateTime(order.due_at).slice(0, 16).replace(' ', 'T') : '',
   }
   assignmentVisible.value = true
 }
@@ -614,15 +615,7 @@ onBeforeUnmount(() => {
   agentAbortController?.abort()
 })
 
-const formatTime = (value: string) => value.slice(11, 16)
-
-// Agent 的观测时间来自 UTC Mock 测点，展示时转换为浏览器本地时间。
-const formatLocalDateTime = (value: string) => {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-}
+const formatTime = formatLocalClock
 </script>
 
 <template>

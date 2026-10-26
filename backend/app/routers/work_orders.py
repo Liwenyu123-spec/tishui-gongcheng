@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from ..data.repositories import get_data_source
+from ..data.repositories import get_data_source, save_row
 from ..dependencies import require_roles, user_has_station_access
 from ..schemas.work_orders import WorkOrderAssignmentUpdateRequest, WorkOrderDraft, WorkOrderDraftRequest, WorkOrderStatusUpdateRequest
 from ..services.audit import record_audit
@@ -51,6 +51,7 @@ def create_work_order_draft(
     )
     # 草稿先保存到 Mock 存储，后续列表和状态接口才能继续处理同一条工单。
     data_source.work_orders.all()[order.id] = order
+    save_row("commit_order", order)
     record_audit("create", "work_order", order.id, f"创建工单草稿：{order.title}")
     return order
 
@@ -99,6 +100,7 @@ def update_work_order_status(
         return order
     previous_status = order.status
     order.status = payload.status
+    save_row("commit_order", order)
     record_audit("status_update", "work_order", order.id, f"工单状态由 {previous_status} 更新为 {payload.status}")
     return order
 
@@ -128,5 +130,6 @@ def update_work_order_assignment(
         order.owner = owner
     if payload.due_at is not None:
         order.due_at = payload.due_at
+    save_row("commit_order", order)
     record_audit("assignment_update", "work_order", order.id, f"工单 {order.title} 处理信息已更新")
     return order

@@ -1,3 +1,6 @@
+// 页面地图。开发时由 Vite 5173 提供，接口转发到 8000；
+// 单地址模式则由 FastAPI 直接返回 frontend/dist，浏览器只打开 8000。
+// meta.requiresAuth 只决定要不要先去登录页。角色和权限的真正校验在后端。
 import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import './styles.css'

@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from ..data.repositories import get_data_source
+from ..data.repositories import get_data_source, save_row
 from ..schemas.audit import AuditEvent
 
 
@@ -29,3 +29,5 @@ def record_audit(action: str, resource: str, resource_id: str | None, detail: st
             detail=detail,
         )
     )
+    # 只把刚追加的这一条写入数据库，不再等请求结束时重写全部审计。
+    save_row("commit_audit", data_source.audit.all()[-1])

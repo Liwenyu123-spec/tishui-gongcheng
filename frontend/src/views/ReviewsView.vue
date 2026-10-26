@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { fetchReviewDetail, fetchReviews, updateReview } from '../api/reviews'
 import { registerPageRefresh } from '../composables/pageRefresh'
 import { backendSourceLabel, remoteListMessage } from '../composables/dataSource'
+import { formatLocalDateTime } from '../utils/time'
 
 interface ApiReview {
   id: string
@@ -50,13 +51,6 @@ const pendingCount = computed(() => rows.value.filter(row => row.status === '待
 // 待审核和待补充记录都可以继续给出审核结论；已通过或已驳回记录保持只读。
 const canReviewRow = (row: ReviewRow) => row.status === '待审核' || row.status === '待补充'
 
-// 后端审核时间统一保存为带时区的 UTC，列表和详情统一转换为浏览器本地时间。
-const formatLocalDateTime = (value: string) => {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-}
 
 const formatReview = (review: ApiReview): ReviewRow => ({
   id: review.id,

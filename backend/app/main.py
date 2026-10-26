@@ -1,12 +1,18 @@
-"""模拟阶段的 FastAPI 后端入口。
+"""FastAPI 入口。
 
-应用初始化和路由注册保留在这里；各业务接口按领域拆到独立路由包。
+一次浏览器请求大致经过这里：
+1. 页面和 /assets 直接返回 frontend/dist，不进数据库。
+2. /api/ 查询直接读本进程里已经加载的对象，不再整表重载。
+3. 改动发生时只把那一行写入 MySQL，见下面第 4 点。
+4. 告警确认、审核、用户、事件、通知、报告、工单、登录令牌和审计都在改动时按行写入。
+5. 连不上 MySQL 时继续用内存示例，并在启动日志里写警告。
+
+知识库索引在后台线程准备，不挡住上面的接口。查询不再为了“以防万一”把整张表读一遍。
 """
 
 # Path 用于定位项目根目录下的前端构建产物。
 from pathlib import Path
 from threading import Thread
-import asyncio
 import logging
 import time
 
@@ -80,7 +86,7 @@ app.include_router(imports_router)
 app.include_router(audit_router)
 app.include_router(agent_router)
 
-from .data.repositories import get_data_source, use_mysql_source
+from .data.repositories import use_mysql_source
 
 # 数据库是可选的运行时依赖：开发/冒烟环境没有 MySQL 或 pymysql 时，保留 Mock 数据源，
 # 不应因为导入应用模块就直接启动失败。生产部署仍应在启动日志中明确暴露数据库不可用。
@@ -88,35 +94,6 @@ try:
     use_mysql_source()
 except Exception as exc:  # noqa: BLE001
     logger.warning("MySQL 数据源初始化失败，回退到内存数据源：%s", exc)
-
-
-_api_lock = asyncio.Lock()
-
-
-@app.middleware("http")
-async def persist_database(request, call_next):
-    """接口请求前后同步 MySQL。页面和静态文件不进出数据库。"""
-
-    if not request.url.path.startswith("/api/"):
-        return await call_next(request)
-    source = get_data_source()
-    is_read = request.method in {"GET", "HEAD", "OPTIONS"}
-    async with _api_lock:
-        reload = getattr(source, "reload_stations_and_users", None)
-        if reload is not None:
-            try:
-                await asyncio.to_thread(reload)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("MySQL 请求前刷新失败，继续使用当前数据：%s", exc)
-        response = await call_next(request)
-        if not is_read and response.status_code < 500:
-            flush = getattr(source, "flush", None)
-            if flush is not None:
-                try:
-                    await asyncio.to_thread(flush)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("MySQL 请求后写回失败：%s", exc)
-        return response
 
 
 @app.on_event("startup")

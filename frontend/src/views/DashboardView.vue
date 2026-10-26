@@ -5,6 +5,7 @@ import { fetchDashboardStations, fetchDashboardSupply, fetchHealth, fetchPressur
 import { registerPageRefresh } from '../composables/pageRefresh'
 import { alarmRows as localAlarmRows, stations as localStations } from '../mock'
 import { backendSourceLabel, remoteListLabel } from '../composables/dataSource'
+import { formatLocalClock, formatLocalClockWithSeconds } from '../utils/time'
 
 interface HealthResponse {
   status: string
@@ -27,6 +28,7 @@ interface StationSummary {
   id: string
   name: string
   status: string
+  level?: number | null
   source: string
 }
 
@@ -92,14 +94,14 @@ const alarmRowsView = computed(() => alarmLoaded.value ? alarmRows.value.map(ite
   station: item.station_name,
   metric: item.metric,
   value: `${item.value} ${item.unit}`,
-  time: item.occurred_at.slice(11, 16),
+  time: formatLocalClock(item.occurred_at),
   status: item.status,
 })) : localAlarmRows)
 
 // 拓扑摘要使用站点接口返回的状态；接口失败时回退到本地站点名称。
 const flowStations = computed(() => stationRows.value.length
-  ? stationRows.value.map(item => ({ name: item.name, status: item.status }))
-  : localStations.map(name => ({ name, status: 'running' })))
+  ? stationRows.value.map(item => ({ name: item.name, status: item.status, level: item.level }))
+  : localStations.map(name => ({ name, status: 'running', level: null as number | null })))
 
 const startupStatusNames: Record<string, string> = {
   not_started: '未开始',
@@ -141,7 +143,7 @@ const loadDashboard = async () => {
   const health = results[0]
   if (health.status === 'fulfilled') {
     healthStatus.value = health.value.status === 'ok' ? '后端正常' : health.value.status
-    refresh.value = health.value.timestamp.slice(11, 19)
+    refresh.value = formatLocalClockWithSeconds(health.value.timestamp)
     startupStatus.value = health.value.startup || {
       status: 'not_started',
       message: '后端未返回 RAG 启动状态',
@@ -201,10 +203,10 @@ onMounted(loadDashboard)
       <span> · {{ startupPhaseLabel }}<span v-if="startupStatus.elapsed_seconds != null"> · 耗时 {{ startupStatus.elapsed_seconds }} 秒</span></span>
     </div>
     <div class="flow">
-      <template v-for="(station, i) in [{ name: '娘子关取水', status: 'running' }, ...flowStations, { name: '渠道自流', status: 'running' }]" :key="station.name">
+      <template v-for="(station, i) in [{ name: '娘子关取水', status: 'running', level: null }, ...flowStations, { name: '渠道自流', status: 'running', level: null }]" :key="station.name">
         <div class="flow-node" @click="router.push('/station')">
           <strong>{{ station.name }}</strong>
-          <span :style="{ color: station.status === 'warning' ? '#f3b664' : '#74d8b5' }">{{ station.status === 'warning' ? '关注' : '运行正常' }}</span>
+          <span :style="{ color: station.status === 'warning' ? '#f3b664' : '#74d8b5' }">{{ station.status === 'warning' ? '关注' : '运行正常' }}<template v-if="station.level != null"> · {{ Number(station.level).toFixed(2) }} m</template></span>
         </div>
         <span v-if="i < flowStations.length + 1" class="flow-arrow">→</span>
       </template>

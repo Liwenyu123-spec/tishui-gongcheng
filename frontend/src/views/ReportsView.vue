@@ -4,6 +4,7 @@ import { currentUserRole } from '../composables/currentUser'
 import { backendSourceLabel, remoteListMessage, useDataSource } from '../composables/dataSource'
 import { fetchReport, fetchReports, generateReport as generateReportApi, saveReport, updateReportStatus as updateReportStatusApi } from '../api/reports'
 import { registerPageRefresh } from '../composables/pageRefresh'
+import { formatLocalClock } from '../utils/time'
 
 interface ReportMetric {
   key: string
@@ -284,7 +285,7 @@ const downloadMarkdown = () => {
   ElMessage.success('报告 Markdown 已下载')
 }
 
-const reportTime = (value: string) => value.slice(11, 16)
+const reportTime = (value: string) => formatLocalClock(value)
 const reportDateTime = (value?: string) => value ? value.replace('T', ' ').replace('Z', '') : '—'
 
 // 顶栏刷新复用列表加载逻辑；页面内的“刷新列表”“刷新报告详情”保持原样。
