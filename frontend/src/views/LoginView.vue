@@ -8,6 +8,12 @@ const route = useRoute()
 const form = reactive({ account: '', password: '' })
 const loading = ref(false)
 
+const highlights = [
+  { title: '运行可查', text: '泵站、流量、告警' },
+  { title: '独立账号', text: '团队协作' },
+  { title: '即问即答', text: '中文问答' },
+]
+
 const login = async () => {
   if (!form.account.trim() || !form.password) {
     ElMessage.warning('请输入账号和密码')
@@ -33,25 +39,34 @@ const login = async () => {
 
 <template>
   <div class="login-page">
-    <div class="login-glow"></div>
-    <form class="login-card" @submit.prevent="login">
-      <div class="brand">
-        <div class="brand-mark">水</div>
-        <div><strong>提水工程</strong><span>供水调度平台</span></div>
-      </div>
-      <p class="eyebrow">WATER DISPATCH / SIGN IN</p>
-      <h1>进入调度工作台</h1>
-      <p class="muted">测试环境 · 数据库测试数据 · 只读分析模式</p>
-      <label>
-        账号
-        <input v-model="form.account" autocomplete="username" placeholder="请输入账号" />
-      </label>
-      <label>
-        密码
-        <input v-model="form.password" type="password" autocomplete="current-password" placeholder="请输入密码" />
-      </label>
-      <button type="submit" :disabled="loading">{{ loading ? '正在登录' : '登录' }}</button>
-    </form>
+    <section class="intro">
+      <p class="kicker">WATER DISPATCH · OPERATIONS WORKSPACE</p>
+      <h1>让每一次供水调度，<br>都有数据可循。</h1>
+      <p class="lead">泵站、流量、告警分析，汇聚在一个调度工作空间。</p>
+      <ul class="highlights">
+        <li v-for="item in highlights" :key="item.title">
+          <strong>{{ item.title }}</strong>
+          <span>{{ item.text }}</span>
+        </li>
+      </ul>
+    </section>
+    <section class="login-side">
+      <form class="login-card" @submit.prevent="login">
+        <p class="welcome">WELCOME BACK</p>
+        <h2>登录调度工作空间</h2>
+        <p class="hint">使用账号与密码进入你的团队账号。</p>
+        <label>
+          账号
+          <input v-model="form.account" autocomplete="username" placeholder="请输入账号" />
+        </label>
+        <label>
+          密码
+          <input v-model="form.password" type="password" autocomplete="current-password" placeholder="请输入密码" />
+        </label>
+        <button type="submit" :disabled="loading">{{ loading ? '正在登录' : '登录工作空间' }}</button>
+        <p class="foot">演示环境请使用已有账号登录。</p>
+      </form>
+    </section>
   </div>
 </template>
 
@@ -59,72 +74,137 @@ const login = async () => {
 .login-page {
   min-height: 100vh;
   display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(360px, 1fr);
+  background:
+    radial-gradient(ellipse at 18% 0%, rgba(122, 223, 242, .22), transparent 36%),
+    linear-gradient(180deg, #0d4a62 0%, #083246 48%, #06202c 100%);
+  color: #f4fcff;
+}
+.intro {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 72px 72px 64px;
+  background: transparent;
+  color: #f4fcff;
+}
+.kicker {
+  margin: 0 0 36px;
+  color: #9fd4e4;
+  font-size: 12px;
+  letter-spacing: .16em;
+}
+.intro h1 {
+  margin: 0;
+  max-width: 560px;
+  font-size: 48px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: .02em;
+}
+.lead {
+  margin: 28px 0 0;
+  max-width: 460px;
+  color: #b7dbe6;
+  font-size: 16px;
+  line-height: 1.7;
+}
+.highlights {
+  display: grid;
+  grid-template-columns: repeat(3, max-content);
+  gap: 48px;
+  margin: 72px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.highlights strong,
+.highlights span {
+  display: block;
+}
+.highlights strong {
+  font-size: 16px;
+  font-weight: 650;
+}
+.highlights span {
+  margin-top: 8px;
+  color: #8fbed0;
+  font-size: 13px;
+}
+.login-side {
+  display: grid;
   place-items: center;
-  position: relative;
-  overflow: hidden;
-  background:
-    radial-gradient(ellipse at 50% 18%, rgba(186, 236, 248, .28), transparent 34%),
-    linear-gradient(180deg, #0e6e8c 0%, #0a4c66 28%, #073044 62%, #06202c 100%);
-}
-.login-glow {
-  position: absolute;
-  width: 680px;
-  height: 680px;
-  border: 1px solid rgba(214, 246, 255, .28);
-  border-radius: 50%;
-  box-shadow:
-    0 0 0 54px rgba(186, 230, 242, .08),
-    0 0 0 120px rgba(150, 214, 230, .06),
-    0 0 0 190px rgba(120, 196, 214, .04);
-}
-.login-page::after {
-  content: "";
-  position: absolute;
-  left: -10%;
-  right: -10%;
-  bottom: -40px;
-  height: 180px;
-  background:
-    radial-gradient(120% 80px at 20% 0%, transparent 40%, rgba(255, 255, 255, .16) 41%, transparent 42%),
-    radial-gradient(120% 90px at 70% 10%, transparent 42%, rgba(255, 255, 255, .12) 43%, transparent 44%);
-  pointer-events: none;
+  padding: 32px 24px;
+  background: transparent;
 }
 .login-card {
-  position: relative;
-  z-index: 1;
-  width: min(440px, calc(100vw - 32px));
+  width: min(420px, 100%);
   display: grid;
-  gap: 14px;
-  padding: 36px 40px 32px;
-  border: 1px solid rgba(190, 236, 246, .28);
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(10, 48, 66, .9), rgba(6, 28, 40, .92));
-  box-shadow: 0 24px 70px rgba(2, 16, 24, .4);
+  gap: 8px;
+  padding: 36px 36px 28px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(6, 32, 44, .12);
 }
-.login-card h1 { margin: 8px 0 0; color: #f4fcff; font-size: 28px; }
-.muted { margin: 0; color: #b7d5e1; font-size: 13px; }
-.eyebrow { margin: 18px 0 0; color: #9fd4e4; font-size: 12px; letter-spacing: .08em; }
-label { display: grid; gap: 8px; margin-top: 6px; color: #d5ebf3; font-size: 14px; }
+.welcome {
+  margin: 0;
+  color: #5b879b;
+  font-size: 12px;
+  letter-spacing: .14em;
+}
+.login-card h2 {
+  margin: 8px 0 0;
+  color: #06384a;
+  font-size: 28px;
+  font-weight: 650;
+}
+.hint {
+  margin: 8px 0 16px;
+  color: #5b879b;
+  font-size: 14px;
+}
+label {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  color: #0a4c66;
+  font-size: 14px;
+}
 input {
-  height: 44px;
+  height: 46px;
   padding: 0 14px;
-  border: 1px solid rgba(150, 210, 224, .35);
+  border: 0;
   border-radius: 8px;
-  background: rgba(8, 36, 50, .85);
-  color: #f4fcff;
+  background: #e8f4f8;
+  color: #06384a;
   font-size: 15px;
+}
+input:focus {
+  outline: 2px solid rgba(20, 152, 184, .35);
 }
 input::placeholder { color: #7f9eac; }
 button {
-  height: 46px;
-  margin-top: 10px;
+  height: 48px;
+  margin-top: 18px;
   border: 0;
   border-radius: 8px;
   background: linear-gradient(180deg, #3ec4de, #128eac);
-  color: white;
+  color: #fff;
   cursor: pointer;
   font-size: 16px;
   box-shadow: 0 8px 18px rgba(18, 142, 172, .28);
 }
+button:hover { filter: brightness(1.05); }
 button:disabled { opacity: .7; cursor: default; }
+.foot {
+  margin: 14px 0 0;
+  color: #7f9aab;
+  font-size: 12px;
+  text-align: center;
+}
+@media (max-width: 900px) {
+  .login-page { grid-template-columns: 1fr; }
+  .intro { padding: 48px 28px 36px; }
+  .intro h1 { font-size: 34px; }
+  .highlights { gap: 24px; margin-top: 36px; }
+}
 </style>
