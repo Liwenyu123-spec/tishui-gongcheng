@@ -644,19 +644,25 @@ def apply_migrations(conn) -> None:
         )
         cur.execute("SELECT version FROM schema_migrations")
         done = {row["version"] for row in cur.fetchall()}
+        # 001 含建库语句，由人工先执行；这里只登记，避免在已连接的库上重复建库。
         if "001" not in done:
             cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES ('001', NOW())")
-        if "002" in done:
-            return
-        script = (sql_dir / "002_payload_columns.sql").read_text(encoding="utf-8")
-        for statement in [part.strip() for part in script.split(";") if part.strip()]:
-            try:
-                cur.execute(statement)
-            except pymysql.err.OperationalError as exc:
-                if exc.args and exc.args[0] in {1060, 1061}:
-                    continue
-                raise
-        cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES ('002', NOW())")
+        for version, filename in (("002", "002_payload_columns.sql"), ("003", "003_seed.sql")):
+            if version in done:
+                continue
+            script = (sql_dir / filename).read_text(encoding="utf-8")
+            for statement in [part.strip() for part in script.split(";") if part.strip()]:
+                try:
+                    cur.execute(statement)
+                except pymysql.err.OperationalError as exc:
+                    # 1060 列已存在，1061 索引已存在。补列脚本重复执行时跳过。
+                    if version == "002" and exc.args and exc.args[0] in {1060, 1061}:
+                        continue
+                    raise
+            cur.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (%s, NOW())",
+                (version,),
+            )
 
 
 def _rows(conn, table: str) -> list[dict]:
