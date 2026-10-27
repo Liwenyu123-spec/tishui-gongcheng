@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-- 项目迭代：`v0.10.328`
+- 项目迭代：`v0.10.329`
 - 前端包版本：`0.2.0`
 - 当前模式：本地 MySQL `water_dispatch`、只读 Agent、多 Agent 专业节点协作
 - 前端目录：[frontend](./frontend)

@@ -52,15 +52,3 @@ INSERT IGNORE INTO measurement_points (id, object_id, metric_code, unit, quality
   ('mp-pingding-inlet-flow', 'pingding-inlet', 'flow', 'm³/h', '非负', 'seed'),
   ('mp-pingding-inlet-pressure', 'pingding-inlet', 'pressure', 'MPa', '非负', 'seed'),
   ('mp-pingding-inlet-level', 'pingding-inlet', 'level', 'm', '非负', 'seed');
-
-INSERT IGNORE INTO users_roles (user_id, role_code, station_scope, area_scope, payload) VALUES
-  ('admin', 'admin', '*', '', '{"password":"admin123","id":"user-admin","username":"admin","display_name":"系统管理员","role":"admin","permissions":["read","ask","submit_scheme","review","knowledge","audit"],"station_ids":["*"]}'),
-  ('operator', 'operator', '*', '', '{"password":"operator123","id":"user-operator","username":"operator","display_name":"运行值班员","role":"operator","permissions":["read","ask","submit_scheme"],"station_ids":["*"]}'),
-  ('station-operator', 'operator', 'pump-02', '西部片区', '{"password":"station123","id":"user-station-operator","username":"station-operator","display_name":"二泵站值班员","role":"operator","permissions":["read"],"station_ids":["pump-02"]}'),
-  ('reviewer', 'reviewer', '*', '', '{"password":"reviewer123","id":"user-reviewer","username":"reviewer","display_name":"审批负责人","role":"reviewer","permissions":["read","review"],"station_ids":["*"]}');
-
-INSERT IGNORE INTO auth_tokens (token, username) VALUES
-  ('mock-token-admin', 'admin'),
-  ('mock-token-operator', 'operator'),
-  ('mock-token-station-operator', 'station-operator'),
-  ('mock-token-reviewer', 'reviewer');
