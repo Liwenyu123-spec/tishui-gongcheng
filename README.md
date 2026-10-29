@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-- 项目迭代：`v0.10.331`
+- 项目迭代：`v0.10.332`
 - 前端包版本：`0.2.0`
 - 当前模式：本地 MySQL `water_dispatch`、只读 Agent、多 Agent 专业节点协作
 - 前端目录：[frontend](./frontend)
@@ -69,7 +69,30 @@ Agent SSE 请求完成后，可通过运行历史接口按 `run_id` 回看最终
 
 ### Docker 本机测试版
 
-无需服务器即可在安装 Docker Desktop 后用 Compose 启动应用与 MySQL。配置、首次建库、验收及数据卷说明见 [Docker 本机测试版](./deploy/README.md)。目前该配置尚未在 Docker 环境实测；仅用于本机内部联调，不用于公网或真实生产调度。面试回答稿和项目逐字稿只保留在本地，不随仓库发布。
+无需服务器。安装 Docker Desktop 并启用 Linux 容器后，在项目根目录的 PowerShell 中运行：
+
+```powershell
+Copy-Item deploy/.env.example deploy/.env
+# 编辑 deploy/.env，将 MYSQL_PASSWORD 改为唯一的测试密码
+docker compose --env-file deploy/.env -f deploy/compose.yaml up --build -d
+docker compose --env-file deploy/.env -f deploy/compose.yaml ps
+```
+
+打开 `http://127.0.0.1:8000`。首次启动 MySQL 空数据卷时自动执行 `001_water_dispatch.sql`，应用启动时补齐后续迁移。测试配置使用哈希向量检索，关闭外部大模型调用；首次构建需要联网下载镜像和依赖，并预留较多磁盘空间。
+
+启动后先检查日志与健康接口，再完成一次登录、业务记录写入和应用容器重启后的数据保留检查：
+
+```powershell
+docker compose --env-file deploy/.env -f deploy/compose.yaml logs --tail=100 app
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/health
+docker compose --env-file deploy/.env -f deploy/compose.yaml restart app
+```
+
+`/health` 只说明 HTTP 服务在线；若应用日志显示 MySQL 回退到内存数据源，本次验收不通过。停止时运行 `docker compose --env-file deploy/.env -f deploy/compose.yaml down`，数据卷会保留；不要在未备份时使用 `down -v`。完整的故障排查和数据卷说明见 [Docker 本机测试版部署说明](./deploy/README.md)。
+
+目前这套配置尚未在 Docker 环境实测，仅用于本机内部联调，不用于公网或真实生产调度。面试回答稿和项目逐字稿只保留在本地，不随仓库发布。
+
+### Windows 开发环境
 
 进入前端目录：
 
