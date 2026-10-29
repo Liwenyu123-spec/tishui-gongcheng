@@ -4,6 +4,9 @@ venv/
 __pycache__/
 *.py[cod]
 .env
+# 面试材料和讲述稿只保留在本地
+项目逐字稿.md
+面试回答稿-Agent与RAG.md
 .idea/
 .vscode/
 *.egg-info/
